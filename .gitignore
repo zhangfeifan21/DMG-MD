@@ -1,0 +1,75 @@
+# ============================================================
+# DMG-MD generated files
+# ============================================================
+
+# ----- Build -----
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# ----- Python -----
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ----- IDE / OS -----
+.vscode/
+.idea/
+.DS_Store
+
+# ============================================================
+# MD simulation outputs
+# ============================================================
+
+# GPUMD trajectory
+trajectory.xyz
+*/trajectory.xyz
+
+# Large trajectory / dump files
+*.traj
+*.lammpstrj
+*.dump
+dump.*
+movie.xyz
+
+# Restart / checkpoint
+*.restart
+restart.*
+*.checkpoint
+*.ckpt
+
+# GPUMD common generated outputs
+thermo.out
+force.out
+velocity.out
+position.out
+compute.out
+hac.out
+kappa.out
+modal_analysis.out
+dos.out
+msd.out
+sdc.out
+rdf.out
+
+# Logs
+*.log
+log.*
+nohup.out
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# ============================================================
+# Benchmark generated data
+# ============================================================
+
+benchmarks/**/trajectory.xyz
+benchmarks/**/dump.*
+benchmarks/**/restart.*

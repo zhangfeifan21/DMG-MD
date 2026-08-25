@@ -1,0 +1,30 @@
+# ============================================================
+# Diamond C / NEP4 correctness baseline
+# N = 32768 atoms
+# T = 300 K
+# dt = 0.5 fs
+# Ensemble = NVE
+# ============================================================
+
+potential C_2024_NEP4.txt
+
+# Initialize atomic velocities at 300 K
+# Fixed random seed for reproducibility
+velocity 300 seed 20260818
+
+# MD time step: 0.5 fs
+time_step 0.5
+
+# Microcanonical ensemble
+ensemble nve
+
+# Output global thermodynamic quantities every step
+dump_thermo 1
+
+# Output atom positions / velocities / forces / atomic energies
+# every 10 steps
+dump_xyz 1 trajectory.xyz velocity force potential virial
+
+# 1000 steps = 0.5 ps
+# run 10000
+run 100
