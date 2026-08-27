@@ -12,7 +12,17 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
+add_library(newmd_core STATIC
+  src/simulation_box.cpp
+  src/pbc_cpu.cpp
+  src/pbc_gpu.cu
+)
+target_include_directories(newmd_core PUBLIC
+  ${PROJECT_SOURCE_DIR}/include
+)
+
 add_executable(newmd src/main.cu)
+target_link_libraries(newmd PRIVATE newmd_core)
 
 include(CTest)
 if(BUILD_TESTING)

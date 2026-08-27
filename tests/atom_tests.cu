@@ -36,9 +36,9 @@ __global__ void transform_positions(newmd::AtomView atoms) {
     return;
   }
 
-  const newmd::FPFormat x = atoms.position.x(atom);
-  const newmd::FPFormat y = atoms.position.y(atom);
-  const newmd::FPFormat z = atoms.position.z(atom);
+  const newmd::Real x = atoms.position.x(atom);
+  const newmd::Real y = atoms.position.y(atom);
+  const newmd::Real z = atoms.position.z(atom);
 
   atoms.position.x(atom) = x + 0.5;
   atoms.position.y(atom) = y * 2.0;
@@ -49,7 +49,7 @@ void test_position_pipeline() {
   constexpr std::size_t atom_count = 5;
 
   // GPUMD-compatible SoA layout: all x, followed by all y, then all z.
-  const std::vector<newmd::FPFormat> initial_positions{
+  const std::vector<newmd::Real> initial_positions{
       0.0, 1.0, 2.0, 3.0, 4.0,
       10.0, 20.0, 30.0, 40.0, 50.0,
       -1.0, -2.0, -3.0, -4.0, -5.0,
@@ -76,10 +76,10 @@ void test_position_pipeline() {
   check_cuda(cudaGetLastError(), "launch transform_positions");
   check_cuda(cudaDeviceSynchronize(), "synchronize transform_positions");
 
-  std::vector<newmd::FPFormat> result(3 * atom_count);
+  std::vector<newmd::Real> result(3 * atom_count);
   atoms.copy_positions_to_host(result.data());
 
-  const std::vector<newmd::FPFormat> expected{
+  const std::vector<newmd::Real> expected{
       0.5, 1.5, 2.5, 3.5, 4.5,
       20.0, 40.0, 60.0, 80.0, 100.0,
       -4.0, -5.0, -6.0, -7.0, -8.0,

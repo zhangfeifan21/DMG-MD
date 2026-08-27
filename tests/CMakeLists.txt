@@ -24,6 +24,22 @@ add_test(
   COMMAND $<TARGET_FILE:newmd_atom_tests>
 )
 
+add_executable(newmd_simulation_box_tests simulation_box_tests.cpp)
+target_link_libraries(newmd_simulation_box_tests PRIVATE newmd_core)
+
+add_test(
+  NAME newmd.simulation_box
+  COMMAND $<TARGET_FILE:newmd_simulation_box_tests>
+)
+
+add_executable(newmd_pbc_tests pbc_tests.cu)
+target_link_libraries(newmd_pbc_tests PRIVATE newmd_core)
+
+add_test(
+  NAME newmd.pbc_cpu_gpu
+  COMMAND $<TARGET_FILE:newmd_pbc_tests>
+)
+
 find_program(COMPUTE_SANITIZER_EXECUTABLE compute-sanitizer)
 if(COMPUTE_SANITIZER_EXECUTABLE)
   add_test(
@@ -52,4 +68,16 @@ if(COMPUTE_SANITIZER_EXECUTABLE)
     newmd.atom_position_pipeline.memcheck
     PROPERTIES TIMEOUT 120
   )
+
+  add_test(
+    NAME newmd.pbc_cpu_gpu.memcheck
+    COMMAND
+      ${COMPUTE_SANITIZER_EXECUTABLE}
+      --tool memcheck
+      --leak-check full
+      --report-api-errors all
+      --error-exitcode 1
+      $<TARGET_FILE:newmd_pbc_tests>
+  )
+  set_tests_properties(newmd.pbc_cpu_gpu.memcheck PROPERTIES TIMEOUT 120)
 endif()

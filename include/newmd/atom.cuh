@@ -1,6 +1,7 @@
 #pragma once
 
 #include "newmd/devicebuffer.cuh"
+#include "newmd/types.hpp"
 
 #include <cuda_runtime.h>
 
@@ -12,14 +13,7 @@
 
 namespace newmd {
 
-using FPFormat = double;
 using AtomType = int;
-
-enum class Axis : unsigned char {
-  x = 0,
-  y = 1,
-  z = 2,
-};
 
 // This ordering matches GPUMD's per-atom 9N virial layout.
 enum class VirialComponent : unsigned char {
@@ -121,8 +115,8 @@ struct BasicAtomView {
   }
 };
 
-using AtomView = BasicAtomView<FPFormat, AtomType>;
-using ConstAtomView = BasicAtomView<const FPFormat, const AtomType>;
+using AtomView = BasicAtomView<Real, AtomType>;
+using ConstAtomView = BasicAtomView<const Real, const AtomType>;
 
 static_assert(std::is_trivially_copyable_v<AtomView>);
 static_assert(std::is_trivially_copyable_v<ConstAtomView>);
@@ -184,11 +178,11 @@ public:
     resize(0);
   }
 
-  void copy_positions_from_host(const FPFormat* source) {
+  void copy_positions_from_host(const Real* source) {
     position_.copy_from_host(source, component_count(atom_count_, 3));
   }
 
-  void copy_positions_to_host(FPFormat* destination) const {
+  void copy_positions_to_host(Real* destination) const {
     position_.copy_to_host(destination, component_count(atom_count_, 3));
   }
 
@@ -241,13 +235,13 @@ private:
 
   std::size_t atom_count_ = 0;
 
-  DeviceBuffer<FPFormat> position_;
-  DeviceBuffer<FPFormat> velocity_;
-  DeviceBuffer<FPFormat> force_;
+  DeviceBuffer<Real> position_;
+  DeviceBuffer<Real> velocity_;
+  DeviceBuffer<Real> force_;
   DeviceBuffer<AtomType> type_;
-  DeviceBuffer<FPFormat> mass_;
-  DeviceBuffer<FPFormat> potential_energy_;
-  DeviceBuffer<FPFormat> virial_;
+  DeviceBuffer<Real> mass_;
+  DeviceBuffer<Real> potential_energy_;
+  DeviceBuffer<Real> virial_;
 };
 
 }  // namespace newmd
