@@ -40,6 +40,14 @@ add_test(
   COMMAND $<TARGET_FILE:newmd_pbc_tests>
 )
 
+add_executable(newmd_neighbor_list_cpu_tests neighbor_list_cpu_tests.cpp)
+target_link_libraries(newmd_neighbor_list_cpu_tests PRIVATE newmd_core)
+
+add_test(
+  NAME newmd.neighbor_list_cpu
+  COMMAND $<TARGET_FILE:newmd_neighbor_list_cpu_tests>
+)
+
 find_program(COMPUTE_SANITIZER_EXECUTABLE compute-sanitizer)
 if(COMPUTE_SANITIZER_EXECUTABLE)
   add_test(

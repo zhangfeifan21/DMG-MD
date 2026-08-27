@@ -13,6 +13,8 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
 add_library(newmd_core STATIC
+  src/neighbor_list.cpp
+  src/neighbor_list_cpu.cpp
   src/simulation_box.cpp
   src/pbc_cpu.cpp
   src/pbc_gpu.cu
