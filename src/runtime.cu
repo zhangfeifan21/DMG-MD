@@ -1,0 +1,960 @@
+#include "dmgmd/runtime.hpp"
+
+#include "force/nep.cuh"
+#include "model/box.cuh"
+#include "utilities/common.cuh"
+#include "utilities/gpu_vector.cuh"
+
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+namespace dmgmd {
+namespace {
+
+constexpr int kThreads = 128;
+constexpr int kThermoThreads = 1024;
+
+void check_cuda(cudaError_t status, const char* operation)
+{
+  if (status != cudaSuccess) {
+    throw std::runtime_error(
+        std::string(operation) + ": " + cudaGetErrorString(status));
+  }
+}
+
+int checked_int(std::size_t value, const char* name)
+{
+  if (value > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    throw std::length_error(std::string(name) + " exceeds GPUMD's int range");
+  }
+  return static_cast<int>(value);
+}
+
+Box make_box(const BoxData& input)
+{
+  Box box{};
+  box.pbc_x = input.periodic[0];
+  box.pbc_y = input.periodic[1];
+  box.pbc_z = input.periodic[2];
+  std::copy(input.h.begin(), input.h.end(), box.cpu_h);
+  box.get_inverse();
+  box.set_is_orthogonal();
+  if (!std::isfinite(box.get_volume()) || box.get_volume() <= 0.0) {
+    throw std::runtime_error("model.xyz lattice has non-positive volume");
+  }
+  return box;
+}
+
+class DeviceAtoms {
+ public:
+  explicit DeviceAtoms(const HostAtoms& host)
+      : counts(host.counts),
+        global_id(counts.local_count()),
+        type(counts.local_count()),
+        mass(counts.local_count()),
+        charge(counts.local_count()),
+        position(3 * counts.local_count()),
+        velocity(3 * counts.local_count()),
+        force(3 * counts.local_count(), 0.0),
+        potential(counts.local_count(), 0.0),
+        virial(9 * counts.local_count(), 0.0)
+  {
+    host.validate();
+    static_assert(sizeof(std::uint64_t) == sizeof(unsigned long long));
+    const std::vector<unsigned long long> ids(
+        host.global_id.begin(), host.global_id.end());
+    global_id.copy_from_host(ids.data());
+    type.copy_from_host(host.type.data());
+    mass.copy_from_host(host.mass.data());
+    charge.copy_from_host(host.charge.data());
+    position.copy_from_host(host.position.data());
+    velocity.copy_from_host(host.velocity.data());
+  }
+
+  void upload_velocity(const std::vector<double>& values)
+  {
+    if (values.size() != velocity.size()) {
+      throw std::logic_error("velocity upload does not match local stride");
+    }
+    velocity.copy_from_host(values.data());
+  }
+
+  void enable_unwrapped()
+  {
+    if (unwrapped.size() != 0) {
+      return;
+    }
+    unwrapped.resize(position.size());
+    previous_position.resize(position.size());
+    unwrapped.copy_from_device(position.data());
+  }
+
+  [[nodiscard]] bool has_unwrapped() const noexcept { return unwrapped.size() != 0; }
+
+  AtomCounts counts;
+  GPU_Vector<unsigned long long> global_id;
+  GPU_Vector<int> type;
+  GPU_Vector<double> mass;
+  GPU_Vector<float> charge;
+  GPU_Vector<double> position;
+  GPU_Vector<double> velocity;
+  GPU_Vector<double> force;
+  GPU_Vector<double> potential;
+  GPU_Vector<double> virial;
+  GPU_Vector<double> unwrapped;
+  GPU_Vector<double> previous_position;
+};
+
+struct HostSnapshot {
+  std::vector<unsigned long long> global_id;
+  std::vector<double> position;
+  std::vector<double> velocity;
+  std::vector<double> force;
+  std::vector<double> potential;
+  std::vector<double> virial;
+  std::vector<double> unwrapped;
+};
+
+HostSnapshot download_snapshot(DeviceAtoms& atoms)
+{
+  const std::size_t local = atoms.counts.local_count();
+  HostSnapshot snapshot;
+  snapshot.global_id.resize(local);
+  snapshot.position.resize(3 * local);
+  snapshot.velocity.resize(3 * local);
+  snapshot.force.resize(3 * local);
+  snapshot.potential.resize(local);
+  snapshot.virial.resize(9 * local);
+  atoms.global_id.copy_to_host(snapshot.global_id.data());
+  atoms.position.copy_to_host(snapshot.position.data());
+  atoms.velocity.copy_to_host(snapshot.velocity.data());
+  atoms.force.copy_to_host(snapshot.force.data());
+  atoms.potential.copy_to_host(snapshot.potential.data());
+  atoms.virial.copy_to_host(snapshot.virial.data());
+  if (atoms.has_unwrapped()) {
+    snapshot.unwrapped.resize(3 * local);
+    atoms.unwrapped.copy_to_host(snapshot.unwrapped.data());
+  }
+  return snapshot;
+}
+
+__global__ void wrap_positions(
+    int local_count,
+    int stride,
+    Box box,
+    double* position)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= local_count) {
+    return;
+  }
+  double x = position[atom];
+  double y = position[stride + atom];
+  double z = position[2 * stride + atom];
+  double sx = box.cpu_h[9] * x + box.cpu_h[10] * y + box.cpu_h[11] * z;
+  double sy = box.cpu_h[12] * x + box.cpu_h[13] * y + box.cpu_h[14] * z;
+  double sz = box.cpu_h[15] * x + box.cpu_h[16] * y + box.cpu_h[17] * z;
+  if (box.pbc_x == 1) {
+    if (sx < 0.0) sx += 1.0;
+    else if (sx > 1.0) sx -= 1.0;
+  }
+  if (box.pbc_y == 1) {
+    if (sy < 0.0) sy += 1.0;
+    else if (sy > 1.0) sy -= 1.0;
+  }
+  if (box.pbc_z == 1) {
+    if (sz < 0.0) sz += 1.0;
+    else if (sz > 1.0) sz -= 1.0;
+  }
+  position[atom] = box.cpu_h[0] * sx + box.cpu_h[1] * sy + box.cpu_h[2] * sz;
+  position[stride + atom] =
+      box.cpu_h[3] * sx + box.cpu_h[4] * sy + box.cpu_h[5] * sz;
+  position[2 * stride + atom] =
+      box.cpu_h[6] * sx + box.cpu_h[7] * sy + box.cpu_h[8] * sz;
+}
+
+__global__ void clear_owned_properties(
+    int owned_count,
+    int stride,
+    double* force,
+    double* potential,
+    double* virial)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= owned_count) {
+    return;
+  }
+  force[atom] = 0.0;
+  force[stride + atom] = 0.0;
+  force[2 * stride + atom] = 0.0;
+  potential[atom] = 0.0;
+  for (int component = 0; component < 9; ++component) {
+    virial[component * stride + atom] = 0.0;
+  }
+}
+
+__global__ void velocity_verlet(
+    bool first_half,
+    int owned_count,
+    int stride,
+    double time_step,
+    const double* mass,
+    double* position,
+    double* velocity,
+    const double* force)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= owned_count) {
+    return;
+  }
+  const double half = time_step * 0.5;
+  const double inverse_mass = 1.0 / mass[atom];
+  double vx = velocity[atom] + force[atom] * inverse_mass * half;
+  double vy = velocity[stride + atom] + force[stride + atom] * inverse_mass * half;
+  double vz = velocity[2 * stride + atom] + force[2 * stride + atom] * inverse_mass * half;
+  velocity[atom] = vx;
+  velocity[stride + atom] = vy;
+  velocity[2 * stride + atom] = vz;
+  if (first_half) {
+    position[atom] += vx * time_step;
+    position[stride + atom] += vy * time_step;
+    position[2 * stride + atom] += vz * time_step;
+  }
+}
+
+__global__ void update_unwrapped(
+    int owned_count,
+    int stride,
+    const double* position,
+    const double* previous,
+    double* unwrapped)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= owned_count) {
+    return;
+  }
+  for (int axis = 0; axis < 3; ++axis) {
+    const int index = axis * stride + atom;
+    unwrapped[index] += position[index] - previous[index];
+  }
+}
+
+__global__ void find_owned_thermo(
+    int owned_count,
+    int stride,
+    double volume,
+    const double* mass,
+    const double* potential,
+    const double* velocity,
+    const double* virial,
+    double* thermo)
+{
+  const int tid = threadIdx.x;
+  const int quantity = blockIdx.x;
+  const int patches = (owned_count - 1) / kThermoThreads + 1;
+  __shared__ double values[kThermoThreads];
+  double sum = 0.0;
+  for (int patch = 0; patch < patches; ++patch) {
+    const int atom = tid + patch * kThermoThreads;
+    if (atom >= owned_count) {
+      continue;
+    }
+    const double vx = velocity[atom];
+    const double vy = velocity[stride + atom];
+    const double vz = velocity[2 * stride + atom];
+    if (quantity == 0) {
+      sum += mass[atom] * (vx * vx + vy * vy + vz * vz);
+    } else if (quantity == 1) {
+      sum += potential[atom];
+    } else {
+      const int component = quantity - 2;
+      double kinetic = 0.0;
+      if (component == 0) kinetic = mass[atom] * vx * vx;
+      else if (component == 1) kinetic = mass[atom] * vy * vy;
+      else if (component == 2) kinetic = mass[atom] * vz * vz;
+      else if (component == 3) kinetic = mass[atom] * vx * vy;
+      else if (component == 4) kinetic = mass[atom] * vx * vz;
+      else kinetic = mass[atom] * vy * vz;
+      sum += virial[component * stride + atom] + kinetic;
+    }
+  }
+  values[tid] = sum;
+  __syncthreads();
+  for (int offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
+    if (tid < offset) {
+      values[tid] += values[tid + offset];
+    }
+    __syncthreads();
+  }
+  if (tid == 0) {
+    thermo[quantity] = quantity == 0
+                           ? values[0] / (3.0 * owned_count * K_B)
+                           : (quantity == 1 ? values[0] : values[0] / volume);
+  }
+}
+
+__global__ void scale_owned_velocity(
+    int owned_count,
+    int stride,
+    double factor,
+    double* velocity)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= owned_count) {
+    return;
+  }
+  velocity[atom] *= factor;
+  velocity[stride + atom] *= factor;
+  velocity[2 * stride + atom] *= factor;
+}
+
+struct ThermoState {
+  std::array<double, 8> values{};
+};
+
+ThermoState compute_thermo(DeviceAtoms& atoms, const Box& box, GPU_Vector<double>& device_thermo)
+{
+  const int owned = checked_int(atoms.counts.owned_count, "owned_count");
+  const int stride = checked_int(atoms.counts.local_count(), "local_count");
+  find_owned_thermo<<<8, kThermoThreads>>>(
+      owned, stride, box.get_volume(), atoms.mass.data(), atoms.potential.data(),
+      atoms.velocity.data(), atoms.virial.data(), device_thermo.data());
+  check_cuda(cudaGetLastError(), "launch owned thermo reduction");
+  ThermoState result;
+  device_thermo.copy_to_host(result.values.data());
+  return result;
+}
+
+class NepForce {
+ public:
+  NepForce(const std::string& filename, const AtomCounts& counts)
+      : nep_(filename.c_str(), checked_int(counts.local_count(), "local_count"))
+  {
+    if (counts.ghost_count != 0 || counts.owned_count != counts.local_count()) {
+      throw std::logic_error("single-rank NEP adapter requires ghost_count == 0");
+    }
+    nep_.N1 = 0;
+    nep_.N2 = checked_int(counts.owned_count, "owned_count");
+  }
+
+  void compute(Box& box, DeviceAtoms& atoms)
+  {
+    const int local = checked_int(atoms.counts.local_count(), "local_count");
+    const int owned = checked_int(atoms.counts.owned_count, "owned_count");
+    if (atoms.counts.ghost_count != 0 || owned != local) {
+      throw std::logic_error("multi-rank force evaluation is not implemented");
+    }
+    box.set_is_orthogonal();
+    wrap_positions<<<(local + kThreads - 1) / kThreads, kThreads>>>(
+        local, local, box, atoms.position.data());
+    clear_owned_properties<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+        owned, local, atoms.force.data(), atoms.potential.data(), atoms.virial.data());
+    check_cuda(cudaGetLastError(), "prepare NEP force buffers");
+    nep_.compute(box, atoms.type, atoms.position, atoms.potential, atoms.force, atoms.virial);
+  }
+
+ private:
+  NEP nep_;
+};
+
+void zero_linear_momentum(
+    const std::vector<double>& mass,
+    std::vector<double>& velocity,
+    const std::vector<std::size_t>& atoms)
+{
+  const std::size_t stride = mass.size();
+  std::array<double, 3> center{};
+  double total_mass = 0.0;
+  for (const std::size_t atom : atoms) {
+    total_mass += mass[atom];
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      center[axis] += mass[atom] * velocity[axis * stride + atom];
+    }
+  }
+  if (total_mass == 0.0) return;
+  for (double& component : center) component /= total_mass;
+  for (const std::size_t atom : atoms) {
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      velocity[axis * stride + atom] -= center[axis];
+    }
+  }
+}
+
+void correct_velocity_subset(
+    const std::vector<double>& mass,
+    const std::vector<double>& position,
+    std::vector<double>& velocity,
+    const std::vector<std::size_t>& atoms)
+{
+  if (atoms.empty()) return;
+  const std::size_t stride = mass.size();
+  zero_linear_momentum(mass, velocity, atoms);
+  std::array<double, 3> center{};
+  double total_mass = 0.0;
+  for (const std::size_t atom : atoms) {
+    total_mass += mass[atom];
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      center[axis] += position[axis * stride + atom] * mass[atom];
+    }
+  }
+  for (double& component : center) component /= total_mass;
+
+  std::array<double, 3> angular{};
+  double inertia[3][3]{};
+  for (const std::size_t atom : atoms) {
+    const double dx = position[atom] - center[0];
+    const double dy = position[stride + atom] - center[1];
+    const double dz = position[2 * stride + atom] - center[2];
+    const double vx = velocity[atom];
+    const double vy = velocity[stride + atom];
+    const double vz = velocity[2 * stride + atom];
+    angular[0] += mass[atom] * (dy * vz - dz * vy);
+    angular[1] += mass[atom] * (dz * vx - dx * vz);
+    angular[2] += mass[atom] * (dx * vy - dy * vx);
+    inertia[0][0] += mass[atom] * (dy * dy + dz * dz);
+    inertia[1][1] += mass[atom] * (dx * dx + dz * dz);
+    inertia[2][2] += mass[atom] * (dx * dx + dy * dy);
+    inertia[0][1] -= mass[atom] * dx * dy;
+    inertia[1][2] -= mass[atom] * dy * dz;
+    inertia[0][2] -= mass[atom] * dx * dz;
+  }
+  inertia[1][0] = inertia[0][1];
+  inertia[2][1] = inertia[1][2];
+  inertia[2][0] = inertia[0][2];
+  const double determinant =
+      inertia[0][0] * inertia[1][1] * inertia[2][2] +
+      inertia[0][1] * inertia[1][2] * inertia[2][0] +
+      inertia[0][2] * inertia[1][0] * inertia[2][1] -
+      inertia[0][0] * inertia[1][2] * inertia[2][1] -
+      inertia[0][1] * inertia[1][0] * inertia[2][2] -
+      inertia[2][0] * inertia[1][1] * inertia[0][2];
+  if (determinant > -1.0e-10 && determinant < 1.0e-10) return;
+
+  double inverse[3][3];
+  inverse[0][0] = inertia[1][1] * inertia[2][2] - inertia[1][2] * inertia[2][1];
+  inverse[0][1] = -(inertia[0][1] * inertia[2][2] - inertia[0][2] * inertia[2][1]);
+  inverse[0][2] = inertia[0][1] * inertia[1][2] - inertia[0][2] * inertia[1][1];
+  inverse[1][0] = -(inertia[1][0] * inertia[2][2] - inertia[1][2] * inertia[2][0]);
+  inverse[1][1] = inertia[0][0] * inertia[2][2] - inertia[0][2] * inertia[2][0];
+  inverse[1][2] = -(inertia[0][0] * inertia[1][2] - inertia[0][2] * inertia[1][0]);
+  inverse[2][0] = inertia[1][0] * inertia[2][1] - inertia[1][1] * inertia[2][0];
+  inverse[2][1] = -(inertia[0][0] * inertia[2][1] - inertia[0][1] * inertia[2][0]);
+  inverse[2][2] = inertia[0][0] * inertia[1][1] - inertia[0][1] * inertia[1][0];
+  std::array<double, 3> omega{};
+  for (std::size_t row = 0; row < 3; ++row) {
+    for (std::size_t column = 0; column < 3; ++column) {
+      omega[row] += inverse[row][column] / determinant * angular[column];
+    }
+  }
+  for (const std::size_t atom : atoms) {
+    const double dx = position[atom] - center[0];
+    const double dy = position[stride + atom] - center[1];
+    const double dz = position[2 * stride + atom] - center[2];
+    velocity[atom] -= omega[1] * dz - omega[2] * dy;
+    velocity[stride + atom] -= omega[2] * dx - omega[0] * dz;
+    velocity[2 * stride + atom] -= omega[0] * dy - omega[1] * dx;
+  }
+}
+
+std::vector<std::size_t> all_owned_indices(const HostAtoms& atoms)
+{
+  std::vector<std::size_t> result(atoms.counts.owned_count);
+  for (std::size_t index = 0; index < result.size(); ++index) result[index] = index;
+  return result;
+}
+
+void initialize_random_velocity(
+    HostAtoms& atoms,
+    double temperature,
+    std::optional<int> seed)
+{
+  const std::size_t stride = atoms.local_stride();
+  for (std::size_t atom = 0; atom < atoms.counts.owned_count; ++atom) {
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      if (seed) {
+        std::srand(static_cast<unsigned int>(*seed + atoms.global_id[atom] * 3 + axis));
+      }
+      atoms.velocity[axis * stride + atom] =
+          -1.0 + (std::rand() * 2.0) / static_cast<double>(RAND_MAX);
+    }
+  }
+  const auto indices = all_owned_indices(atoms);
+  correct_velocity_subset(atoms.mass, atoms.position, atoms.velocity, indices);
+  double actual_temperature = 0.0;
+  for (const std::size_t atom : indices) {
+    const double vx = atoms.velocity[atom];
+    const double vy = atoms.velocity[stride + atom];
+    const double vz = atoms.velocity[2 * stride + atom];
+    actual_temperature += atoms.mass[atom] * (vx * vx + vy * vy + vz * vz);
+  }
+  actual_temperature /= (3.0 * K_B * atoms.counts.owned_count);
+  const double factor = std::sqrt(temperature / actual_temperature);
+  for (const std::size_t atom : indices) {
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      atoms.velocity[axis * stride + atom] *= factor;
+    }
+  }
+}
+
+std::vector<std::size_t> output_order(
+    const HostAtoms& identity,
+    const HostSnapshot& snapshot,
+    const DumpXyzCommand* command)
+{
+  std::vector<std::size_t> order;
+  const std::size_t owned = identity.counts.owned_count;
+  for (std::size_t atom = 0; atom < owned; ++atom) {
+    if (command && command->grouping_method) {
+      const int method = *command->grouping_method;
+      if (method < 0 || static_cast<std::size_t>(method) >= identity.group_labels.size()) {
+        throw std::runtime_error("dump_xyz grouping method is out of range");
+      }
+      const int maximum_group = *std::max_element(
+          identity.group_labels[method].begin(), identity.group_labels[method].end());
+      if (*command->group_id > maximum_group) {
+        throw std::runtime_error("dump_xyz group ID is out of range");
+      }
+      if (identity.group_labels[method][atom] != *command->group_id) continue;
+    }
+    order.push_back(atom);
+  }
+  std::sort(order.begin(), order.end(), [&snapshot](std::size_t left, std::size_t right) {
+    return snapshot.global_id[left] < snapshot.global_id[right];
+  });
+  return order;
+}
+
+void print_tensor(FILE* file, const char* name, const char* format, const double* tensor)
+{
+  std::fprintf(file, " %s=\"", name);
+  for (int component = 0; component < 9; ++component) {
+    std::fprintf(file, component == 0 ? format + 1 : format, tensor[component]);
+  }
+  std::fprintf(file, "\"");
+}
+
+void write_thermo_header(FILE* file, int interval, const HostAtoms& atoms, double time_step)
+{
+  std::fprintf(file, "# dump_thermo %d\n", interval);
+  std::fprintf(file, "# format_version 1\n");
+  std::fprintf(file, "# num_atoms %zu\n", atoms.counts.global_count);
+  std::fprintf(file, "# dt_output %.10e fs\n", time_step * interval * TIME_UNIT_CONVERSION);
+  std::fprintf(file,
+               "# columns T KE PE sxx syy szz syz sxz sxy ax ay az bx by bz cx cy cz\n");
+}
+
+void write_thermo_row(FILE* file, const ThermoState& thermo, const HostAtoms& atoms, const Box& box)
+{
+  const double kinetic = 1.5 * atoms.counts.global_count * K_B * thermo.values[0];
+  std::fprintf(
+      file,
+      "%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e",
+      thermo.values[0], kinetic, thermo.values[1],
+      thermo.values[2] * PRESSURE_UNIT_CONVERSION,
+      thermo.values[3] * PRESSURE_UNIT_CONVERSION,
+      thermo.values[4] * PRESSURE_UNIT_CONVERSION,
+      thermo.values[7] * PRESSURE_UNIT_CONVERSION,
+      thermo.values[6] * PRESSURE_UNIT_CONVERSION,
+      thermo.values[5] * PRESSURE_UNIT_CONVERSION);
+  std::fprintf(file,
+               "%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e%20.10e\n",
+               box.cpu_h[0], box.cpu_h[3], box.cpu_h[6], box.cpu_h[1], box.cpu_h[4],
+               box.cpu_h[7], box.cpu_h[2], box.cpu_h[5], box.cpu_h[8]);
+  std::fflush(file);
+}
+
+void write_xyz(
+    const DumpXyzCommand& command,
+    int step,
+    double global_time,
+    const Box& box,
+    const HostAtoms& identity,
+    const HostSnapshot& snapshot,
+    const ThermoState& thermo)
+{
+  const bool separated = !command.filename.empty() && command.filename.back() == '*';
+  std::string filename = command.filename;
+  if (separated) {
+    filename.pop_back();
+    filename += std::to_string(step + 1);
+  }
+  FILE* file = std::fopen(filename.c_str(), separated ? "w" : "a");
+  if (!file) throw std::runtime_error("cannot open dump_xyz output '" + filename + "'");
+  const char* format = command.precision == OutputPrecision::single ? " %.9g" : " %.17g";
+  const auto order = output_order(identity, snapshot, &command);
+  const std::size_t stride = identity.local_stride();
+  std::fprintf(file, "%zu\n", order.size());
+  std::fprintf(file, "Time=%.8f", global_time * TIME_UNIT_CONVERSION);
+  std::fprintf(file, " pbc=\"%c %c %c\"", box.pbc_x ? 'T' : 'F', box.pbc_y ? 'T' : 'F',
+               box.pbc_z ? 'T' : 'F');
+  const double lattice[9] = {box.cpu_h[0], box.cpu_h[3], box.cpu_h[6], box.cpu_h[1],
+                             box.cpu_h[4], box.cpu_h[7], box.cpu_h[2], box.cpu_h[5],
+                             box.cpu_h[8]};
+  print_tensor(file, "Lattice", format, lattice);
+  std::fprintf(file, " energy=");
+  std::fprintf(file, format + 1, thermo.values[1]);
+  std::array<double, 6> virial_sum{};
+  for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
+    for (std::size_t component = 0; component < 6; ++component) {
+      virial_sum[component] += snapshot.virial[component * stride + atom];
+    }
+  }
+  const double virial[9] = {virial_sum[0], virial_sum[3], virial_sum[4],
+                            virial_sum[3], virial_sum[1], virial_sum[5],
+                            virial_sum[4], virial_sum[5], virial_sum[2]};
+  print_tensor(file, "virial", format, virial);
+  const double stress[9] = {thermo.values[2], thermo.values[5], thermo.values[6],
+                            thermo.values[5], thermo.values[3], thermo.values[7],
+                            thermo.values[6], thermo.values[7], thermo.values[4]};
+  print_tensor(file, "stress", format, stress);
+  std::fprintf(file, " Properties=species:S:1:pos:R:3");
+  if (command.quantities.mass) std::fprintf(file, ":mass:R:1");
+  if (command.quantities.charge) std::fprintf(file, ":charge:R:1");
+  if (command.quantities.velocity) std::fprintf(file, ":vel:R:3");
+  if (command.quantities.force) std::fprintf(file, ":forces:R:3");
+  if (command.quantities.potential) std::fprintf(file, ":energy_atom:R:1");
+  if (command.quantities.unwrapped_position) std::fprintf(file, ":unwrapped_position:R:3");
+  if (command.quantities.virial) std::fprintf(file, ":virial:R:9");
+  if (command.quantities.group_labels) {
+    std::fprintf(file, ":group:I:%zu", identity.group_labels.size());
+  }
+  std::fprintf(file, "\n");
+
+  constexpr int virial_index[9] = {0, 3, 4, 6, 1, 5, 7, 8, 2};
+  for (const std::size_t atom : order) {
+    std::fprintf(file, "%s", identity.species[atom].c_str());
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      std::fprintf(file, format, snapshot.position[axis * stride + atom]);
+    }
+    if (command.quantities.mass) std::fprintf(file, format, identity.mass[atom]);
+    if (command.quantities.charge) std::fprintf(file, format, identity.charge[atom]);
+    if (command.quantities.velocity) {
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        std::fprintf(file, format,
+                     snapshot.velocity[axis * stride + atom] / TIME_UNIT_CONVERSION);
+      }
+    }
+    if (command.quantities.force) {
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        std::fprintf(file, format, snapshot.force[axis * stride + atom]);
+      }
+    }
+    if (command.quantities.potential) std::fprintf(file, format, snapshot.potential[atom]);
+    if (command.quantities.unwrapped_position) {
+      if (snapshot.unwrapped.empty()) {
+        std::fclose(file);
+        throw std::logic_error("unwrapped position output was not initialized");
+      }
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        std::fprintf(file, format, snapshot.unwrapped[axis * stride + atom]);
+      }
+    }
+    if (command.quantities.virial) {
+      for (int component : virial_index) {
+        std::fprintf(file, format, snapshot.virial[component * stride + atom]);
+      }
+    }
+    if (command.quantities.group_labels) {
+      for (const auto& labels : identity.group_labels) {
+        std::fprintf(file, " %d", labels[atom]);
+      }
+    }
+    std::fprintf(file, "\n");
+  }
+  std::fflush(file);
+  std::fclose(file);
+}
+
+void write_restart(
+    const Box& box,
+    const HostAtoms& identity,
+    const HostSnapshot& snapshot)
+{
+  FILE* file = std::fopen("restart.xyz", "w");
+  if (!file) throw std::runtime_error("cannot open restart.xyz");
+  const auto order = output_order(identity, snapshot, nullptr);
+  const std::size_t stride = identity.local_stride();
+  std::fprintf(file, "%zu\n", identity.counts.global_count);
+  std::fprintf(file, "pbc=\"%c %c %c\" ", box.pbc_x ? 'T' : 'F', box.pbc_y ? 'T' : 'F',
+               box.pbc_z ? 'T' : 'F');
+  std::fprintf(file, "Lattice=\"%g %g %g %g %g %g %g %g %g\" ", box.cpu_h[0],
+               box.cpu_h[3], box.cpu_h[6], box.cpu_h[1], box.cpu_h[4], box.cpu_h[7],
+               box.cpu_h[2], box.cpu_h[5], box.cpu_h[8]);
+  if (identity.group_labels.empty()) {
+    std::fprintf(file, "Properties=species:S:1:pos:R:3:mass:R:1:vel:R:3\n");
+  } else {
+    std::fprintf(file, "Properties=species:S:1:pos:R:3:mass:R:1:vel:R:3:group:I:%zu\n",
+                 identity.group_labels.size());
+  }
+  for (const std::size_t atom : order) {
+    std::fprintf(file, "%s %g %g %g %g %g %g %g ", identity.species[atom].c_str(),
+                 snapshot.position[atom], snapshot.position[stride + atom],
+                 snapshot.position[2 * stride + atom], identity.mass[atom],
+                 snapshot.velocity[atom] / TIME_UNIT_CONVERSION,
+                 snapshot.velocity[stride + atom] / TIME_UNIT_CONVERSION,
+                 snapshot.velocity[2 * stride + atom] / TIME_UNIT_CONVERSION);
+    for (const auto& labels : identity.group_labels) std::fprintf(file, "%d ", labels[atom]);
+    std::fprintf(file, "\n");
+  }
+  std::fflush(file);
+  std::fclose(file);
+}
+
+using Measurement = std::variant<DumpThermoCommand, DumpXyzCommand, DumpRestartCommand>;
+
+double adaptive_time_step(
+    DeviceAtoms& atoms,
+    double initial_time_step,
+    const std::optional<double>& maximum_distance)
+{
+  if (!maximum_distance) return initial_time_step;
+  std::vector<double> velocity(atoms.velocity.size());
+  atoms.velocity.copy_to_host(velocity.data());
+  const std::size_t stride = atoms.counts.local_count();
+  double maximum_squared = 0.0;
+  for (std::size_t atom = 0; atom < atoms.counts.owned_count; ++atom) {
+    const double vx = velocity[atom];
+    const double vy = velocity[stride + atom];
+    const double vz = velocity[2 * stride + atom];
+    maximum_squared = std::max(maximum_squared, vx * vx + vy * vy + vz * vz);
+  }
+  const double limited = *maximum_distance / std::sqrt(maximum_squared);
+  return limited < initial_time_step ? limited : initial_time_step;
+}
+
+void correct_device_velocity(
+    DeviceAtoms& device,
+    const HostAtoms& identity,
+    const CorrectVelocityCommand& command)
+{
+  std::vector<double> position(device.position.size());
+  std::vector<double> velocity(device.velocity.size());
+  device.position.copy_to_host(position.data());
+  device.velocity.copy_to_host(velocity.data());
+  if (!command.grouping_method) {
+    correct_velocity_subset(identity.mass, position, velocity, all_owned_indices(identity));
+  } else {
+    const std::size_t method = static_cast<std::size_t>(*command.grouping_method);
+    if (method >= identity.group_labels.size()) {
+      throw std::runtime_error("correct_velocity grouping method is out of range");
+    }
+    int maximum_group = -1;
+    for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
+      maximum_group = std::max(maximum_group, identity.group_labels[method][atom]);
+    }
+    for (int group = 0; group <= maximum_group; ++group) {
+      std::vector<std::size_t> subset;
+      for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
+        if (identity.group_labels[method][atom] == group) subset.push_back(atom);
+      }
+      correct_velocity_subset(identity.mass, position, velocity, subset);
+    }
+  }
+  device.upload_velocity(velocity);
+}
+
+void run_segment(
+    int steps,
+    double base_time_step,
+    const std::optional<double>& maximum_distance,
+    const EnsembleCommand& ensemble,
+    const std::optional<CorrectVelocityCommand>& velocity_correction,
+    const std::vector<Measurement>& measurements,
+    double& global_time,
+    Box& box,
+    HostAtoms& identity,
+    DeviceAtoms& atoms,
+    NepForce& force)
+{
+  int thermo_count = 0;
+  int restart_count = 0;
+  for (const Measurement& measurement : measurements) {
+    if (std::holds_alternative<DumpThermoCommand>(measurement)) ++thermo_count;
+    if (std::holds_alternative<DumpRestartCommand>(measurement)) ++restart_count;
+  }
+  if (thermo_count > 1 || restart_count > 1) {
+    throw std::runtime_error("multiple dump_thermo or dump_restart commands within one run");
+  }
+  for (const Measurement& measurement : measurements) {
+    if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
+      FILE* file = std::fopen("thermo.out", "a");
+      if (!file) throw std::runtime_error("cannot open thermo.out");
+      write_thermo_header(file, dump->interval, identity, base_time_step);
+      std::fclose(file);
+    }
+    if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+      if (dump->quantities.group_labels && identity.group_labels.empty()) {
+        throw std::runtime_error("cannot output group labels without model groups");
+      }
+    }
+  }
+
+  GPU_Vector<double> device_thermo(8);
+  force.compute(box, atoms);
+  const int owned = checked_int(atoms.counts.owned_count, "owned_count");
+  const int stride = checked_int(atoms.counts.local_count(), "local_count");
+  for (int step = 0; step < steps; ++step) {
+    if (velocity_correction && step % velocity_correction->interval == 0) {
+      correct_device_velocity(atoms, identity, *velocity_correction);
+    }
+    const double time_step = adaptive_time_step(atoms, base_time_step, maximum_distance);
+    global_time += time_step;
+    if (atoms.has_unwrapped()) {
+      atoms.previous_position.copy_from_device(atoms.position.data());
+    }
+    velocity_verlet<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+        true, owned, stride, time_step, atoms.mass.data(), atoms.position.data(),
+        atoms.velocity.data(), atoms.force.data());
+    if (atoms.has_unwrapped()) {
+      update_unwrapped<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+          owned, stride, atoms.position.data(), atoms.previous_position.data(),
+          atoms.unwrapped.data());
+    }
+    check_cuda(cudaGetLastError(), "velocity-Verlet first half");
+    force.compute(box, atoms);
+    velocity_verlet<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+        false, owned, stride, time_step, atoms.mass.data(), atoms.position.data(),
+        atoms.velocity.data(), atoms.force.data());
+    check_cuda(cudaGetLastError(), "velocity-Verlet second half");
+    const ThermoState thermo = compute_thermo(atoms, box, device_thermo);
+
+    if (ensemble.kind == EnsembleKind::nvt_ber) {
+      const double fraction = static_cast<double>(step) / static_cast<double>(steps);
+      const double target = ensemble.initial_temperature +
+                            (ensemble.final_temperature - ensemble.initial_temperature) * fraction;
+      const double coupling = 1.0 / ensemble.temperature_coupling;
+      if (coupling > 1.0e-5) {
+        const double factor = std::sqrt(1.0 + coupling * (target / thermo.values[0] - 1.0));
+        scale_owned_velocity<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+            owned, stride, factor, atoms.velocity.data());
+        check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
+      }
+    }
+
+    bool need_snapshot = false;
+    for (const Measurement& measurement : measurements) {
+      if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+        need_snapshot = need_snapshot || ((step + 1) % dump->interval == 0);
+      } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
+        need_snapshot = need_snapshot || ((step + 1) % restart->interval == 0);
+      }
+    }
+    std::optional<HostSnapshot> snapshot;
+    if (need_snapshot) snapshot = download_snapshot(atoms);
+
+    for (const Measurement& measurement : measurements) {
+      if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
+        if ((step + 1) % dump->interval == 0) {
+          FILE* file = std::fopen("thermo.out", "a");
+          if (!file) throw std::runtime_error("cannot open thermo.out");
+          write_thermo_row(file, thermo, identity, box);
+          std::fclose(file);
+        }
+      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+        if ((step + 1) % dump->interval == 0) {
+          write_xyz(*dump, step, global_time, box, identity, *snapshot, thermo);
+        }
+      } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
+        if ((step + 1) % restart->interval == 0) {
+          write_restart(box, identity, *snapshot);
+        }
+      }
+    }
+  }
+}
+
+}  // namespace
+
+void run_single_rank(
+    const RunProgram& program,
+    Model model,
+    const std::string& potential_filename)
+{
+  if (model.atoms.counts.ghost_count != 0 ||
+      model.atoms.counts.owned_count != model.atoms.counts.global_count) {
+    throw std::logic_error("single-rank initialization requires owned_count == global_count and no ghosts");
+  }
+  if (!model.atoms.has_input_velocity) {
+    std::srand(static_cast<unsigned int>(
+        std::chrono::system_clock::now().time_since_epoch().count()));
+    initialize_random_velocity(model.atoms, 300.0, std::nullopt);
+  }
+
+  Box box = make_box(model.box);
+  DeviceAtoms atoms(model.atoms);
+  NepForce force(potential_filename, atoms.counts);
+  bool potential_seen = false;
+  double time_step = 1.0 / TIME_UNIT_CONVERSION;
+  std::optional<double> maximum_distance;
+  std::optional<EnsembleCommand> ensemble;
+  std::optional<CorrectVelocityCommand> velocity_correction;
+  std::vector<Measurement> measurements;
+  double global_time = 0.0;
+
+  for (const Command& command : program.commands) {
+    try {
+      if (const auto* potential = std::get_if<PotentialCommand>(&command.data)) {
+        if (potential_seen || potential->filename != potential_filename) {
+          throw std::runtime_error("multiple potentials are not supported by the single-rank runtime");
+        }
+        potential_seen = true;
+      } else if (const auto* velocity = std::get_if<VelocityCommand>(&command.data)) {
+        if (!model.atoms.has_input_velocity) {
+          initialize_random_velocity(model.atoms, velocity->temperature, velocity->seed);
+          atoms.upload_velocity(model.atoms.velocity);
+        }
+      } else if (const auto* step = std::get_if<TimeStepCommand>(&command.data)) {
+        time_step = step->femtoseconds / TIME_UNIT_CONVERSION;
+        maximum_distance = step->maximum_distance_angstrom;
+      } else if (const auto* selected = std::get_if<EnsembleCommand>(&command.data)) {
+        ensemble = *selected;
+      } else if (const auto* correction =
+                     std::get_if<CorrectVelocityCommand>(&command.data)) {
+        velocity_correction = *correction;
+      } else if (const auto* dump = std::get_if<DumpThermoCommand>(&command.data)) {
+        measurements.emplace_back(*dump);
+      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&command.data)) {
+        if (dump->quantities.unwrapped_position) atoms.enable_unwrapped();
+        measurements.emplace_back(*dump);
+      } else if (const auto* dump = std::get_if<DumpRestartCommand>(&command.data)) {
+        measurements.emplace_back(*dump);
+      } else if (const auto* run = std::get_if<RunCommand>(&command.data)) {
+        if (!potential_seen) throw std::runtime_error("run requires a preceding potential command");
+        if (!ensemble) throw std::runtime_error("run requires a preceding ensemble command");
+        run_segment(run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
+                    measurements, global_time, box, model.atoms, atoms, force);
+        measurements.clear();
+        velocity_correction.reset();
+        maximum_distance.reset();
+      }
+    } catch (const InputError&) {
+      throw;
+    } catch (const std::exception& error) {
+      throw InputError(command.source, error.what());
+    }
+  }
+  if (!measurements.empty()) {
+    throw InputError(SourceLocation{"run.in", 0, {}},
+                     "dump command is not followed by run");
+  }
+  check_cuda(cudaDeviceSynchronize(), "finish single-rank run");
+}
+
+}  // namespace dmgmd

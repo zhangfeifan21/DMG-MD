@@ -1,0 +1,170 @@
+{
+  "comparison_reference": "repeat-000",
+  "configured_tolerances": {
+    "energy": {
+      "atol": 1e-08,
+      "rtol": 1e-05,
+      "unit": "eV"
+    },
+    "force": {
+      "atol": 1e-06,
+      "rtol": 0.0001,
+      "unit": "eV/Angstrom"
+    },
+    "lattice": {
+      "atol": 1e-12,
+      "rtol": 0.0,
+      "unit": "Angstrom"
+    },
+    "mass": {
+      "atol": 1e-12,
+      "rtol": 0.0,
+      "unit": "amu"
+    },
+    "position": {
+      "atol": 2e-09,
+      "rtol": 2e-08,
+      "unit": "Angstrom"
+    },
+    "restart_mass": {
+      "atol": 5e-06,
+      "rtol": 5e-06,
+      "unit": "amu"
+    },
+    "restart_position": {
+      "atol": 5e-06,
+      "rtol": 5e-06,
+      "unit": "Angstrom"
+    },
+    "restart_velocity": {
+      "atol": 5e-09,
+      "rtol": 5e-06,
+      "unit": "Angstrom/fs"
+    },
+    "temperature": {
+      "atol": 2e-05,
+      "rtol": 2e-06,
+      "unit": "K"
+    },
+    "thermo_stress": {
+      "atol": 1e-05,
+      "rtol": 0.0001,
+      "unit": "GPa"
+    },
+    "time": {
+      "atol": 5e-09,
+      "rtol": 0.0,
+      "unit": "fs"
+    },
+    "velocity": {
+      "atol": 2e-09,
+      "rtol": 2e-07,
+      "unit": "Angstrom/fs"
+    },
+    "virial": {
+      "atol": 1e-06,
+      "rtol": 0.0001,
+      "unit": "eV"
+    },
+    "xyz_stress": {
+      "atol": 1e-08,
+      "rtol": 0.0001,
+      "unit": "eV/Angstrom^3"
+    }
+  },
+  "metadata": {
+    "cuda_visible_devices": "0",
+    "executable": "/fdata/zhangyifei/zhangyifei/newmd/gpumd-reference/src/gpumd",
+    "executable_sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414",
+    "generated_utc": "2026-09-02T04:00:27.046042+00:00",
+    "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Tue_May_27_02:21:03_PDT_2025\nCuda compilation tools, release 12.9, V12.9.86\nBuild cuda_12.9.r12.9/compiler.36037853_0",
+    "nvidia_driver": "NVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9\nNVIDIA GeForce RTX 4090, 580.173.02, 8.9",
+    "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 4090 (UUID: GPU-a4cdc2a3-d216-af6d-26bb-d6a5c81e2a80)\nGPU 1: NVIDIA GeForce RTX 4090 (UUID: GPU-d146f2b8-3d3d-4b60-b4a5-1b9ed07f2900)\nGPU 2: NVIDIA GeForce RTX 4090 (UUID: GPU-8264a4fc-58ff-d92c-b45c-1ae435b9574d)\nGPU 3: NVIDIA GeForce RTX 4090 (UUID: GPU-411245be-070f-01e4-a956-fbad65a7a003)\nGPU 4: NVIDIA GeForce RTX 4090 (UUID: GPU-9ea64601-9658-26c8-f8de-7a5b317bb1ad)\nGPU 5: NVIDIA GeForce RTX 4090 (UUID: GPU-ea45f080-5f8c-7636-a559-6aa4715ea7df)\nGPU 6: NVIDIA GeForce RTX 4090 (UUID: GPU-e99f226f-8450-fa78-a5bc-bc89221036b7)\nGPU 7: NVIDIA GeForce RTX 4090 (UUID: GPU-1c95c731-16e1-b32e-0da6-4cd86bf11262)",
+    "platform": "Linux-5.15.0-60-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "reference_commit": "9d23496e41319b9e2af5221a7df6285387401d1e"
+  },
+  "near_zero_relative_cutoff": 1e-12,
+  "observed": {
+    "energy": {
+      "comparisons": 5655,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "force": {
+      "comparisons": 12528,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "lattice": {
+      "comparisons": 9657,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "position": {
+      "comparisons": 12528,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "restart_mass": {
+      "comparisons": 754,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "restart_position": {
+      "comparisons": 2262,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "restart_velocity": {
+      "comparisons": 2262,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "temperature": {
+      "comparisons": 493,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "thermo_stress": {
+      "comparisons": 2958,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "time": {
+      "comparisons": 493,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "velocity": {
+      "comparisons": 9657,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "virial": {
+      "comparisons": 42021,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    },
+    "xyz_stress": {
+      "comparisons": 4437,
+      "max_abs": 0.0,
+      "max_rel_ref_gt_1e-12": 0.0,
+      "worst": ""
+    }
+  },
+  "repeats": 30,
+  "schema_version": 1
+}

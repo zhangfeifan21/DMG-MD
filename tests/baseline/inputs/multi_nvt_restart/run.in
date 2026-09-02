@@ -1,0 +1,23 @@
+potential nep.txt
+
+# Static initial state.
+time_step 0
+ensemble nve
+dump_thermo 1
+dump_xyz 1 initial.xyz precision double force potential virial
+run 1
+
+# First Berendsen NVT segment: output every two steps.
+time_step 0.1
+ensemble nvt_ber 100 120 100
+dump_thermo 2
+dump_xyz 2 trajectory.xyz precision double velocity force potential virial
+dump_restart 2
+run 4
+
+# A consecutive run command with fresh measurements and a new target ramp.
+ensemble nvt_ber 120 130 100
+dump_thermo 1
+dump_xyz 1 trajectory.xyz precision double velocity force potential virial
+dump_restart 2
+run 3

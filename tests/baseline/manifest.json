@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "commit": "9d23496e41319b9e2af5221a7df6285387401d1e",
+    "executable_sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414",
+    "required_visible_gpu_count": 1
+  },
+  "input_sha256": {
+    "inputs/multi_nvt_restart/model.xyz": "a806c675eb7b31af8721ff7cb544ef3db35885e0cc35bfa16033205ee5abd90e",
+    "inputs/multi_nvt_restart/resume.in": "d42215cf01e054ba0b2a8a188ed76c473e4e4e626a0282536d5166d397a4c2a8",
+    "inputs/multi_nvt_restart/run.in": "d0493d6cd40a9ba26391fc0f176cf0dbd60e134621a40cd758cf02b4b86be5d1",
+    "inputs/nep_zbl_boundary/model.xyz": "edc4acfbc9ebd27f049cee0c6e29a83232501bfcab99172e1d3768379d1f472e",
+    "inputs/nep_zbl_boundary/run.in": "318e5b7a5c6d21c1d5a1306739487007ef36d4649b1153befcefc5fd95c89b2c",
+    "inputs/potentials/nep_BaTiO3_zbl.txt": "d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02",
+    "inputs/potentials/nep_C.txt": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
+    "inputs/potentials/nep_water.txt": "8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3",
+    "inputs/single_large_nve/model.xyz": "22f017d0e5e539f34e620e34fe9bfb729b8e0ba97ea4a81e4517537b8ab2aba1",
+    "inputs/single_large_nve/run.in": "2b88607a6638574849ea5bfa5537272cf37784844bedcb3b574ddfb6cef441d8",
+    "inputs/single_small_static/model.xyz": "b95ddd8b60f96afd6e3723e4fb539c3f770fd2340400cc6b4b59ef842e02dcf3",
+    "inputs/single_small_static/run.in": "318e5b7a5c6d21c1d5a1306739487007ef36d4649b1153befcefc5fd95c89b2c"
+  },
+  "tolerances": {
+    "time": {"rtol": 0.0, "atol": 5e-9, "unit": "fs"},
+    "lattice": {"rtol": 0.0, "atol": 1e-12, "unit": "Angstrom"},
+    "position": {"rtol": 2e-8, "atol": 2e-9, "unit": "Angstrom"},
+    "velocity": {"rtol": 2e-7, "atol": 2e-9, "unit": "Angstrom/fs"},
+    "force": {"rtol": 1e-4, "atol": 1e-6, "unit": "eV/Angstrom"},
+    "energy": {"rtol": 1e-5, "atol": 1e-8, "unit": "eV"},
+    "virial": {"rtol": 1e-4, "atol": 1e-6, "unit": "eV"},
+    "xyz_stress": {"rtol": 1e-4, "atol": 1e-8, "unit": "eV/Angstrom^3"},
+    "temperature": {"rtol": 2e-6, "atol": 2e-5, "unit": "K"},
+    "thermo_stress": {"rtol": 1e-4, "atol": 1e-5, "unit": "GPa"},
+    "mass": {"rtol": 0.0, "atol": 1e-12, "unit": "amu"},
+    "restart_position": {"rtol": 5e-6, "atol": 5e-6, "unit": "Angstrom"},
+    "restart_velocity": {"rtol": 5e-6, "atol": 5e-9, "unit": "Angstrom/fs"},
+    "restart_mass": {"rtol": 5e-6, "atol": 5e-6, "unit": "amu"}
+  },
+  "cases": {
+    "single_small_static": {
+      "potential": "inputs/potentials/nep_C.txt",
+      "potential_version": "nep4",
+      "potential_num_types": 1,
+      "expected_force_path": "small-box",
+      "stages": [
+        {
+          "name": "main",
+          "model": "inputs/single_small_static/model.xyz",
+          "run": "inputs/single_small_static/run.in",
+          "outputs": {
+            "initial.xyz": {
+              "kind": "xyz",
+              "frames": 1,
+              "times_fs": [0.0],
+              "natoms": 8,
+              "properties": "species:S:1:pos:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            },
+            "neighbor.out": {"kind": "text", "lines": 1},
+            "thermo.out": {"kind": "thermo", "segment_rows": [1]}
+          }
+        }
+      ]
+    },
+    "single_large_nve": {
+      "potential": "inputs/potentials/nep_C.txt",
+      "potential_version": "nep4",
+      "potential_num_types": 1,
+      "expected_force_path": "large-box",
+      "stages": [
+        {
+          "name": "main",
+          "model": "inputs/single_large_nve/model.xyz",
+          "run": "inputs/single_large_nve/run.in",
+          "outputs": {
+            "initial.xyz": {
+              "kind": "xyz",
+              "frames": 1,
+              "times_fs": [0.0],
+              "natoms": 8,
+              "properties": "species:S:1:pos:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            },
+            "neighbor.out": {"kind": "text", "lines": 1},
+            "restart.xyz": {
+              "kind": "restart",
+              "frames": 1,
+              "natoms": 8,
+              "properties": "species:S:1:pos:R:3:mass:R:1:vel:R:3"
+            },
+            "thermo.out": {"kind": "thermo", "segment_rows": [1, 6]},
+            "trajectory.xyz": {
+              "kind": "xyz",
+              "frames": 6,
+              "times_fs": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+              "natoms": 8,
+              "properties": "species:S:1:pos:R:3:vel:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            }
+          }
+        }
+      ]
+    },
+    "multi_nvt_restart": {
+      "potential": "inputs/potentials/nep_water.txt",
+      "potential_version": "nep4",
+      "potential_num_types": 2,
+      "expected_force_path": "large-box",
+      "stages": [
+        {
+          "name": "initial",
+          "model": "inputs/multi_nvt_restart/model.xyz",
+          "run": "inputs/multi_nvt_restart/run.in",
+          "outputs": {
+            "initial.xyz": {
+              "kind": "xyz",
+              "frames": 1,
+              "times_fs": [0.0],
+              "natoms": 9,
+              "properties": "species:S:1:pos:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            },
+            "neighbor.out": {"kind": "text", "lines": 1},
+            "restart.xyz": {
+              "kind": "restart",
+              "frames": 1,
+              "natoms": 9,
+              "properties": "species:S:1:pos:R:3:mass:R:1:vel:R:3"
+            },
+            "thermo.out": {"kind": "thermo", "segment_rows": [1, 2, 3]},
+            "trajectory.xyz": {
+              "kind": "xyz",
+              "frames": 5,
+              "times_fs": [0.2, 0.4, 0.5, 0.6, 0.7],
+              "natoms": 9,
+              "properties": "species:S:1:pos:R:3:vel:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            }
+          }
+        },
+        {
+          "name": "resume",
+          "model_from_stage": ["initial", "restart.xyz"],
+          "run": "inputs/multi_nvt_restart/resume.in",
+          "outputs": {
+            "neighbor.out": {"kind": "text", "lines": 1},
+            "restart.xyz": {
+              "kind": "restart",
+              "frames": 1,
+              "natoms": 9,
+              "properties": "species:S:1:pos:R:3:mass:R:1:vel:R:3"
+            },
+            "thermo.out": {"kind": "thermo", "segment_rows": [2]},
+            "trajectory.xyz": {
+              "kind": "xyz",
+              "frames": 2,
+              "times_fs": [0.1, 0.2],
+              "natoms": 9,
+              "properties": "species:S:1:pos:R:3:vel:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            }
+          }
+        }
+      ]
+    },
+    "nep_zbl_boundary": {
+      "potential": "inputs/potentials/nep_BaTiO3_zbl.txt",
+      "potential_version": "nep4_zbl",
+      "potential_num_types": 3,
+      "expected_force_path": "large-box",
+      "periodic_pair": {
+        "atom_indices": [0, 1],
+        "species": ["Ba", "Ti"],
+        "maximum_mic_distance_A": 0.500000000001
+      },
+      "stages": [
+        {
+          "name": "main",
+          "model": "inputs/nep_zbl_boundary/model.xyz",
+          "run": "inputs/nep_zbl_boundary/run.in",
+          "outputs": {
+            "initial.xyz": {
+              "kind": "xyz",
+              "frames": 1,
+              "times_fs": [0.0],
+              "natoms": 8,
+              "properties": "species:S:1:pos:R:3:forces:R:3:energy_atom:R:1:virial:R:9"
+            },
+            "neighbor.out": {"kind": "text", "lines": 1},
+            "thermo.out": {"kind": "thermo", "segment_rows": [1]}
+          }
+        }
+      ]
+    }
+  }
+}

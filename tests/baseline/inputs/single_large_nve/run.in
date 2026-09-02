@@ -1,0 +1,16 @@
+potential nep.txt
+
+# Static segment: freezes the initial force, potential energy, virial, and thermo state.
+time_step 0
+ensemble nve
+dump_thermo 1
+dump_xyz 1 initial.xyz precision double force potential virial
+run 1
+
+# Short deterministic NVE segment. The model supplies velocities explicitly.
+time_step 0.1
+ensemble nve
+dump_thermo 1
+dump_xyz 1 trajectory.xyz precision double velocity force potential virial
+dump_restart 3
+run 6
