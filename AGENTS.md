@@ -6,7 +6,7 @@
 
 面向用户的兼容目标是：继续直接读取 GPUMD 的 `model.xyz`、NEP/NEP-ZBL potential 文件和 `run.in`。对已经声明支持的功能，输入语法、默认值、单位、校验、输出文件名、输出列及物理语义必须与锁定的 GPUMD 参考版本一致；对未支持命令必须识别并报出明确的 `unsupported` 错误，不得静默忽略。
 
-当前第一阶段范围仅包括：
+当前产品范围仅包括：
 
 - 普通经典 MD，单 bead；
 - NEP/NEP-ZBL；
@@ -17,17 +17,22 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前阶段：审计与设计
+## 当前阶段：replicated-data MPI prototype
 
-在维护者明确批准实现切口前：
+当前已批准的实现切口是 Open MPI+UCX 的 replicated-data 原型：
 
-- 不实现 MPI；
-- 不改变现有生产代码行为；
-- 不进行大规模源码移动或架构重写；
-- 可以在 `docs/` 中补充审计、设计和验证文档；
-- 必须把无法从代码证明的行为标记为 `UNKNOWN`，不得推测为兼容。
+- 一 MPI rank 对应一张 GPU；每个 rank 暂时保留完整坐标和类型；
+- 中心原子按连续全局下标分片，积分、thermo 归约和输出只承认 owned range；
+- 每步允许 Open MPI collective，默认走 HostStaged，CudaAware 必须先通过 Open MPI capability
+  query 和运行时数值自检；
+- 所有用户可见文件只由 rank 0 写；
+- 不实现 ghost、halo 或原子迁移，也不进行大规模源码移动或架构重写；
+- 不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
+- 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
 
-当前审计的权威交付物位于：
+本阶段的实现、所有权、通信量和验证契约位于 `docs/replicated-mpi.md`。
+
+当前设计与审计的权威交付物位于：
 
 - `docs/critical-path.md`
 - `docs/kernel-inventory.md`
@@ -51,7 +56,7 @@ GPUMD 位于：
 ## 不可破坏的产品约束
 
 - 不重新实现 NEP 数学公式。优先复用或小范围重构 GPUMD 已验证的 CUDA 内核。
-- 一 MPI rank 只控制一张 GPU，只持有 owned atoms、ghost atoms 和明确的通信工作区。
+- 一 MPI rank 只控制一张 GPU。当前 replicated-data 原型允许每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；进入 domain decomposition 后才收敛为 owned、ghost 和明确通信工作区。
 - owned atoms 与 ghost atoms 必须有不同的生命周期和写权限；ghost 不得被积分、重复计入 thermo 或直接输出。
 - 必须有跨迁移保持稳定的全局原子 ID；本地数组下标不能承担持久身份。
 - 不假设 NEP halo 等于某一个 cutoff。位置、descriptor/导数、directed partial force 和最终 force 的每一层依赖都必须有 kernel 证据。
@@ -78,14 +83,16 @@ GPUMD 位于：
 ## 语言与工具链
 
 - C++17、CUDA、CMake；
-- MPI 是目标 runtime 的必需依赖，但当前审计阶段不添加；
+- Open MPI+UCX 是 replicated-data runtime 的固定依赖；允许使用 Open MPI 的 `mpi-ext.h`/
+  `MPIX_*`，不再维护 MPICH、MVAPICH 或其他 MPI 实现兼容性；
 - Python 只用于测试、验证和分析脚本，核心 runtime 不依赖 Python；
 - GPU 常驻数据只在初始化、通信、输出或验证需要时传回主机。
 
 ## 构建与测试
 
-配置：
+从本仓库根目录先加载唯一受支持的 MPI/CUDA 环境，再配置：
 
+    source ../env/md-mpi.sh
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
 构建：
@@ -97,6 +104,20 @@ GPUMD 位于：
     ctest --test-dir build --output-on-failure
 
 修改生产代码前后应检查 `git status` 和 `git diff`，保留用户已有修改。不得使用破坏性 Git 操作，不得提交或推送，除非维护者明确要求。
+
+### GPU 测试环境
+
+- 受限沙箱通常无法访问 NVIDIA driver/GPU；沙箱内的 `nvidia-smi` 失败、`cudaErrorNoDevice` 或 CUDA 初始化失败，不能单独作为宿主机无 GPU 或实现失败的结论。
+- `../env/md-mpi.sh` 是构建和测试唯一受支持的环境入口。每个新的 shell 都必须先 source；不得
+  静默回退到 system MPI/UCX、旧的临时 UCX 或只靠额外命令行变量修补环境。
+- 脚本当前固定 Open MPI+UCX PML、各自的 MCA component path，并排除不能处理本项目 CUDA
+  buffer 的 HCOLL。修改 Open MPI、UCX、CUDA 或脚本后，必须先运行
+  `python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3`；该门槛检查
+  executable/linkage、Open MPI CUDA support、UCX `cuda_copy/cuda_ipc`、GPU 唯一绑定和实际
+  device-pointer collectives。门槛未通过时不得启动 numerical differential matrix。
+- CUDA 数值验收应先在沙箱内完成可做的静态检查和 CPU 测试，再在获得授权后使用 `sandbox_permissions=require_escalated` 到沙箱外 source 同一脚本，依次运行环境预检、单 rank golden 和 MPI GPU 测试。
+- 不得因为沙箱隔离而反复把 GPU 测试仅记录为“待验证”；应保存沙箱外的精确命令、GPU/MPI 环境和结果。若沙箱外仍失败，再按真实的 driver、GPU、MPI 或代码错误诊断。
+- 沙箱外测试不放宽一 rank 一 GPU、CudaAware 自检和默认 HostStaged 等约束。
 
 ## 数值验证规则
 

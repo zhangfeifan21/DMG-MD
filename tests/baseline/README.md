@@ -6,6 +6,7 @@ DMG-MD 或 GPUMD 的生产物理内核。
 从 DMG-MD 仓库根目录重复运行全部 baseline：
 
 ```bash
+source ../env/md-mpi.sh
 python3 tests/baseline/run_baselines.py
 ```
 
@@ -16,12 +17,14 @@ CUDA 错误失败，不会把测试标记为 skip。可用 `--device GPU_ID_OR_U
 将未来 DMG-MD 可执行程序与 GPUMD goldens 做 differential 比较：
 
 ```bash
+source ../env/md-mpi.sh
 python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md
 ```
 
 只有在审查 reference 与输出差异后才能重建 goldens：
 
 ```bash
+source ../env/md-mpi.sh
 python3 tests/baseline/run_baselines.py --update-goldens
 python3 tests/baseline/run_baselines.py --calibrate 30
 ```

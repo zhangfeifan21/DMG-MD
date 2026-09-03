@@ -8,6 +8,9 @@
 
 - GPUMD commit `9d23496e41319b9e2af5221a7df6285387401d1e`；
 - 单GPU ordinary `NEP` 路径，基线进程必须只看见一张GPU，防止自动进入 `NEP_MULTIGPU`；
+- DMG-MD MPI 测试只使用 source `../env/md-mpi.sh` 后的 Open MPI+UCX；任何 numerical case
+  之前先通过 `tests/mpi/check_environment.py`，确认链接、CUDA transports 和实际 device
+  collectives；
 - 每个case在新的空临时目录运行，因为 `thermo.out`、XYZ和`neighbor.out`会append；
 - 保存GPUMD executable hash、编译器/CUDA版本、build flags、GPU型号/driver、输入文件hash和环境变量。
 
@@ -84,7 +87,10 @@ GPUMD仍会在run前和step内各计算一次力，但坐标不变；`static.xyz
 
 目的：先验证MPI lifecycle、device binding、collective和rank0 I/O，不引入domain decomposition。
 
-方案：每rank暂时持有完整输入并独立计算，但指定一个rank的per-atom结果作为物理贡献；或者每rank计算后只做一致性hash，不把多份值相加。
+方案：每 rank 持有完整输入并执行 ordinary NEP scratch；balanced center range 唯一拥有积分、
+thermo 和 per-atom output。每步 Allgatherv owned position/velocity，thermo 只归约 owned local
+sum，输出只 Gatherv owned records。直接设置 NEP `N1/N2` 已由 kernel 证据判定为不完整，不能
+作为本原型实现。
 
 检查：
 
@@ -93,6 +99,7 @@ GPUMD仍会在run前和step内各计算一次力，但坐标不变；`static.xyz
 - rank-local静态结果一致；
 - rank0输出恰好一份，不发生多rank append；
 - collectives错误路径不会hang；
+- HostStaged 与 CudaAware 运行同一组数值 case，并做 cross-backend direct differential；
 - 1、2、4 rank的rank0输出结构相同。
 
 复制原型绝不能被当成domain-decomposed性能结果。

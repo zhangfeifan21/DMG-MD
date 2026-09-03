@@ -1,5 +1,9 @@
 # 尚未解决的问题与决策队列
 
+本文件保留初始审计快照和后续 domain-decomposition 决策队列；其中“审计开始时”的构建/测试
+描述不是当前操作指南。当前 replicated-data 实现、固定 Open MPI+UCX 环境和验证命令以
+`docs/progress.md`、`docs/replicated-mpi.md` 与 `AGENTS.md` 为准。
+
 ## 1. 仓库与构建审计记录
 
 审计开始时的目录结构是两个独立Git仓库：
@@ -9,7 +13,7 @@
 | `newmd/` | `main`, `ea3afff4e74aebefd06da81d9677d34ab621a90d` | 用户已有未跟踪 `docs/data-layout.md` | 保留原内容，只追加本次审计章节；生产源码未改 |
 | `gpumd-reference/` | `master`, `9d23496e41319b9e2af5221a7df6285387401d1e` | clean | 全程只读 |
 
-当前 NewMD：
+审计开始时的旧 NewMD：
 
 - `CMakeLists.txt` 要求 CMake 3.18，C++17/CUDA17；显式构建 `newmd_core`、`newmd` 和tests。
 - 配置：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`。
@@ -36,7 +40,7 @@ GPUMD reference：
 | Q4 | 第一版halo协议选择深位置halo还是分阶段交换？ | kernel证明两跳；`NEP_MULTIGPU`用2rc坐标窗口 | 先实现保守两跳oracle，再以其验证 `Fp`+partial staged protocol；不要直接只做一种 | 同意建议决策 |
 | Q5 | edge partial如何跨rank唯一匹配？ | many-body按local整数邻居row查reverse edge；迁移会换index | 设计 `(center_gid,neighbor_gid,image)` 键及接收后local slot map；先在2-rank边界fixture证明 | 同意建议决策 |
 | Q6 | 第一切口支持哪些box？ | NewMD仅正交全周期；GPUMD支持triclinic和逐方向PBC | 建议执行层首切口只接受大正交全周期，其他box parse后明确unsupported；不能静默转换 | 原NewMD考虑重写项目，初版仅支持正交全周期。新设计考虑复用GPUMD内核，故不影响MPI功能开发可以跟随GPUMD，如果影响则先开发正交全周期MVP版本 |
-| Q7 | rank-to-GPU绑定API和MPI能力目标？ | 当前GPUMD按visible device count选`NEP_MULTIGPU` | 明确支持的MPI实现、local rank发现、GPU-aware MPI与host staging fallback；NEP core不得枚举设备 | 同意建议决策 |
+| Q7 | rank-to-GPU绑定API和MPI能力目标？ | 当前GPUMD按visible device count选`NEP_MULTIGPU` | 固定 Open MPI+UCX；shared local rank 绑定唯一 GPU；默认 HostStaged，CudaAware 经 MPIX query 与数值自检；NEP core不得枚举设备 | 已按建议实现并由 1/2/4-rank 双后端矩阵关闭 |
 | Q8 | parser是逐rank读文件还是rank0广播？ | 独立读取可遇到非共享FS/文件变化；GPUMD模块还会二次扫描run.in | 建议rank0读原始bytes、parse typed IR并广播；所有rank校验hash。确定potential大文件广播策略 | rank0读原始文件并广播，potential由使用者自行确定每一个rank上都有相同拷贝，在初始化时验证potential文件的哈希值是否相同。
 
 ## 3. NEP格式与kernel未决问题
@@ -84,7 +88,7 @@ GPUMD reference：
 | Q37 | unwrapped position如何跨迁移维护？ | GPUMD Dump_XYZ构造时复制wrapped位置，Integrator更新独立array；restart不保存它 | 定义image counter和多段run lifecycle；跨restart不能恢复旧unwrapped history，需与reference测试 |
 | Q38 | group dump的global顺序/size | GPUMD `cpu_contents`按原数组扫描；MPI需要跨rank过滤 | 按global ID排序后过滤label；全局group size归约，禁止rank局部ID解释 |
 | Q39 | error传播策略 | GPUMD到处`exit(1)`；MPI单rankexit会让其他rank挂在collective | typed error先广播/allreduce；统一打印rank0上下文后`MPI_Abort`。精确退出码需测试 |
-| Q40 | GPU-aware MPI与CUDA graph/stream | 当前无MPI；默认stream隐式顺序不能跨MPI保证 | 明确能力矩阵和event协议；先实现correct host-staging fallback，再优化GPU direct |
+| Q40 | CUDA-aware MPI与CUDA graph/stream | replicated runtime 已实现同步的 blocking collectives | 固定 Open MPI+UCX；保留显式 CUDA synchronize、MPIX query、四类数值自检和 HostStaged fallback；未来引入非默认 stream/graph 时重新审计 event 协议 |
 
 ## 6. 物理/输出语义待确认
 

@@ -535,6 +535,7 @@ def execute_suite(
     work_root: Path,
     env: Dict[str, str],
     timeout: int,
+    launcher: Sequence[str] = (),
 ) -> Dict[Tuple[str, str], Path]:
     result_dirs: Dict[Tuple[str, str], Path] = {}
     for case_name, case in manifest["cases"].items():
@@ -562,7 +563,7 @@ def execute_suite(
                 "nep.txt": sha256(stage_dir / "nep.txt"),
             }
             result = subprocess.run(
-                [str(executable)],
+                [*launcher, str(executable)],
                 cwd=stage_dir,
                 env=env,
                 capture_output=True,

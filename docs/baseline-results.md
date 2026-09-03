@@ -26,6 +26,7 @@ DMG-MD 或 GPUMD 的生产物理内核。
 在 DMG-MD 仓库根目录运行：
 
 ```bash
+source ../env/md-mpi.sh
 python3 tests/baseline/run_baselines.py
 ```
 
@@ -36,6 +37,7 @@ python3 tests/baseline/run_baselines.py
 未来比较 DMG-MD 可执行程序时使用：
 
 ```bash
+source ../env/md-mpi.sh
 python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md
 ```
 

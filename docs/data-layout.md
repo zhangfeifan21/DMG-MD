@@ -1,8 +1,9 @@
 # DMG-MD 数据结构与内存布局
 
-更新日期：2026-09-02。
+更新日期：2026-09-03。
 
-本文档只描述当前 single-rank `dmg-md` 已实现的数据面，并以现有代码为权威来源。
+本文档描述当前 single-rank 与 replicated-data MPI `dmg-md` 的数据面，并以现有代码为
+权威来源。
 
 ## 1. 数据域约定
 
@@ -25,7 +26,7 @@ struct AtomCounts {
 | 计数 | 当前含义 | 可用于数组寻址 |
 | --- | --- | --- |
 | `global_count` | 全局原子数元数据 | 否 |
-| `owned_count` | 本 rank 负责积分、thermo 和输出的原子数 | 只用于确定 owned 域边界 |
+| `owned_count` | reader 模型中的记录数；replicated prototype 当前为 N | 否 |
 | `ghost_count` | 本 rank 可寻址但不拥有的原子数 | 否，当前必须为 0 |
 | `local_count()` | `owned_count + ghost_count` | 是，所有每原子 SoA 的 stride |
 
@@ -38,8 +39,8 @@ ghost_count  = 0
 global_id    = [0, 1, ..., N - 1]
 ```
 
-这些值在 single-rank 下数值相等，但代码仍分别使用 `global_count`、`owned_count` 和
-`local_count()`。不得把这种暂时相等重新编码为“数组长度就是全局 N”。
+这些值在 replicated prototype 中也保持相等。实际 MPI 所有权由独立的 `OwnedRange` 表示，
+不得把 reader 的 `owned_count=N` 误当成每 rank 都拥有 N 份物理输出。
 
 ## 2. Host 模型
 
@@ -132,64 +133,65 @@ GPUMD 的 `GPU_Vector` 管理设备内存：
 | --- | --- | ---: | --- |
 | `global_id` | `unsigned long long` | `local` | 全部 local；输出恢复稳定顺序 |
 | `type` | `int` | `local` | NEP 可寻址域 |
-| `mass` | `double` | `local` | 积分和 thermo 读取 owned |
-| `charge` | `float` | `local` | dump 使用 owned |
-| `position` | `double` | `3 * local` | force 可寻址 local；积分只写 owned |
-| `velocity` | `double` | `3 * local` | 积分和控温只写 owned |
-| `force` | `double` | `3 * local` | 当前 NEP 写 owned；积分只读 owned |
-| `potential` | `double` | `local` | thermo/dump 只读 owned |
-| `virial` | `double` | `9 * local` | thermo/dump 只读 owned |
+| `mass` | `double` | `local` | replicated input；积分/thermo 按 MPI owned range 读 |
+| `charge` | `float` | `local` | replicated input；rank 0 formatter 使用 |
+| `position` | `double` | `3 * local` | replicated input；积分只写 MPI owned range |
+| `velocity` | `double` | `3 * local` | replicated state；积分/控温只写 MPI owned range |
+| `force` | `double` | `3 * local` | NEP 写全量 scratch；仅 MPI owned range authoritative |
+| `potential` | `double` | `local` | NEP 写全量 scratch；thermo/dump 只认 MPI owned range |
+| `virial` | `double` | `9 * local` | NEP 写全量 scratch；thermo/dump 只认 MPI owned range |
 | `unwrapped` | `double` | 按需 `3 * local` | `dump_xyz position_unwrapped` 时启用 |
 | `previous_position` | `double` | 按需 `3 * local` | 更新 unwrapped position 时使用 |
 
 `species` 和 group labels 当前保留在 host identity 模型中；普通 NEP force 不需要它们驻留
-GPU。创建输出快照时下载 local 数组，但 record selection 只选择 owned 前缀。
+GPU。创建输出快照时，各 rank 只打包 MPI owned range，`MPI_Gatherv` 在 rank 0 恢复全局 SoA。
 
 ## 6. Kernel 所有权边界
 
-当前 kernel 明确接收 `owned_count` 和/或 local stride：
+当前 runtime kernel 明确接收 MPI owned `begin/end` 和 replicated stride：
 
 - velocity-Verlet、速度缩放和 unwrapped position 更新只 launch/写入 owned atoms；
 - thermo reduction 只遍历 owned atoms；
-- force 前清零只清 owned force、potential 和 virial；
+- force 前清零全量 NEP scratch，但后续积分/reduction/gather 只承认 owned range；
 - position PBC wrap 使用 local 可寻址域；
-- XYZ/restart 只选择 owned records，再按 `global_id` 排序。
+- XYZ/restart 只收集 owned records，再按 `global_id` 排序且只由 rank 0 写。
 
 因此 ghost 即使将来出现在 local 数组尾部，也不会自动被积分、计入 thermo 或直接输出。
 这并不表示当前 force 路径已经支持 ghost。
 
-## 7. Single-rank NEP 边界
+## 7. Replicated MPI NEP 边界
 
 `NepForce` 直接构造锁定 GPUMD 源码中的 `NEP`：
 
 ```text
-NEP workspace size = local_count
-NEP center range   = [0, owned_count)
+NEP workspace/input stride = global_count
+NEP scratch center range   = [0, global_count)
+authoritative output range = owned MPI range [begin_r, end_r)
 ```
 
-构造和每次 force 计算都验证：
+reader 仍生成完整无 ghost 模型：
 
 ```text
+global_count == local_count
 ghost_count == 0
-owned_count == local_count
 ```
 
-不满足条件会报错 `multi-rank force evaluation is not implemented`。这是刻意的 fail-closed
-边界：当前实现没有 halo、迁移、NEP intermediate exchange 或 reverse-force exchange，不能
-通过删除检查来获得正确的多-rank 力。
+MPI owned range 与 `AtomCounts::owned_count` 不混用：后者描述 reader 得到的完整 replicated
+input，前者决定积分、local thermo sum 和输出 gather。NEP scratch 保持全中心，是因为直接按
+owned 设置 `N1/N2` 会缺失分片外 `Fp` 和 reverse partial。详见 `replicated-mpi.md`。
 
 ## 8. 初始化与输出合同
 
-single-rank runtime 入口额外要求：
+replicated runtime 入口要求：
 
 ```text
-owned_count == global_count
+local_count == global_count
 ghost_count == 0
 ```
 
-`global_count` 仅用于全局元数据，例如 restart 的原子数 header。实际 per-atom 输出来自
-owned atoms；`global_id` 决定稳定顺序。thermo 的温度、势能和 stress 也只从 owned 数据归约。
+每 rank device input 都使用 `global_count` 寻址。实际 per-atom 输出只来自该 rank 的 MPI
+owned range，并在 rank 0 按 `global_id` 恢复顺序；thermo 只对 owned range 求 local sum后做
+全局归约。
 
-当前布局已通过四组锁定 GPUMD golden 的 force、energy、thermo、trajectory 和 restart
-differential tests。验证结果见 [progress.md](./progress.md)，相关架构选择见
-[decisions.md](./decisions.md)。
+single-rank 实现以及 Open MPI+UCX 环境下的 HostStaged/CudaAware 1/2/4-rank prototype 均已
+在沙箱外 GPU 上通过四组锁定 GPUMD golden。验证状态与命令见 [progress.md](./progress.md)。

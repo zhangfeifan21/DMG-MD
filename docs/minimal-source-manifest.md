@@ -9,7 +9,7 @@
 1. **可原样共享**：数学或小型无状态代码可保持实现与数值顺序。
 2. **应提取为公共库**：有价值的验证实现被全局对象/文件 I/O包裹，应抽出纯组件。
 3. **必须为 owned/ghost 重构**：接口或数据结构根本依赖全局 `N`、全局数组下标或单进程 I/O。
-4. **新 MPI runtime 不需要**：第一阶段明确不在范围。
+4. **当前产品不需要**：replicated-data 阶段仍明确排除的高级模块。
 5. **不确定，需实验**：语义/数值/通信代价尚未证明。
 
 “原样共享”不等于把整个 `.cu` 原样复制；通常只指表中列出的符号。
@@ -76,7 +76,7 @@
 - 原子迁移（持久字段 pack/unpack）；
 - position/type halo exchange；
 - NEP intermediate `Fp`/directed partial exchange，或可配置深 halo；
-- GPU-aware MPI staging/event 管理与无 GPU-aware MPI 的 host fallback；
+- 固定 Open MPI+UCX 的 HostStaged/CudaAware backend、capability query、数值自检和同步管理；
 - owned-only local reductions + MPI collectives；
 - rank 0 gather、global-ID 稳定排序和兼容 formatter；
 - 跨 rank 数 restart 的 repartition loader；

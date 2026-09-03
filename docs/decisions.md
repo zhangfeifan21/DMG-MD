@@ -1,6 +1,6 @@
 # DMG-MD 架构决策
 
-更新日期：2026-09-02。参考 GPUMD commit：
+更新日期：2026-09-03。参考 GPUMD commit：
 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 
 ## D-001：NEP 采用锁定源码树的源级共享
@@ -15,8 +15,8 @@ CUDA kernels。newmd 不复制 NEP 参数、descriptor、force 或 ZBL 数学。
 ## D-002：全局元数据与本地寻址从 single-rank 起分离
 
 决定：Atom 同时保存 `global_count`、`owned_count`、`ghost_count` 和 stable `global_id`；
-`local_count=owned+ghost` 是所有 SoA 的 stride，`owned_count` 是积分、thermo、PE/virial 和
-输出的域。single-rank 只是在入口验证 owned=global、ghost=0。
+`local_count=owned+ghost` 是所有 SoA 的 stride。replicated prototype 的 reader 模型仍为
+owned=global、ghost=0，另用 `OwnedRange` 表示真正的 rank-local 积分/thermo/output 权限。
 
 原因：不能把当前数值相等编码成“数组长度就是全局 N”。将来引入 ghost 时，现有 VV 和
 thermo kernel 无需改变所有权边界；NEP adapter 则必须被有证据的 distributed orchestration
@@ -30,14 +30,14 @@ thermo kernel 无需改变所有权边界；NEP adapter 则必须被有证据的
 原因：unsupported/unknown 命令必须在产生 MD 输出之前失败；typed IR 也为以后 rank 0 parse
 和广播规范化配置提供稳定边界。没有新增任何 MPI 专用 run.in token。
 
-## D-004：single-rank NEP adapter 对 ghost fail closed
+## D-004：replicated NEP adapter 对 ghost fail closed
 
-决定：当前 `NepForce` 构造和 compute 都拒绝 `ghost_count != 0`，并显式设置 GPUMD Potential
-的中心域 `[0, owned_count)`。
+决定：runtime 入口拒绝 `ghost_count != 0`。GPUMD Potential 中心域保持 `[0,global_count)`；
+MPI authoritative output 由独立 `OwnedRange` 限定。
 
 原因：GPUMD large-box 的 `Fp` 和 directed partial 有两层依赖，small-box 又使用 Newton
-atomic scatter。尚未实现 exchange 协议前，简单把 ghost 拼到数组尾部会产生漏力、重复力或
-重复能量。硬错误比隐式“看起来能跑”安全。
+atomic scatter。尚未实现 exchange 协议前，简单设置 `N1/N2` 或拼接 ghost 会产生漏力、
+重复力或重复能量。硬错误比隐式“看起来能跑”安全。
 
 ## D-005：observable 和 I/O 只承认 owner
 
@@ -65,10 +65,22 @@ GPU 的 `newmd` executable。
 原因：这些代码既不参与新的兼容 runtime，也缺少 global/owned/ghost/global-ID 语义；保留会
 形成第二套 Box、邻居和 Atom 模型，与直接复用 GPUMD 核心的方向冲突。
 
-## D-008：多-rank 暂停在门外
+## D-008：MPI 栈固定为 Open MPI+UCX
 
-决定：本阶段不添加 MPI 依赖、rank lifecycle、domain decomposition、halo、migration 或
-multi-rank force。只有 single-rank golden 全部持续通过后，才按独立小切口推进。
+决定：构建、运行和测试统一 source 仓库同级 `env/md-mpi.sh`，只支持其中的 Open MPI+UCX。
+核心允许使用 `mpi-ext.h`/`MPIX_Query_cuda_support()`，不再维护 MPICH/MVAPICH 兼容。默认
+HostStaged；CudaAware 必须同时通过 Open MPI capability query 和覆盖
+`MPI_Allreduce(MPI_IN_PLACE)`、`MPI_Allgatherv`、`MPI_Gatherv`、`MPI_Bcast` 的主动数值自检。
 
-原因：当前 differential 已把 parser、NEP、积分、thermo 和 I/O 作为 single-rank oracle
-锁定；在此之前混入分区变量会显著扩大数值差异的定位空间。
+原因：固定并预检实际部署栈可以先排除 executable/libmpi/UCX 混装、缺少 CUDA transport、
+错误 component path 和 HCOLL 抢占等环境故障，避免误判为 NEP 数值错误。HostStaged 仍保留为
+默认正确性路径，但“可替换任意 MPI 实现”不再是产品目标。
+
+## D-009：replicated-full NEP scratch，owned output 唯一
+
+决定：replicated prototype 分片积分、thermo 和输出所有权，但每 rank 暂时执行完整 ordinary
+NEP scratch。不能直接把 `NEP::N1/N2` 设为 owned range。
+
+原因：锁定 NEP force 读取远端中心 `Fp` 和反向 directed partial；没有 phase-level exchange
+时，直接中心分片不完整。启动 coverage collective 证明 owned ranges 恰好覆盖一次，并明确
+记录 NEP kernel 仍为 replicated-full。见 `docs/replicated-mpi.md`。

@@ -8,3 +8,7 @@ target_compile_definitions(dmgmd_model_parser_tests PRIVATE
   DMGMD_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )
 add_test(NAME dmgmd.model_parser COMMAND $<TARGET_FILE:dmgmd_model_parser_tests>)
+
+add_executable(dmgmd_partition_tests partition_tests.cpp)
+target_include_directories(dmgmd_partition_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+add_test(NAME dmgmd.partition COMMAND $<TARGET_FILE:dmgmd_partition_tests>)

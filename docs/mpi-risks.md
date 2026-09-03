@@ -72,6 +72,9 @@
 
 控制：新runtime完全不走 `NEP_MULTIGPU`；启动时根据local rank显式选择一张设备并校验唯一绑定。NEP core构造器接收已选择device/context，不能再次枚举设备决定算法。
 
+当前状态：replicated prototype 已直接构造 ordinary `NEP`，以 shared-communicator local rank
+选择 device，并 Allgather CUDA UUID 检查本节点唯一绑定。启动记录明确写出该策略。
+
 ## 3. 完整风险矩阵
 
 | ID | 等级 | 风险 | 代码证据 | 失败症状 | 验证/缓解 |
@@ -101,7 +104,7 @@
 | R23 | P1 | 默认随机初速不可重现 | `velocity.cu` libc rand/array index | 分区改变初始轨迹 | counter-based global-ID RNG；与GPUMD baseline定义容差 |
 | R24 | P1 | `correct_velocity`需要全局COM/惯量 | `velocity.cu:77-308` | 每rank各自去动量，物理改变 | 多阶段global reductions；PBC下角动量定义做golden |
 | R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | rank0 aggregate或明确不支持；不能所有rankappend |
-| R26 | P2 | GPU-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | CUDA event→MPI ordering；能力探测；host staging fallback |
+| R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + 四类数值自检；同步；HostStaged fallback |
 | R27 | P2 | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | epoch/versioned views；迁移后统一capacity growth和重建 |
 
 ## 4. PBC 与 triclinic 专项
