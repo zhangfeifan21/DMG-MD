@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -273,5 +274,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (EnvironmentError, OSError) as error:
-        print(f"FAIL environment: {error}", file=os.sys.stderr)
+        print(f"FAIL environment: {error}", file=sys.stderr)
         raise SystemExit(1)
