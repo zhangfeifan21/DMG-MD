@@ -156,7 +156,9 @@ sum，输出只 Gatherv owned records。直接设置 NEP `N1/N2` 已由 kernel �
 
 ### G7 — NVE 能量漂移
 
-至少对晶体、液体/无序结构、NEP-ZBL近碰撞三类体系测试多个dt和rank数。
+至少对晶体、液体/无序结构、NEP-ZBL近碰撞三类体系使用 manifest 固定的
+保守 dt 并测试多个 rank 数。当前 suite 不宣称 dt 收敛；替换或转为科学生产体系前，
+另行做 GPUMD-only dt 扫描并重新审查输入哈希。
 
 对 `E(t)=KE(t)+PE(t)` 计算：
 
@@ -174,6 +176,24 @@ rms_fluctuation = RMS(detrended E(t)/N)
 - 至少10组显式初始velocity/微扰，报告中位数和95%区间。
 - 检查migration或neighbor rebuild时刻是否有能量跳变；这类相关尖峰即使总体斜率小也判失败。
 - 1/2/4 ranks的漂移不能随rank数系统恶化。
+
+当前已实现的执行入口为 `tests/long_nve/run_long_nve.py`，与短程 committed golden 分离。
+`release` profile 固定 100000 steps、十组显式初态和 1/2/4/8 ranks；`smoke`/`nightly` 分别为
+100/10000 steps。当前 fixture 是 4096-atom diamond C、12288-atom 确定性扰动水体系和
+5000-atom BaTiO3/ZBL 体系。生成器输出的每个完整 `model.xyz` 均由 manifest 锁定 SHA-256。
+
+实现补充以下约束：
+
+- `E(0)` 来自同一 model 的独立 `time_step 0` 静态作业，不再把第一个动态输出点误当初态；
+- `nightly`/`release` 的前 100 步仍逐帧与 GPUMD 比较；`smoke` 为降低编排延迟只
+  比较前 10 步；独立的长段只比较守恒与构型分布统计；
+- GPUMD 与 DMG-MD 各自产生的长期快照互相交给另一个 executable 做静态回放，在相同坐标上
+  比较逐原子 force/PE/virial；
+- 首个所选 seed 在半程 restart，并按最小→最大、最大→最小 rank 数继续；
+- manifest 预先固定长期 metric 的相对非劣 margin、absolute floor 和元素对距离直方图门槛；
+  candidate 失败后不得原地调宽；
+- 当前水与 ZBL fixture 是数值压力输入，不宣称是生产科学用的已平衡系综。若替换为预平衡
+  样本，先用 GPUMD-only dt 扫描并审查全部输入哈希。
 
 ### G8 — 输出格式与兼容错误
 
@@ -277,7 +297,10 @@ manifest.json           # commit/build/GPU/hash/rank/decomposition
 comparison.json         # 每字段误差与判定
 ```
 
-CI分层：parser/format CPU tests每次运行；单GPU静态/短MD在GPU CI；2-rank同节点每个合并请求；多节点、长NVE、sanitizer和rank矩阵定期运行。CUDA buffer/halo改动应增加compute-sanitizer和MPI错误注入case。
+CI分层：parser/format 和 `dmgmd.long_nve_analysis` CPU tests 每次运行；单GPU静态/短MD在 GPU
+CI；2-rank同节点每个合并请求；`long_nve` smoke 用于完整编排验证，nightly 为 10000 steps，
+release/阶段门槛才运行十初态 100000-step 及 1/2/4/8 rank 矩阵。多节点、sanitizer和MPI错误
+注入仍定期运行。CUDA buffer/halo改动应增加compute-sanitizer和MPI错误注入case。
 
 ## 7. 实现切口的最小验收集
 

@@ -105,8 +105,9 @@ sampler。
   species 和 0.5 Å MIC 距离；跨边界 ZBL force 符号、能量和 virial 由静态逐原子结果锁定。
 
 没有把长时间轨迹逐原子相等列为通过条件。本 harness 只逐原子比较 6 步以内的短轨迹。
-未来若增加长 NVE，必须只比较每原子总能量 offset、max excursion、drift slope、detrended
-RMS 及其多初态分布，并单独检查 neighbor rebuild/migration 时刻的能量跳变。
+长 NVE 已作为独立 `tests/long_nve/` suite 实现，不改变本目录的短程 committed goldens。
+它比较真正 `E(0)` 的每原子总能量 offset、max excursion、drift slope、detrended RMS 及
+十初态分布，并通过双向静态构型回放检查长期访问到的坐标。长期轨迹仍不要求逐步重合。
 
 ## 5. 文件合同、单位和数值容差
 

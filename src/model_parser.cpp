@@ -1,8 +1,11 @@
 #include "dmgmd/model.hpp"
 
 #include "dmgmd/input_error.hpp"
-#include "utilities/common.cuh"
-#include "utilities/error.cuh"
+// Physical constants (TIME_UNIT_CONVERSION) come from the DMG-MD-owned
+// replication of GPUMD's utilities/common.cuh in src/gpumd_compat; the
+// whitespace tokenizer below is the replicated get_tokens rule.
+#include "gpumd_compat/common.cuh"
+#include "gpumd_compat/error.cuh"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +21,8 @@
 
 namespace dmgmd {
 namespace {
+
+using gpumd_compat::get_tokens;
 
 using MassEntry = std::pair<const char*, double>;
 
@@ -78,7 +83,7 @@ struct Property {
 
 std::vector<std::string> whitespace_tokens(const std::string& line)
 {
-  return ::get_tokens(line);
+  return get_tokens(line);
 }
 
 int parse_int(
@@ -393,7 +398,7 @@ Model parse_model_file(const std::string& filename, const PotentialMetadata& pot
         atoms.velocity[axis * local + atom] =
             parse_real(tokens[velocity_property->offset + axis], filename, atom + 3, line,
                        "velocity") *
-            TIME_UNIT_CONVERSION;
+            gpumd_compat::TIME_UNIT_CONVERSION;
       }
     }
     if (group_property != nullptr) {

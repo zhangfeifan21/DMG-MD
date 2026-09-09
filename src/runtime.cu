@@ -1,9 +1,13 @@
 #include "dmgmd/runtime.hpp"
 
-#include "force/nep.cuh"
-#include "model/box.cuh"
-#include "utilities/common.cuh"
-#include "utilities/gpu_vector.cuh"
+// The NEP force path is the DMG-MD-owned replication of the minimal GPUMD
+// subset in src/gpumd_compat (copied from the pinned reference commit
+// 9d23496e41319b9e2af5221a7df6285387401d1e, numerics unchanged).  DMG-MD
+// must never include or link ../gpumd-reference directly.
+#include "gpumd_compat/box.cuh"
+#include "gpumd_compat/common.cuh"
+#include "gpumd_compat/gpu_vector.cuh"
+#include "gpumd_compat/nep.cuh"
 
 #include <cuda_runtime.h>
 
@@ -29,6 +33,14 @@
 
 namespace dmgmd {
 namespace {
+
+using gpumd_compat::Box;
+using gpumd_compat::GPU_Vector;
+using gpumd_compat::NEP;
+using gpumd_compat::Potential;
+// K_B is a #define in gpumd_compat/common.cuh and needs no using-declaration.
+using gpumd_compat::PRESSURE_UNIT_CONVERSION;
+using gpumd_compat::TIME_UNIT_CONVERSION;
 
 constexpr int kThreads = 128;
 constexpr int kThermoThreads = 1024;

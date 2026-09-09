@@ -107,60 +107,32 @@ message(STATUS
   "DMG-MD MPI stack: Open MPI='${DMGMD_OMPI_HOME}', UCX='${DMGMD_UCX_HOME}'"
 )
 
-set(
-  GPUMD_SOURCE_DIR
-  "${PROJECT_SOURCE_DIR}/../gpumd-reference"
-  CACHE PATH
-  "Path to the pinned GPUMD source tree used by the compatibility core"
-)
+# DMG-MD replicates the minimal GPUMD subset it needs inside
+# src/gpumd_compat (tokenizer, Box math, GPU_Vector, neighbor builder,
+# Potential base and the NEP/NEP-ZBL CUDA kernels).  The build must never
+# compile sources from or link against ../gpumd-reference; that checkout is
+# only a read-only reference for audits and golden-baseline generation.
+# GPUMD's tokenizer/error implementation is host-only despite its .cu
+# suffix.  Build it as C++ so the parser unit tests stay CPU-only (same
+# treatment the reference build applies to utilities/error.cu).
+set_source_files_properties(src/gpumd_compat/error.cu PROPERTIES LANGUAGE CXX)
 
-if(NOT EXISTS "${GPUMD_SOURCE_DIR}/src/force/nep.cu")
-  message(FATAL_ERROR
-    "GPUMD_SOURCE_DIR does not point to a GPUMD source tree: "
-    "${GPUMD_SOURCE_DIR}"
-  )
-endif()
-
-set(DMGMD_PINNED_GPUMD_COMMIT "9d23496e41319b9e2af5221a7df6285387401d1e")
-execute_process(
-  COMMAND git -C "${GPUMD_SOURCE_DIR}" rev-parse HEAD
-  RESULT_VARIABLE GPUMD_GIT_RESULT
-  OUTPUT_VARIABLE GPUMD_ACTUAL_COMMIT
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET
+add_library(gpumd_compat STATIC
+  src/gpumd_compat/box.cu
+  src/gpumd_compat/error.cu
+  src/gpumd_compat/neighbor.cu
+  src/gpumd_compat/nep.cu
+  src/gpumd_compat/potential.cu
 )
-if(NOT GPUMD_GIT_RESULT EQUAL 0 OR
-   NOT GPUMD_ACTUAL_COMMIT STREQUAL DMGMD_PINNED_GPUMD_COMMIT)
-  message(FATAL_ERROR
-    "DMG-MD requires GPUMD commit ${DMGMD_PINNED_GPUMD_COMMIT}; "
-    "${GPUMD_SOURCE_DIR} is at '${GPUMD_ACTUAL_COMMIT}'"
-  )
-endif()
-
-# GPUMD's tokenizer implementation is host-only despite its .cu suffix. Build
-# it as C++ so parser unit tests remain CPU-only.
-set(GPUMD_ERROR_SOURCE "${GPUMD_SOURCE_DIR}/src/utilities/error.cu")
-set_source_files_properties("${GPUMD_ERROR_SOURCE}" PROPERTIES LANGUAGE CXX)
-add_library(gpumd_text_core STATIC "${GPUMD_ERROR_SOURCE}")
-target_include_directories(gpumd_text_core PUBLIC "${GPUMD_SOURCE_DIR}/src")
-target_link_libraries(gpumd_text_core PUBLIC CUDA::cudart)
-
-# Compile the validated GPUMD implementation directly from its pinned source
-# tree.  DMG-MD owns the runtime orchestration but does not carry a fork of the
-# NEP parameter reader, neighbor builder, or CUDA math kernels.
-add_library(gpumd_nep_core STATIC
-  "${GPUMD_SOURCE_DIR}/src/force/dftd3.cu"
-  "${GPUMD_SOURCE_DIR}/src/force/neighbor.cu"
-  "${GPUMD_SOURCE_DIR}/src/force/nep.cu"
-  "${GPUMD_SOURCE_DIR}/src/force/potential.cu"
-  "${GPUMD_SOURCE_DIR}/src/model/box.cu"
+target_include_directories(gpumd_compat PUBLIC
+  ${PROJECT_SOURCE_DIR}/src
 )
-target_include_directories(gpumd_nep_core PUBLIC
-  "${GPUMD_SOURCE_DIR}/src"
-)
-target_link_libraries(gpumd_nep_core PUBLIC gpumd_text_core CUDA::cudart)
-set_target_properties(gpumd_nep_core PROPERTIES
-  CUDA_SEPARABLE_COMPILATION ON
+target_link_libraries(gpumd_compat PUBLIC CUDA::cudart)
+# Whole-program CUDA compilation (like the reference GPUMD build): the static
+# archive is then linkable from plain C++ test executables without a separate
+# device-link step.
+set_target_properties(gpumd_compat PROPERTIES
+  CUDA_SEPARABLE_COMPILATION OFF
 )
 
 add_library(dmgmd_input STATIC
@@ -169,9 +141,9 @@ add_library(dmgmd_input STATIC
 )
 target_include_directories(dmgmd_input PUBLIC
   ${PROJECT_SOURCE_DIR}/include
-  "${GPUMD_SOURCE_DIR}/src"
+  ${PROJECT_SOURCE_DIR}/src
 )
-target_link_libraries(dmgmd_input PUBLIC gpumd_text_core)
+target_link_libraries(dmgmd_input PUBLIC gpumd_compat)
 
 add_library(dmgmd_runtime STATIC
   src/mpi_runtime.cu
@@ -179,11 +151,11 @@ add_library(dmgmd_runtime STATIC
 )
 target_include_directories(dmgmd_runtime PUBLIC
   ${PROJECT_SOURCE_DIR}/include
-  "${GPUMD_SOURCE_DIR}/src"
+  ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(dmgmd_runtime PUBLIC
   dmgmd_input
-  gpumd_nep_core
+  gpumd_compat
   CUDA::cudart
   MPI::MPI_CXX
 )

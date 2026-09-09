@@ -43,19 +43,32 @@
 - `docs/golden-test-plan.md`
 - `docs/open-questions.md`
 
-## GPUMD 参考仓库
+## GPUMD 复现边界（强制）
 
-GPUMD 位于：
+DMG-MD 曾经直接编译 `../gpumd-reference` 内的源文件（tokenizer、Box、neighbor、
+Potential、NEP kernels）。该模式已于 2026-09-09 废除。当前规则：
 
-    ../gpumd-reference
-
-该目录是只读参考，禁止修改。审计结论必须记录参考 commit，并引用具体文件、类、函数或 CUDA kernel；使用 `rg` 跟踪实际调用和符号，不能只根据文件名推测行为。
-
-未经维护者明确许可，不把 GPUMD 源文件整体复制到本仓库。允许研究其算法、数据依赖、文件格式、数值结果和测试基线。
+- **禁止直接调用 GPUMD 代码**。DMG-MD 的任何源文件不得 `#include` 指向
+  `../gpumd-reference` 的路径，CMake 不得编译或链接该目录中的任何文件；
+  运行时也不得以 dlopen、子进程等方式调用 GPUMD 可执行文件或库。
+- 所需的 GPUMD 最小子集**只能在 newmd 仓库内复现**：位于
+  `src/gpumd_compat/`（命名空间 `gpumd_compat`），复制自锁定 commit
+  `9d23496e41319b9e2af5221a7df6285387401d1e`，文件头注明 Origin file 与裁剪说明。
+- `src/gpumd_compat/` 的数值（浮点表达式、内存布局、kernel launch 参数、累加顺序）
+  与参考实现保持一致；对其任何修改都必须连同 golden 基线（`tests/baseline`、
+  `tests/long_nve`）一起重新验证，不得"顺手清理"。
+- 新增需要 GPUMD 已验证实现的代码时，先在 `src/gpumd_compat/` 中复现并加注释
+  （用途 + GPUMD 对应文件/符号），再接入 DMG-MD runtime；不得回到直接引用
+  `../gpumd-reference` 的做法。
+- `../gpumd-reference` 只作为只读对照与 golden 基线生成源（`run_baselines.py
+  --reference` / `--update-goldens`），不参与 DMG-MD 构建与运行。审计结论仍须记录
+  参考文件、类、函数或 CUDA kernel；使用 `rg` 跟踪实际调用和符号。
 
 ## 不可破坏的产品约束
 
-- 不重新实现 NEP 数学公式。优先复用或小范围重构 GPUMD 已验证的 CUDA 内核。
+- 不重新实现 NEP 数学公式。NEP 数学子集由 `src/gpumd_compat/` 的复现内核提供
+  （复制自 GPUMD 锁定 commit），在其上只做小范围参数化；重写公式前必须先建立
+  golden test 并获得维护者确认。
 - 一 MPI rank 只控制一张 GPU。当前 replicated-data 原型允许每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；进入 domain decomposition 后才收敛为 owned、ghost 和明确通信工作区。
 - owned atoms 与 ghost atoms 必须有不同的生命周期和写权限；ghost 不得被积分、重复计入 thermo 或直接输出。
 - 必须有跨迁移保持稳定的全局原子 ID；本地数组下标不能承担持久身份。
@@ -87,6 +100,11 @@ GPUMD 位于：
   `MPIX_*`，不再维护 MPICH、MVAPICH 或其他 MPI 实现兼容性；
 - Python 只用于测试、验证和分析脚本，核心 runtime 不依赖 Python；
 - GPU 常驻数据只在初始化、通信、输出或验证需要时传回主机。
+- Node.js、npm、npx 由当前用户通过用户级 fnm 安装和管理，不属于项目本地依赖；fnm 根目录为
+  `~/.local/share/fnm`。检查 Node.js 环境时，必须先确认 fnm 及其 shell 初始化；在未加载用户
+  `.bashrc` 的非交互 shell 中 `command -v node` 为空，不得据此判断 Node.js 未安装。应优先检查
+  `fnm --version`、`fnm list`，并在加载 fnm 环境后记录 `node --version`、`npm --version` 和
+  `npx --version`。
 
 ## 构建与测试
 

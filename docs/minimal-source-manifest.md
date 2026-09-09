@@ -170,5 +170,5 @@ distributed_runtime
 | `src/model_parser.cpp` | model.xyz schema、单位、默认质量和 type 映射兼容层 |
 | `src/runtime.cu` | local-stride device storage、single-rank NEP adapter、owned-only VV/thermo 和兼容输出 |
 | `src/dmgmd_main.cpp` | `dmg-md` 入口；先完整 parse/validate，再初始化 GPU/runtime |
-| GPUMD pinned sources | CMake 直接编译 NEP loader/kernel、neighbor、Potential、Box、tokenizer；不复制 fork |
+| GPUMD replicated core | 2026-09-09 起在 `src/gpumd_compat/` 内复现（commit `9d23496e`）：tokenizer、Box、GPU_Vector、neighbor、Potential、NEP/NEP-ZBL kernels；构建不再编译或链接 `../gpumd-reference` |
 | 旧 `include/newmd`、PBC/CSR/DeviceBuffer 尝试 | 已删除；它们的单一 count 和独立 Box/neighbor 实现不再参与架构 |

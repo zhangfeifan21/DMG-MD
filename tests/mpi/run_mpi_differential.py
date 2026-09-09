@@ -149,16 +149,27 @@ def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> N
     if previous_end != global_count:
         raise baseline.BaselineError(f"{stage_dir}: center ranges do not cover global_count")
 
+    accounting = [
+        line for line in stdout.splitlines() if line.startswith("DMGMD_COMM accounting=")
+    ]
+    if len(accounting) != 1:
+        raise baseline.BaselineError(f"{stage_dir}: missing unique communication accounting record")
+    accounting_fields = key_values(accounting[0])
+    log_interval = int(accounting_fields.get("log_interval", "1"))
+    if log_interval <= 0:
+        raise baseline.BaselineError(f"{stage_dir}: invalid communication log interval")
+
     run_steps = expected_steps(stage_dir / "run.in")
+    expected_log_steps = list(range(log_interval, run_steps + 1, log_interval))
     communication = [line for line in stdout.splitlines() if line.startswith("DMGMD_COMM step=")]
-    if len(communication) != run_steps:
+    if len(communication) != len(expected_log_steps):
         raise baseline.BaselineError(
             f"{stage_dir}: found {len(communication)} step communication records, "
-            f"expected {run_steps}"
+            f"expected {len(expected_log_steps)} for interval {log_interval}"
         )
-    for index, line in enumerate(communication, start=1):
+    for expected_step, line in zip(expected_log_steps, communication):
         fields = key_values(line)
-        if int(fields["step"]) != index or fields["backend"] != backend_name:
+        if int(fields["step"]) != expected_step or fields["backend"] != backend_name:
             raise baseline.BaselineError(f"{stage_dir}: malformed communication step record")
         for key in (
             "collective_calls",

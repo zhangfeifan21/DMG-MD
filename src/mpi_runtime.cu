@@ -78,6 +78,25 @@ std::string required_environment(const char* name)
   return value;
 }
 
+std::uint64_t positive_environment_interval(const char* name)
+{
+  const char* text = std::getenv(name);
+  if (text == nullptr || text[0] == '\0') return 1;
+  try {
+    for (const unsigned char value : std::string(text)) {
+      if (!std::isdigit(value)) throw std::invalid_argument("not a positive integer");
+    }
+    std::size_t consumed = 0;
+    const unsigned long long value = std::stoull(text, &consumed);
+    if (consumed != std::strlen(text) || value == 0) {
+      throw std::invalid_argument("not a positive integer");
+    }
+    return static_cast<std::uint64_t>(value);
+  } catch (const std::exception&) {
+    throw std::runtime_error(std::string(name) + " must be a positive integer");
+  }
+}
+
 template <typename T>
 class DeviceBuffer {
  public:
@@ -210,6 +229,21 @@ class MpiRuntime::Impl {
                 "MPI_Comm_split_type(MPI_COMM_TYPE_SHARED)");
       check_mpi(MPI_Comm_rank(local_comm, &local_rank), "local MPI_Comm_rank");
       check_mpi(MPI_Comm_size(local_comm, &local_size), "local MPI_Comm_size");
+
+      communication_log_interval =
+          positive_environment_interval("DMGMD_COMM_LOG_INTERVAL");
+      unsigned long long local_interval = communication_log_interval;
+      unsigned long long minimum_interval = 0;
+      unsigned long long maximum_interval = 0;
+      check_mpi(MPI_Allreduce(&local_interval, &minimum_interval, 1,
+                              MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD),
+                "validate minimum communication log interval");
+      check_mpi(MPI_Allreduce(&local_interval, &maximum_interval, 1,
+                              MPI_UNSIGNED_LONG_LONG, MPI_MAX, MPI_COMM_WORLD),
+                "validate maximum communication log interval");
+      if (minimum_interval != maximum_interval) {
+        throw std::runtime_error("DMGMD_COMM_LOG_INTERVAL differs between MPI ranks");
+      }
 
       int hostname_length = 0;
       std::array<char, MPI_MAX_PROCESSOR_NAME> hostname_buffer{};
@@ -502,7 +536,8 @@ class MpiRuntime::Impl {
         std::cout << '\n';
       }
       std::cout << "DMGMD_COMM accounting=collective-buffer-bytes "
-                   "physical-wire-bytes=openmpi-ucx-algorithm-dependent\n";
+                   "physical-wire-bytes=openmpi-ucx-algorithm-dependent"
+                << " log_interval=" << communication_log_interval << '\n';
       std::cout.flush();
     }
   }
@@ -542,6 +577,7 @@ class MpiRuntime::Impl {
   std::string cuda_aware_self_test_status = "not-run";
   bool cuda_aware_fallback = false;
   bool device_initialized = false;
+  std::uint64_t communication_log_interval = 1;
   DeviceBuffer<double> device_send;
   DeviceBuffer<double> device_receive;
   PinnedBuffer<double> host_send;
@@ -893,6 +929,7 @@ void MpiRuntime::log_step_communication(
     const CommunicationVolume& volume) const
 {
   if (!is_root()) return;
+  if (step % impl_->communication_log_interval != 0) return;
   std::cout << "DMGMD_COMM step=" << step << " backend=" << backend_name()
             << " collective_calls=" << volume.collective_calls
             << " mpi_input_bytes_global=" << volume.mpi_input_bytes_global

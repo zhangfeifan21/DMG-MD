@@ -1,6 +1,6 @@
 # DMG-MD 实现进度
 
-更新日期：2026-09-03。
+更新日期：2026-09-09。
 
 ## 当前结论
 
@@ -11,8 +11,8 @@ Open MPI+UCX 是固定运行栈，默认通信后端仍为 HostStaged，CudaAwar
 
 ## 已完成
 
-- CMake 生成 `dmg-md`，校验 GPUMD reference commit 必须是
-  `9d23496e41319b9e2af5221a7df6285387401d1e`，并拒绝未由 `../env/md-mpi.sh` 选择的 MPI。
+- CMake 生成 `dmg-md`，拒绝未由 `../env/md-mpi.sh` 选择的 MPI。构建不依赖
+  `../gpumd-reference`：GPUMD 最小子集已在 `src/gpumd_compat/` 复现（见下）。
 - runtime 固定 Open MPI+UCX；使用 shared communicator 的 local rank 选择 CUDA device，并用
   UUID 检查同一节点没有两个 rank 占用同一 GPU。
 - 默认 HostStaged 使用 pinned host send/receive buffer。CudaAware 先要求
@@ -26,9 +26,11 @@ Open MPI+UCX 是固定运行栈，默认通信后端仍为 HostStaged，CudaAwar
   rank-0 创建的临时目录并指向 `/dev/null`。
 - 启动 stdout 记录 Open MPI implementation/version、Open MPI+UCX stack、hostname、
   world/local rank、CUDA device/UUID、capability、自检结果、backend 和 center coverage proof；
-  每步记录 collective buffer 通信量。
-- 从只读 GPUMD 源树直接编译 tokenizer、Box、NEP loader、neighbor、NEP/NEP-ZBL CUDA
-  kernels 和 many-body Potential 核心；newmd 中没有第二份 NEP 数学或参数布局。
+  默认每步记录 collective buffer 通信量，长测可按固定步数间隔采样。
+- GPUMD 最小子集（tokenizer、Box、GPU_Vector、neighbor、Potential、NEP loader、
+  NEP/NEP-ZBL CUDA kernels）在 `src/gpumd_compat/` 复现（`namespace gpumd_compat`，
+  来源 commit `9d23496e`，文件头含 Origin file 与裁剪说明）；newmd 中没有第二份 NEP
+  数学或参数布局，构建产物也不含任何 gpumd-reference 编译输入。
 - `model.xyz` parser 支持 PBC、9 分量 Lattice、扩展 Properties、未知 property 宽度、
   species/type、默认/显式 mass、charge、velocity、group，并保持 GPUMD 单位转换。
 - `run.in` 先解析为带源文件/行号的 typed command IR，再由 runtime 顺序执行。未知或未支持
@@ -39,6 +41,11 @@ Open MPI+UCX 是固定运行栈，默认通信后端仍为 HostStaged，CudaAwar
 - 完成 velocity-Verlet NVE、Berendsen NVT、owned-only thermo、`dump_thermo`、
   `dump_xyz` 和 `dump_restart`。输出按 `global_id` 排序，保持 GPUMD 文件名、header、列序、
   precision、单位、append/overwrite 和多段 run 行为。
+- 新增长程正确性 suite：4096-atom C、12288-atom 水和 5000-atom BaTiO3/ZBL，十组哈希锁定
+  的显式初态，100/10000/100000-step profiles，真实 `E(0)` 的长期守恒指标、短程逐帧比较、
+  GPUMD↔DMG-MD 双向静态构型回放和跨 rank restart。该 suite 不采集性能数据。
+- `DMGMD_COMM_LOG_INTERVAL` 可为长测设置正整数采样周期；默认仍为 1，原 MPI differential
+  继续检查每一步通信记录。
 
 ## 规范环境验证
 
@@ -73,12 +80,13 @@ source ../env/md-mpi.sh
 cmake -S . -B build-openmpi-ucx -DCMAKE_BUILD_TYPE=Release
 cmake --build build-openmpi-ucx -j 4
 ctest --test-dir build-openmpi-ucx --output-on-failure
-3/3 tests passed
+4/4 tests passed
 ```
 
 CMake 实际选择 `/data/home/zhangyifei/software/openmpi-cuda` 和
 `/data/home/zhangyifei/software/ucx-cuda`，并成功从 CUDA translation unit 编译 Open MPI
-`mpi-ext.h`/`MPIX_Query_cuda_support()`。
+`mpi-ext.h`/`MPIX_Query_cuda_support()`。第四项为 `dmgmd.long_nve_analysis`，在 CPU 上检查
+30 个生成模型哈希、原子数、显式速度总动量、回放转换、真实初始能量指标和统计门槛。
 
 ## Golden differential 结果
 
@@ -116,6 +124,31 @@ PASS: replicated-data MPI differential matrix ranks=[1, 2, 4] backends=['HostSta
 thermo header/列/segment/row 结构、rank-0-only 文件集合、启动记录、GPU UUID、center coverage
 proof、逐步通信量，以及 cross-rank/cross-backend direct differential。
 
+## 长程正确性 suite 状态
+
+实现入口和完整合同为 `tests/long_nve/run_long_nve.py`、`tests/long_nve/manifest.json` 与
+`tests/long_nve/README.md`。2026-09-04 在相同 Open MPI+UCX/RTX 4090 环境完成以下 smoke：
+
+```text
+PASS long-NVE profile=smoke cases=['carbon_crystal'] seeds=[0] ranks=[1, 2] backends=['HostStaged']
+PASS long-NVE profile=smoke cases=['dense_water', 'batio3_zbl'] seeds=[0] ranks=[1] backends=['HostStaged']
+PASS long-NVE profile=smoke cases=['carbon_crystal'] seeds=[0] ranks=[1, 2] backends=['CudaAware']
+```
+
+这些命令都先通过实际 device collective 环境预检。三个 fixture 的静态、短程、100-step
+长期指标、双向构型回放和 50+50-step restart 均通过；C case 同时完成 1↔2 rank restart。
+三体系合并观察到的逐原子 energy/force/virial 最大差均为 0，位置最大差
+`7.105e-15 Å`，velocity 最大差 `2.776e-17 Å/fs`。
+
+10 万步的代表性 release 切片也已实际通过：4096-atom C、seed 0、1 rank、
+HostStaged，仅运行 `long` section。候选程序与 GPUMD 的能量统计相同：每原子最大
+能量偏移 `3.091e-6 eV`、去趋势 RMS `1.131e-7 eV`、漂移斜率
+`7.002e-13 eV/(atom fs)`，最终元素对距离直方图 L1 差为 0。
+
+10000-step nightly 和完整的十初态、三体系、1/2/4/8-rank、100000-step release 矩阵尚未
+执行，因此当前不宣称完整长期门槛已通过。当前也没有性能基准；
+replicated-full NEP 阶段禁止从任何正确性作业的 wall time 推导加速或 scaling 结论。
+
 4-rank CudaAware 静态 case 的机器可读证据格式为：
 
 ```text
@@ -128,3 +161,30 @@ DMGMD_COMM step=1 backend=CudaAware collective_calls=8 mpi_input_bytes_global=18
 本阶段继续禁止 ghost、halo 和原子迁移。若下一阶段实现真正 NEP 中心分片，必须先提供 `Fp`
 和 directed partial 的 phase-level exchange，并在相同 differential matrix 下证明分片完整；
 不得直接把 `NEP::N1/N2` 改为 owned range。
+
+## 2026-09-09：GPUMD 依赖改为仓库内复现
+
+- 新增 `src/gpumd_compat/`（15 个文件）：从锁定 commit `9d23496e` 复制并复现
+  `utilities/common.cuh`、`gpu_macro.cuh`、`error.cu/.cuh`、`gpu_vector.cuh`、
+  `model/box.cu/.cuh`、`force/neighbor.cu/.cuh`、`force/potential.cu/.cuh`、
+  `utilities/nep_utilities.cuh`、`force/nep.cu/.cuh`、`force/nep_small_box.cuh`。
+  浮点表达式、布局、launch 参数与累加顺序未改动。
+- 裁剪（每处有 `NOTE(dmg-md)` 注释）：DFTD3（run.in `dftd3` 关键字本就被拒）、
+  temperature/active-learning kernel 重载（`compute(temperature)` 家族）、ILP/SW/stream
+  邻居变体、双精度 many-body gather、`Group`/`my_fopen` 等不可达符号。
+- `CMakeLists.txt`：删除 `GPUMD_SOURCE_DIR`/commit 校验与 `gpumd_text_core`/
+  `gpumd_nep_core`，改为静态库 `gpumd_compat`；`error.cu` 仍按 C++ 编译（parser 单测
+  CPU-only），库用整程序 CUDA 编译与参考 GPUMD 一致。
+- newmd 源码 include 改为 `gpumd_compat/*.cuh`：`runtime.cu`（Box/GPU_Vector/NEP）、
+  `model_parser.cpp`、`run_parser.cpp`（get_tokens、单位常量）。
+- 验证（RTX 4090 x4，Open MPI 5.0.10 + UCX 1.22.0）：
+  - `ctest` 4/4 通过；
+  - `tests/baseline/run_baselines.py --candidate` 4/4 案例通过，force/energy/virial
+    最大相对误差 ~2e-16（浮点噪声级），覆盖 small-box（8 A 碳盒）、large-box
+    （24 A 碳/水/BaTiO3-ZBL）两条内核路径与 ZBL；
+  - `tests/mpi/run_mpi_differential.py --devices 0,1,2,3`：ranks 1/2/4 x
+    HostStaged/CudaAware 六组 NVE 漂移逐位一致；
+  - `tests/long_nve/run_long_nve.py --profile smoke` 通过；
+  - `build/compile_commands.json` 不含任何 gpumd-reference 路径。
+- 规则更新：`AGENTS.md` 明确禁止 include/编译/链接/运行 gpumd-reference 代码；
+  新需求一律在 `src/gpumd_compat/` 复现并加注释（决策 D-001 修订、新增 D-010）。

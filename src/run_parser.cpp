@@ -1,5 +1,9 @@
 #include "dmgmd/run_ir.hpp"
-#include "utilities/error.cuh"
+
+// Whitespace tokenization uses the DMG-MD-owned replication of GPUMD's
+// get_tokens() (src/gpumd_compat/error.cuh) so run.in token rules stay
+// bit-compatible with the pinned GPUMD reference.
+#include "gpumd_compat/error.cuh"
 
 #include <cerrno>
 #include <cmath>
@@ -12,10 +16,12 @@
 namespace dmgmd {
 namespace {
 
+using gpumd_compat::get_tokens;
+
 std::vector<std::string> tokenize_run_line(const std::string& line)
 {
   std::vector<std::string> tokens;
-  for (std::string token : ::get_tokens(line)) {
+  for (std::string token : get_tokens(line)) {
     if (!token.empty() && token.front() == '#') {
       break;
     }

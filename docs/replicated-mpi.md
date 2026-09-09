@@ -30,7 +30,7 @@ non-owned NEP output 只是 scratch，不参加积分、thermo 或输出。它�
 它不证明把 GPUMD `NEP::N1/N2` 直接设为 owned 区间后数学仍完整。代码证据表明该做法当前
 不完整：
 
-- radial force 读取中心邻居的 `Fp[n2]`（锁定 GPUMD `src/force/nep.cu:727-728`）；
+- radial force 读取中心邻居的 `Fp[n2]`（锁定 GPUMD `src/force/nep.cu:727-728`，复现于 `src/gpumd_compat/nep.cu`）；
 - many-body force 读取反向 directed partial `f12(n2,n1)`
   （`src/force/potential.cu:209-250`）；
 - 这些分片外 intermediate 不会由仅覆盖 `[N1,N2)` 的 descriptor/partial kernels 生成。
@@ -69,8 +69,11 @@ HostStaged。因此 capability query 只是安全前置条件，不会替代数�
 
 ## 每步通信量
 
-rank 0 每步输出一行 `DMGMD_COMM`。记录的是 collective API 的全局 input/output buffer 字节，
-而不是 MPI 私有算法的物理 wire traffic。
+rank 0 默认每步输出一行 `DMGMD_COMM`。设置正整数 `DMGMD_COMM_LOG_INTERVAL=K` 后只记录
+step 为 K 的倍数的采样行；每一行仍是该单步的量，不是 K 步聚合值。所有 rank 必须看到相同
+设置，否则启动失败。短 MPI differential 使用默认 K=1；长 NVE suite 使用 K=10 或 100
+控制 100000-step stdout 规模。记录的是 collective API 的全局 input/output buffer 字节，而
+不是 MPI 私有算法的物理 wire traffic。
 
 令 `P=world_size`、`N=global_count`。没有 adaptive timestep 和 dump snapshot 的普通一步：
 
@@ -113,3 +116,8 @@ capability、UCX `cuda_copy/cuda_ipc`、GPU 唯一绑定及实际 device-pointer
 - 不同 rank 数 thermo header、列数、segment/row 结构；
 - 每 rank 启动记录、唯一 GPU UUID、owned coverage proof 和每步通信记录；
 - 默认对 HostStaged 和 CudaAware 运行同一矩阵并做 cross-backend differential。
+
+`tests/long_nve/run_long_nve.py` 在此短矩阵之外提供 4096/12288/5000 原子、十显式初态和
+100000-step release 正确性验收，包括真实 `E(0)`、长期守恒统计、GPUMD↔DMG-MD 双向静态
+构型回放及跨 rank restart。它不测 wall time、吞吐、speedup 或 scaling；replicated-full NEP
+阶段不发布多卡性能结论。

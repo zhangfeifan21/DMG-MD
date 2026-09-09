@@ -3,10 +3,11 @@
 DMG-MD 是面向多节点、多 GPU 经典分子动力学的 runtime。当前仓库包含与锁定 GPUMD
 reference 兼容的单 rank 路径，以及一 MPI rank 一张 GPU 的 replicated-data prototype。
 
-当前版本直接读取 GPUMD 格式的 `model.xyz`、NEP/NEP-ZBL potential 和 `run.in`。它复用
-GPUMD 的 tokenizer、Box、NEP loader、邻居构建及 CUDA kernels，没有维护第二份 NEP 数学。
-MPI 原型在每个 rank 保留完整坐标/类型，只分片积分、thermo 和 authoritative per-atom
-output；空间域分解、ghost、halo、原子迁移尚未实现。
+当前版本直接读取 GPUMD 格式的 `model.xyz`、NEP/NEP-ZBL potential 和 `run.in`。GPUMD
+的最小数值核心已在 `src/gpumd_compat/` 中复现（tokenizer、Box、GPU_Vector、邻居构建、
+NEP loader 及 CUDA kernels，复制自锁定 commit `9d23496e`），构建与运行均不依赖
+`../gpumd-reference`。MPI 原型在每个 rank 保留完整坐标/类型，只分片积分、thermo 和
+authoritative per-atom output；空间域分解、ghost、halo、原子迁移尚未实现。
 
 ## 当前支持范围
 
@@ -26,15 +27,15 @@ output；空间域分解、ghost、halo、原子迁移尚未实现。
 - 支持 C++17 的 host compiler；
 - CUDA Toolkit 和支持的 NVIDIA GPU；
 - Open MPI+UCX（含 CUDA support、UCX PML、`cuda_copy` 和 `cuda_ipc`）；项目使用 Open MPI
-  `mpi-ext.h`/`MPIX_Query_cuda_support()`，不支持替换为 MPICH、MVAPICH 或其他 MPI；
-- 位于 `../gpumd-reference` 的只读 GPUMD checkout，commit 必须为
-  `9d23496e41319b9e2af5221a7df6285387401d1e`。
+  `mpi-ext.h`/`MPIX_Query_cuda_support()`，不支持替换为 MPICH、MVAPICH 或其他 MPI。
 
-如 reference 位于其他目录，可配置 `-DGPUMD_SOURCE_DIR=/absolute/path/to/gpumd`；该 checkout
-仍必须处于上述锁定 commit。
+构建与运行不依赖 `../gpumd-reference`：DMG-MD 需要的 GPUMD 最小子集（tokenizer、Box、
+GPU_Vector、邻居构建、Potential、NEP/NEP-ZBL CUDA kernels）已在 `src/gpumd_compat/`
+中复现，锁定来源 commit `9d23496e41319b9e2af5221a7df6285387401d1e`。该参考 checkout 仅
+用于生成和比对 golden 基线（见下文 Golden differential），并保持只读。
 
-仓库与 `gpumd-reference` 的同级 `env/md-mpi.sh` 是唯一受支持的工具链入口。CMake 会拒绝
-未从该脚本选择的 MPI，避免把旧 system MPI/UCX 混入构建。
+仓库的上级 `env/md-mpi.sh` 是唯一受支持的工具链入口。CMake 会拒绝未从该脚本选择的
+MPI，避免把旧 system MPI/UCX 混入构建。
 
 ## 构建与测试
 
@@ -73,8 +74,9 @@ passed，生产 collective 才能接收 device pointer；否则回退 `HostStage
 
 每个 rank 启动时记录 Open MPI library version、Open MPI+UCX stack、hostname、world/local
 rank、CUDA ordinal/UUID、capability、自检结果、实际 backend 和 ordinary single-device NEP
-策略。每步的 collective buffer 字节数写到 rank 0 stdout；物理链路字节数取决于 collective
-算法，不伪装成精确值。
+策略。默认每步的 collective buffer 字节数写到 rank 0 stdout；长期正确性测试可设置正整数
+`DMGMD_COMM_LOG_INTERVAL` 做低频采样。物理链路字节数取决于 collective 算法，不伪装成
+精确值。
 
 在同时包含 `run.in` 和 `model.xyz` 的工作目录执行：
 
@@ -106,6 +108,18 @@ python3 tests/mpi/run_mpi_differential.py \
   --candidate ./build/dmg-md --devices 0,1,2,3
 ```
 
+100/10000/100000-step 长程正确性 suite 独立运行，不把长轨迹混入短程 committed golden，也
+不采集性能数据。smoke 示例：
+
+```bash
+python3 tests/long_nve/run_long_nve.py \
+  --candidate ./build/dmg-md --devices 0 --profile smoke \
+  --report /tmp/dmgmd-long-nve-smoke.json
+```
+
+完整方法、4096/12288/5000 原子 fixture、十初态 release 矩阵、双向构型回放和跨 rank restart
+见 [长程 NVE 测试说明](tests/long_nve/README.md)。
+
 实现协议、中心分片完整性结论和逐步通信量公式见
 [replicated-mpi.md](docs/replicated-mpi.md)。
 
@@ -136,3 +150,4 @@ database，它会错误地认为该宏未定义，并且可能找不到 `dmgmd/m
 - [当前数据布局](docs/data-layout.md)
 - [输入兼容矩阵](docs/compatibility-matrix.md)
 - [Golden test 说明](tests/baseline/README.md)
+- [长程 NVE 正确性测试](tests/long_nve/README.md)

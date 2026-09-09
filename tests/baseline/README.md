@@ -45,3 +45,7 @@ python3 tests/baseline/run_baselines.py --calibrate 30
 
 完整覆盖、每项通过标准、单位、容差校准和已知非确定性来源见
 [`docs/baseline-results.md`](../../docs/baseline-results.md)。
+
+本目录继续只承担 8/9 原子、最多 6 个连续 NVE steps 的短程 committed golden。4096/12288/
+5000 原子、100000-step、十初态、双向构型回放和跨 rank restart 位于
+[`tests/long_nve/`](../long_nve/README.md)，两套基线不会互相覆盖或更新。

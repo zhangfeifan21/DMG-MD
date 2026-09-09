@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "commit": "9d23496e41319b9e2af5221a7df6285387401d1e",
+    "executable_sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414"
+  },
+  "profiles": {
+    "smoke": {
+      "steps": 100,
+      "short_steps": 10,
+      "thermo_interval": 10,
+      "trajectory_interval": 50,
+      "communication_log_interval": 10,
+      "ranks": [1],
+      "seeds": [0],
+      "cases": ["carbon_crystal"]
+    },
+    "nightly": {
+      "steps": 10000,
+      "short_steps": 100,
+      "thermo_interval": 100,
+      "trajectory_interval": 1000,
+      "communication_log_interval": 100,
+      "ranks": [1, 2, 4],
+      "seeds": [0],
+      "cases": ["carbon_crystal", "dense_water", "batio3_zbl"]
+    },
+    "release": {
+      "steps": 100000,
+      "short_steps": 100,
+      "thermo_interval": 100,
+      "trajectory_interval": 10000,
+      "communication_log_interval": 100,
+      "ranks": [1, 2, 4, 8],
+      "seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "cases": ["carbon_crystal", "dense_water", "batio3_zbl"]
+    }
+  },
+  "acceptance": {
+    "relative_noninferiority_margin": 0.25,
+    "metrics": [
+      "max_excursion_per_atom_eV",
+      "abs_drift_slope_eV_per_atom_fs",
+      "detrended_rms_eV_per_atom",
+      "max_sample_jump_eV_per_atom",
+      "max_momentum_delta_amu_A_fs_per_atom"
+    ],
+    "absolute_floors": {
+      "max_excursion_per_atom_eV": 1e-10,
+      "abs_drift_slope_eV_per_atom_fs": 1e-12,
+      "detrended_rms_eV_per_atom": 1e-10,
+      "max_sample_jump_eV_per_atom": 1e-10,
+      "max_momentum_delta_amu_A_fs_per_atom": 1e-12
+    },
+    "pair_histogram_l1_limit": 0.10
+  },
+  "cases": {
+    "carbon_crystal": {
+      "name": "carbon_crystal",
+      "generator": "diamond",
+      "atoms": 4096,
+      "cells": [8, 8, 8],
+      "lattice_constant_A": 3.57,
+      "masses_amu": {"C": 12.011},
+      "velocity_scale_A_fs_sqrt_amu": 0.014,
+      "time_step_fs": 0.1,
+      "potential": "tests/baseline/inputs/potentials/nep_C.txt",
+      "potential_sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
+      "rdf_rmax_A": 6.0,
+      "rdf_bins": 120,
+      "model_sha256": {
+        "0": "e5e3ae72546cb3ed066b1864f60e84ac021f1a5357e4371d47750ed09bd13027",
+        "1": "0cd85b64a659868a606d6f267492ae29b48a65bf147ea0bc2e9b015c6f8b6025",
+        "2": "0e200684d401d71d3fb5641e8377e053ba2ecae572030432817e2816919ba041",
+        "3": "43b9b57a0a9d923f03747db1491e835465c5528dd06814c3cda7d2a89a0d54db",
+        "4": "5628cbea606a20be8bab81b2e0d9f1aee03f0875c4f621ca22a3bb46bee4fd4c",
+        "5": "8a5bf85dd98c1ae85ce1b56a50b7637c6938173b1b6d5e7f6a74ad03c8f3d868",
+        "6": "71c6c2bf5ea62997a0115398d63da1a5ff51ef00c0f4e7e90b21bcfa61251565",
+        "7": "63d1df42fa492164393965c74fa9776f7eab18609af54b8051800a8375710322",
+        "8": "bfe84b0990a0ad0266cd71264e91a0a896fee0675ea9166dc584fc283ab5e9fb",
+        "9": "498d907fa48c576e401388bd398963cde18d2c340d38068863f6851d63d9dd6e"
+      }
+    },
+    "dense_water": {
+      "name": "dense_water",
+      "generator": "dense_water",
+      "atoms": 12288,
+      "cells": [16, 16, 16],
+      "spacing_A": 3.1,
+      "oxygen_jitter_A": 0.08,
+      "masses_amu": {"O": 15.9994, "H": 1.00794},
+      "velocity_scale_A_fs_sqrt_amu": 0.014,
+      "time_step_fs": 0.1,
+      "potential": "tests/baseline/inputs/potentials/nep_water.txt",
+      "potential_sha256": "8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3",
+      "rdf_rmax_A": 6.0,
+      "rdf_bins": 120,
+      "model_sha256": {
+        "0": "88f2caeb21e0e2b61072f06a1e790d67f4d8b2e1b60d6faeebba149e3b33fe6a",
+        "1": "6d355d77b0de8f376cb6937b586f09638e1dfdcd8219d79a89c420f69bdfd088",
+        "2": "3d142b3b4dec8eefcbd8715008679471169a9ec2f006ad448083e26bb51fba6f",
+        "3": "b2c6a35472dbdc469e024b063bf49066ffd22c9bb8cff79062cba84d04cd498e",
+        "4": "667878d4fad25eed7f09c28cfdffb89c1098f8229fd5645120943be3064d47b6",
+        "5": "1aa0a105fb1e2ad0ff936ee8016869d21e76a4d005fc9e4dbc7f17774571ab70",
+        "6": "2157fa89f98f93d1bdc58270a2901f47c2c739cef1d9d09d71a47b18f4af49f3",
+        "7": "93a2f362fbff2e4dbcd0d5bd658e71d1aff3d81c9103ae2e40083f2b143e8387",
+        "8": "2b1436b9d5aa7bf3fcb4c8acf6064f76226e2d66db6f7232b5d97254dbaea0df",
+        "9": "7c1b825267201218ab3016da28994281ac8a6f392c65a3df92c04fb6abc88339"
+      }
+    },
+    "batio3_zbl": {
+      "name": "batio3_zbl",
+      "generator": "barium_titanate_zbl",
+      "atoms": 5000,
+      "cells": [10, 10, 10],
+      "lattice_constant_A": 4.0,
+      "position_jitter_A": 0.01,
+      "zbl_pair_distance_A": 1.0,
+      "masses_amu": {"Ba": 137.327, "Ti": 47.867, "O": 15.9994},
+      "velocity_scale_A_fs_sqrt_amu": 0.014,
+      "time_step_fs": 0.01,
+      "potential": "tests/baseline/inputs/potentials/nep_BaTiO3_zbl.txt",
+      "potential_sha256": "d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02",
+      "rdf_rmax_A": 6.0,
+      "rdf_bins": 120,
+      "model_sha256": {
+        "0": "c9650e7d34d1891994378c561448e3933d8028e29c835f1ff007eec7bb45e844",
+        "1": "1e19036c02b5a601cf8dd4877d78cded66956cfce48d83ffddad4f4e427a0a57",
+        "2": "ef80a6df2eee10dad0576a8a7e1a54661d0d24ae7754f258efeb2bf35e29d622",
+        "3": "b7feeaf35cb0aa2e0a7c7eff1d3aabcd1c048489116773ee33c529402f988f6c",
+        "4": "f2a03f3faeb9f5fb5a9de16f0eb7c25fbfbc4395e923f926be4a56b765f7573e",
+        "5": "011b816cbc6d0a9d071c2e30d34e98f06a47c95a793d483ba987fa051e610c65",
+        "6": "e4413df8b80619a10b4279012b5b74be14753d5db42fddd2019a414d95484c99",
+        "7": "f85907369e4b463aa39758e6bdb8dab10f028144884468352569302537c950da",
+        "8": "af64db1c12ba1e94282c1c74ac7bb4c0dd0c82caf7ca2a398a0ec745be672786",
+        "9": "bae879616c2d42e44811d089a5d1d3f15db18e37923cfcf402e9c19555fd235e"
+      }
+    }
+  }
+}

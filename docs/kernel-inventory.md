@@ -3,6 +3,9 @@
 ## 1. 范围和记号
 
 参考版本：`../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e`。
+2026-09-09 起，本文引用的 `src/...` 路径同时对应仓库内复现
+`src/gpumd_compat/`（同名文件、同符号、行号仍指参考 commit；复现文件头注明 Origin
+file）。DMG-MD 构建只使用 `src/gpumd_compat/`，不编译 gpumd-reference。
 
 本文列出普通单-bead NEP/NEP-ZBL 的第一次力、每步 NVE/`nvt_ber`、thermo、XYZ 输出实际可执行的 CUDA kernel。PIMD、附加外力、其他势和 measurement kernel 不在清单中。
 
