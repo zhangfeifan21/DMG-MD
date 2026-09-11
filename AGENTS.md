@@ -42,6 +42,7 @@
 - `docs/mpi-risks.md`
 - `docs/golden-test-plan.md`
 - `docs/open-questions.md`
+- `docs/domain-decomposition.md`（域分解与 halo 通信设计稿，待审批）
 
 ## GPUMD 复现边界（强制）
 

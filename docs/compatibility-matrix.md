@@ -2,13 +2,17 @@
 
 ## 1. 兼容性声明边界
 
-本文只针对 `../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e`。DMG-MD 尚未实现这些 parser/输出，因此以下是**实现合同候选**，不是当前兼容性声明。
+本文记录 DMG-MD 当前已经实现的兼容合同，数值和文件行为以
+`../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e` 为唯一参考。
+表中未特别注明 DMG-MD 的源码位置时，`src/...` 均指该锁定参考树；当前实现入口位于
+`src/run_parser.cpp`、`src/model_parser.cpp`、`src/runtime.cu` 和 `src/gpumd_compat/`。声明为支持的路径由
+`tests/baseline`、`tests/mpi` 和 `tests/long_nve` 分层验证；仍为 `UNKNOWN` 的行为不构成兼容承诺。
 
 状态含义：
 
-- `MVP_REQUIRED`：第一阶段应实现并用 golden test 锁定。
+- `SUPPORTED`：当前实现并纳入 golden/MPI 验证；表内明确排除的子选项除外。
 - `PARSE_ONLY_UNSUPPORTED`：必须识别命令/格式并给出明确 unsupported 或迁移错误，不能忽略。
-- `FUTURE`：合理的后续功能；MVP parser 先明确拒绝。
+- `FUTURE`：合理的后续功能；当前 parser 明确拒绝。
 - `IRRELEVANT`：不属于 DMG-MD 产品方向或当前范围，仍要识别并拒绝。
 - `UNKNOWN`：代码证据不充分、入口互相矛盾或需要运行实验。
 
@@ -108,11 +112,11 @@ ANN num_neurons 0
 
 | 项 | 实际行为 |
 | --- | --- |
-| version token | `NEP::NEP()` 接受普通 `nep4`, `nep4_zbl`, `nep5`, `nep5_zbl`；还接受不在MVP的 NEP4 temperature/dipole/polarizability (`src/force/nep.cu:108-143`) |
+| version token | `NEP::NEP()` 接受普通 `nep4`, `nep4_zbl`, `nep5`, `nep5_zbl`；参考代码还接受不在当前产品范围的 NEP4 temperature/dipole/polarizability (`src/force/nep.cu:108-143`) |
 | `num_types` | int；第一行 token 总数必须正好 `2+num_types` |
 | symbols | 定义 model species→type 映射；同时在内置元素表查 Z。未知 symbol 的 Z 保持 0，代码不报错 (`nep.cu:157-166`) |
 
-入口矛盾：`Force::parse_potential()` 的白名单还列出 `nep3*` (`src/force/force.cu:128-138`)，但 `NEP::NEP()` 随即拒绝这些版本。DMG-MD MVP 只承诺经过 golden test 的 NEP4/5 普通和 ZBL；NEP3 状态为 `UNKNOWN/PARSE_ONLY_UNSUPPORTED`。
+入口矛盾：`Force::parse_potential()` 的白名单还列出 `nep3*` (`src/force/force.cu:128-138`)，但 `NEP::NEP()` 随即拒绝这些版本。DMG-MD 只承诺经过 golden test 的 NEP4/5 普通和 ZBL；NEP3 状态为 `UNKNOWN/PARSE_ONLY_UNSUPPORTED`。
 
 ### 4.3 ZBL 行
 
@@ -144,22 +148,22 @@ ANN num_neurons 0
 - 随后读取 `num_para+dim` 行（ANN+descriptor+q_scaler），每行只用第一个 token并转换到 float GPU buffer。
 - 对缺行/空行/额外字段的稳定错误文字尚未用 executable test 证明，标记 `UNKNOWN`。
 
-## 5. MVP `run.in` 命令语法
+## 5. 当前支持的 `run.in` 命令语法
 
 ### 5.1 命令矩阵
 
 | 命令 | 状态 | 实际语法 | 默认/单位/错误 |
 | --- | --- | --- | --- |
-| `potential` | `MVP_REQUIRED` | `potential FILE [x|y|z]` | total token必须2或3。可选方向仅在本进程可见GPU数>1时验证/使用；单GPU时第三token实际被忽略。DMG-MD一rank一GPU应识别但拒绝 partition option，避免含义错位 |
-| `velocity` | `MVP_REQUIRED` | `velocity T` 或实际接受 `velocity T ANY_TOKEN SEED` | T real `>0` K。代码不检查第三 token是`seed`，只解析第四 token为int，且错误文字说positive但未检查 `>0`。model已有vel时命令不重生成 |
-| `time_step` | `MVP_REQUIRED` | `time_step DT [MAX_DISTANCE]` | DT real，输入fs并除10.18051；未见DT正值校验。MAX_DISTANCE real `>0` Å，启用自适应上限 |
-| `ensemble nve` | `MVP_REQUIRED` | `ensemble nve` | 不带参数 |
-| `ensemble nvt_ber` | `MVP_REQUIRED` | `ensemble nvt_ber T_INITIAL T_FINAL TAU_T` | 温度K且均`>0`；coupling real `>=1`，代码随后保存倒数；每步 target按 `step/number_of_steps` 插值 |
-| `run` | `MVP_REQUIRED` | `run STEPS` | 恰好一个int；未验证正值。立即执行并清空该段 measurement/fix/correct状态 |
-| `dump_thermo` | `MVP_REQUIRED` | `dump_thermo INTERVAL` | int `>0`；固定文件 `thermo.out` append |
-| `dump_xyz` | `MVP_REQUIRED` | `dump_xyz INTERVAL FILE [group METHOD ID] [precision single|double] [QUANTITY ...]` | interval int `>0`；options/quantities可混排；重复 group/precision报错；详见下文 |
-| `dump_restart` | `MVP_REQUIRED` | `dump_restart INTERVAL` | int `>0`；固定 `restart.xyz`，每帧覆盖 |
-| `correct_velocity` | `MVP_REQUIRED`（建议在首个动力学切口后） | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval int `>=10`；method int且有效。每段run结束重置；step 0即满足 `%interval==0` 因而立即修正 |
+| `potential` | `SUPPORTED` | `potential FILE [x|y|z]` | total token必须2或3。参考程序的方向选项具有进程内多GPU含义；DMG-MD一rank一GPU runtime 会识别并明确拒绝该选项 |
+| `velocity` | `SUPPORTED` | `velocity T` 或参考实际接受 `velocity T ANY_TOKEN SEED` | T real `>0` K；DMG-MD 使用全局原子顺序生成并广播速度。model已有vel时命令不重生成 |
+| `time_step` | `SUPPORTED` | `time_step DT [MAX_DISTANCE]` | DT real，输入fs并除10.18051；MAX_DISTANCE real `>0` Å，启用自适应上限 |
+| `ensemble nve` | `SUPPORTED` | `ensemble nve` | 不带参数 |
+| `ensemble nvt_ber` | `SUPPORTED` | `ensemble nvt_ber T_INITIAL T_FINAL TAU_T` | 温度K且均`>0`；coupling real `>=1`；每步 target按 `step/number_of_steps` 插值。release 矩阵比较温度统计、时间平均RDF和MSD |
+| `run` | `SUPPORTED` | `run STEPS` | 恰好一个int；立即执行并清空该段 measurement/correct状态 |
+| `dump_thermo` | `SUPPORTED` | `dump_thermo INTERVAL` | int `>0`；固定文件 `thermo.out` append |
+| `dump_xyz` | `SUPPORTED` | `dump_xyz INTERVAL FILE [group METHOD ID] [precision single|double] [QUANTITY ...]` | interval int `>0`；options/quantities可混排；重复 group/precision报错；详见下文 |
+| `dump_restart` | `SUPPORTED` | `dump_restart INTERVAL` | int `>0`；固定 `restart.xyz`，每帧覆盖 |
+| `correct_velocity` | `SUPPORTED` | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval int `>=10`；method int且有效。每段run结束重置；step 0即满足 `%interval==0` 因而立即修正 |
 
 默认状态：
 
@@ -180,7 +184,7 @@ ANN num_neurons 0
 | `unwrapped_position` | 无 | 输出 `unwrapped_position:R:3`，Å |
 | `mass` | 无 | 输出 `mass:R:1`，amu |
 | `charge` | 无 | 输出 `charge:R:1`；普通NEP取model charge，单位代码证据不足 |
-| `bec` | 无 | 普通NEP报错，仅NEP-charge可用；MVP parser应明确unsupported |
+| `bec` | 无 | 普通NEP报错，仅NEP-charge可用；当前 parser 明确 unsupported |
 | `virial` | 无 | 输出每原子 `virial:R:9` |
 | `group_labels` | 无 | 每 grouping method 一列；没有group时报错 |
 
@@ -190,7 +194,7 @@ ANN num_neurons 0
 
 ## 6. 命令分类全集
 
-### 6.1 `MVP_REQUIRED`
+### 6.1 `SUPPORTED`
 
 ```text
 potential
@@ -205,7 +209,7 @@ dump_restart
 correct_velocity
 ```
 
-`correct_velocity` 的判断：它不是力/积分正确性的必要条件，但默认随机速度初始化本身就执行全局线/角动量修正，且长 NVE 用户常用周期修正。实现 global-ID RNG和全局动量归约后，其增量较小，因此建议纳入 MVP，但不阻塞第一个“预置速度 NVE”切口。
+`correct_velocity` 不是力/积分正确性的必要条件，但默认随机速度初始化本身会执行全局线/角动量修正，且长 NVE 用户常用周期修正；当前 replicated runtime 已以全局归约/广播语义实现。
 
 ### 6.2 `PARSE_ONLY_UNSUPPORTED`
 
@@ -216,8 +220,8 @@ correct_velocity
 | `dump_velocity` | 当前GPUMD明确报已移除，提示 `dump_xyz ... velocity` |
 | `dump_force` | 当前GPUMD明确报已移除，提示 `dump_xyz ... force` |
 | `dump_exyz` | 当前GPUMD明确报已移除，提示 `dump_xyz ... velocity force potential` |
-| `fix` | 实际语法 `fix [GROUPING_METHOD] GROUP_ID`；需要group、影响积分和温度DOF。真实用户需求尚无语料证据，MVP先拒绝；是否升为FUTURE由工作负载调查决定 |
-| `nep3*`, NEP dipole/polarizability/temperature/charge | 非普通NEP/NEP-ZBL MVP；入口存在不代表构造可用 |
+| `fix` | 实际语法 `fix [GROUPING_METHOD] GROUP_ID`；需要group、影响积分和温度DOF。真实用户需求尚无语料证据，当前先拒绝；是否升为FUTURE由工作负载调查决定 |
+| `nep3*`, NEP dipole/polarizability/temperature/charge | 非普通NEP/NEP-ZBL当前范围；入口存在不代表构造可用 |
 
 ### 6.3 `FUTURE`
 
@@ -230,7 +234,7 @@ compute_msd, compute_rdf, compute_adf, compute_orientorder,
 compute_angular_rdf, compute_chunk, compute
 ```
 
-这些功能可能有产品价值，但本审计没有逐项证明全部参数语法；除上面明确列出的部分外均标记 `UNKNOWN`，MVP只按首 token/ensemble subtype 识别后拒绝。
+这些功能可能有产品价值，但本审计没有逐项证明全部参数语法；除上面明确列出的部分外均标记 `UNKNOWN`，当前 parser 只按首 token/ensemble subtype 识别后拒绝。
 
 ### 6.4 `IRRELEVANT`（第一阶段及当前产品方向）
 
@@ -321,7 +325,11 @@ ensemble wall_mirror ti_rs ti_as wall_harmonic ti_liquid npt_qtb
 
 ### 8.4 隐式 `neighbor.out`
 
-ordinary large-box NEP 每1000次 `compute_large_box()`（包括第一次调用，计数从0）把最大 radial/angular neighbor count D2H，并 append `neighbor.out` (`src/force/nep.cu:1007-1025`)。它不是 `run.in` dump命令。是否把这一副作用纳入DMG-MD兼容输出尚未决定，状态 `UNKNOWN`。
+ordinary large-box NEP 每1000次 `compute_large_box()`（包括第一次调用，计数从0）把最大 radial/angular neighbor count D2H，并 append `neighbor.out` (`src/force/nep.cu:1007-1025`)。它不是 `run.in` dump命令。
+
+DMG-MD 当前保留 rank 0 的这一兼容副作用；非零 rank 的同名内部输出进入隔离目录，不得竞争
+用户作业目录。现有隔离目录只适用于单节点/共享临时目录假设，多节点改造按
+[multi-node-io-plan.md](./multi-node-io-plan.md) 审批后实施。
 
 ## 9. 单位汇总
 

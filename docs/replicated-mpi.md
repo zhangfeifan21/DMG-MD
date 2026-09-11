@@ -100,7 +100,9 @@ HostStaged 同一步的 D2H/H2D 分别也是 `48N + 64P` 和 `48NP + 64P`。adap
 所有 thermo/XYZ/restart formatter 只在 world rank 0 调用。GPUMD ordinary NEP 内部会周期性
 append `neighbor.out`；非零 rank 被切换到由 rank 0 创建的临时工作目录，其中
 `neighbor.out` 指向 `/dev/null`，所以作业目录仍只有 rank 0 写。正常退出时 rank 0 清理临时
-目录。
+目录。该实现依赖 rank 0 临时目录对全部节点可见，目前只验证了单节点；多节点改为每 rank
+本地 scratch 的方案见 [multi-node-io-plan.md](./multi-node-io-plan.md)，状态为待审批，尚未修改
+runtime。
 
 runtime 直接构造 ordinary `NEP`，并在选择 CUDA device 后不再枚举设备决定势实现；没有
 构造 `NEP_MULTIGPU`，因此 MPI rank 看见多张本机 GPU 也不会自动占用它们。
@@ -118,6 +120,14 @@ capability、UCX `cuda_copy/cuda_ipc`、GPU 唯一绑定及实际 device-pointer
 - 默认对 HostStaged 和 CudaAware 运行同一矩阵并做 cross-backend differential。
 
 `tests/long_nve/run_long_nve.py` 在此短矩阵之外提供 4096/12288/5000 原子、十显式初态和
-100000-step release 正确性验收，包括真实 `E(0)`、长期守恒统计、GPUMD↔DMG-MD 双向静态
-构型回放及跨 rank restart。它不测 wall time、吞吐、speedup 或 scaling；replicated-full NEP
+100000-step release 正确性验收，包括真实 `E(0)`、长期守恒统计、确定性 NVT 温度统计、时间
+平均 RDF、MSD、GPUMD↔DMG-MD 双向静态构型回放及跨 rank restart。release/nightly 同时覆盖
+NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL cutoff 的静态/短轨迹分支，并默认执行
+HostStaged 与 CudaAware。它不测 wall time、吞吐、speedup 或 scaling；replicated-full NEP
 阶段不发布多卡性能结论。
+
+## 后续演进
+
+从本协议演进到 owned/ghost 域分解与 halo 通信的设计（含 M0 删除每步 velocity
+Allgatherv 的快速优化）见 [domain-decomposition.md](./domain-decomposition.md)，状态为
+设计待审批，尚未修改 runtime。

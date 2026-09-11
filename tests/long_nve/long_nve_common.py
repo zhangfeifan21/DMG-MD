@@ -7,7 +7,6 @@ import hashlib
 import itertools
 import json
 import math
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +25,21 @@ MANIFEST_PATH = SUITE_DIR / "manifest.json"
 
 def load_manifest() -> Dict[str, Any]:
     with MANIFEST_PATH.open(encoding="utf-8") as stream:
-        return json.load(stream)
+        manifest = json.load(stream)
+    cases = manifest["cases"]
+    for name, case in list(cases.items()):
+        base_name = case.get("base_case")
+        if base_name is None:
+            continue
+        if base_name not in cases or cases[base_name].get("base_case") is not None:
+            raise baseline.BaselineError(
+                f"{name}: base_case must name a non-derived manifest case"
+            )
+        merged = dict(cases[base_name])
+        merged.update(case)
+        merged["name"] = name
+        cases[name] = merged
+    return manifest
 
 
 def stable_unit(seed: int, atom: int, component: int, stream: str) -> float:
@@ -249,6 +262,140 @@ def validate_generated_model(case: Mapping[str, Any], seed: int, text: str) -> N
         )
 
 
+def _nep5_equivalent(text: str) -> str:
+    """Convert an ordinary NEP4 file to an exactly equivalent NEP5 layout."""
+    lines = text.splitlines()
+    header = lines[0].split()
+    if header[0] not in ("nep4", "nep4_zbl"):
+        raise baseline.BaselineError("nep5_equivalent requires an NEP4 source potential")
+    type_count = int(header[1])
+    header[0] = "nep5_zbl" if header[0] == "nep4_zbl" else "nep5"
+    lines[0] = " ".join(header)
+
+    def keyword_line(keyword: str) -> int:
+        matches = [index for index, line in enumerate(lines) if line.split()[:1] == [keyword]]
+        if len(matches) != 1:
+            raise baseline.BaselineError(
+                f"NEP potential should contain one {keyword} line, found {len(matches)}"
+            )
+        return matches[0]
+
+    n_max = lines[keyword_line("n_max")].split()
+    l_max = lines[keyword_line("l_max")].split()
+    ann_index = keyword_line("ANN")
+    ann = lines[ann_index].split()
+    n_max_radial = int(n_max[1])
+    n_max_angular = int(n_max[2])
+    enabled_invariants = sum(int(value) != 0 for value in l_max[2:8])
+    descriptor_dimension = (
+        n_max_radial + 1 + (n_max_angular + 1) * (int(l_max[1]) + enabled_invariants)
+    )
+    neurons = int(ann[1])
+    per_type_parameters = (descriptor_dimension + 2) * neurons
+    cursor = ann_index + 1
+    converted = lines[:cursor]
+    for _ in range(type_count):
+        end = cursor + per_type_parameters
+        if end > len(lines):
+            raise baseline.BaselineError("NEP4 ANN parameter block is truncated")
+        converted.extend(lines[cursor:end])
+        # NEP5 subtracts this type-specific output bias in addition to the
+        # shared NEP4 bias. Zero therefore preserves the original potential.
+        converted.append("  0.0000000e+00")
+        cursor = end
+    converted.extend(lines[cursor:])
+    return "\n".join(converted) + "\n"
+
+
+def _typewise_cutoff_equivalent(text: str) -> str:
+    """Expand a uniform radial/angular cutoff into the typewise syntax."""
+    lines = text.splitlines()
+    type_count = int(lines[0].split()[1])
+    matches = [index for index, line in enumerate(lines) if line.split()[:1] == ["cutoff"]]
+    if len(matches) != 1:
+        raise baseline.BaselineError("potential should contain exactly one cutoff line")
+    index = matches[0]
+    tokens = lines[index].split()
+    if len(tokens) != 5 or type_count < 2:
+        raise baseline.BaselineError(
+            "typewise_cutoff_equivalent requires a multi-type uniform cutoff"
+        )
+    radial, angular, maximum_radial, maximum_angular = tokens[1:]
+    values = [value for _ in range(type_count) for value in (radial, angular)]
+    lines[index] = " ".join(("cutoff", *values, maximum_radial, maximum_angular))
+    return "\n".join(lines) + "\n"
+
+
+def _flexible_zbl_equivalent(text: str) -> str:
+    """Replace fixed universal ZBL by the equivalent flexible parameters."""
+    lines = text.splitlines()
+    header = lines[0].split()
+    if not header[0].endswith("_zbl"):
+        raise baseline.BaselineError("flexible_zbl_equivalent requires an NEP-ZBL potential")
+    type_count = int(header[1])
+    matches = [index for index, line in enumerate(lines) if line.split()[:1] == ["zbl"]]
+    if len(matches) != 1:
+        raise baseline.BaselineError("potential should contain exactly one zbl line")
+    index = matches[0]
+    tokens = lines[index].split()
+    if len(tokens) != 3 or tokens[1:3] != ["0.75", "1.5"]:
+        raise baseline.BaselineError(
+            "flexible ZBL equivalence fixture expects the locked 0.75/1.5 cutoff"
+        )
+    lines[index] = "zbl 0 0"
+    universal = (
+        "0.75", "1.5", "0.18175", "3.1998", "0.50986", "0.94229",
+        "0.28022", "0.4029", "0.02817", "0.20162",
+    )
+    for _ in range(type_count * (type_count + 1) // 2):
+        lines.extend(f"  {value}" for value in universal)
+    return "\n".join(lines) + "\n"
+
+
+def _typewise_zbl_cutoff(text: str) -> str:
+    """Enable the universal-ZBL covalent-radius cutoff branch."""
+    lines = text.splitlines()
+    matches = [index for index, line in enumerate(lines) if line.split()[:1] == ["zbl"]]
+    if len(matches) != 1:
+        raise baseline.BaselineError("potential should contain exactly one zbl line")
+    index = matches[0]
+    tokens = lines[index].split()
+    if len(tokens) != 3 or tokens[1:3] == ["0", "0"]:
+        raise baseline.BaselineError("typewise ZBL cutoff requires fixed universal ZBL")
+    lines[index] = " ".join((*tokens, "0.6"))
+    return "\n".join(lines) + "\n"
+
+
+POTENTIAL_TRANSFORMS = {
+    "nep5_equivalent": _nep5_equivalent,
+    "typewise_cutoff_equivalent": _typewise_cutoff_equivalent,
+    "flexible_zbl_equivalent": _flexible_zbl_equivalent,
+    "typewise_zbl_cutoff": _typewise_zbl_cutoff,
+}
+
+
+def generate_potential(case: Mapping[str, Any]) -> str:
+    path = PROJECT_ROOT / case["potential"]
+    text = path.read_text(encoding="utf-8")
+    transforms = case.get("potential_transforms", [])
+    if isinstance(transforms, str):
+        transforms = [transforms]
+    for name in transforms:
+        if name not in POTENTIAL_TRANSFORMS:
+            raise baseline.BaselineError(f"unknown potential transform {name}")
+        text = POTENTIAL_TRANSFORMS[name](text)
+    return text
+
+
+def validate_generated_potential(case: Mapping[str, Any], text: str) -> None:
+    actual = text_sha256(text)
+    if actual != case["potential_sha256"]:
+        raise baseline.BaselineError(
+            f"{case['name']}: generated potential hash mismatch; "
+            f"expected {case['potential_sha256']}, got {actual}"
+        )
+
+
 def static_run(potential_name: str = "nep.txt") -> str:
     return "\n".join(
         (
@@ -302,6 +449,35 @@ def long_run(
     )
 
 
+def nvt_run(
+    time_step_fs: float,
+    equilibration_steps: int,
+    sampling_steps: int,
+    thermo_interval: int,
+    trajectory_interval: int,
+    temperature: float,
+    coupling: float,
+    potential_name: str = "nep.txt",
+) -> str:
+    if equilibration_steps <= 0 or sampling_steps <= 0:
+        raise baseline.BaselineError("NVT equilibration and sampling steps must be positive")
+    if sampling_steps % thermo_interval or sampling_steps % trajectory_interval:
+        raise baseline.BaselineError("NVT output intervals must divide the sampling steps")
+    return "\n".join(
+        (
+            f"potential {potential_name}",
+            f"time_step {time_step_fs:.12g}",
+            f"ensemble nvt_ber {temperature:.12g} {temperature:.12g} {coupling:.12g}",
+            f"run {equilibration_steps}",
+            f"ensemble nvt_ber {temperature:.12g} {temperature:.12g} {coupling:.12g}",
+            f"dump_thermo {thermo_interval}",
+            f"dump_xyz {trajectory_interval} nvt.xyz precision double unwrapped_position",
+            f"run {sampling_steps}",
+            "",
+        )
+    )
+
+
 def restart_run(
     time_step_fs: float,
     steps: int,
@@ -330,7 +506,7 @@ def execute_md(
     launcher: Sequence[str],
     model_text: str,
     run_text: str,
-    potential: Path,
+    potential_text: str,
     stage_dir: Path,
     env: Mapping[str, str],
     timeout: int,
@@ -339,7 +515,7 @@ def execute_md(
     stage_dir.mkdir(parents=True, exist_ok=False)
     (stage_dir / "model.xyz").write_text(model_text, encoding="utf-8")
     (stage_dir / "run.in").write_text(run_text, encoding="utf-8")
-    shutil.copyfile(potential, stage_dir / "nep.txt")
+    (stage_dir / "nep.txt").write_text(potential_text, encoding="utf-8")
     input_hashes = {
         filename: baseline.sha256(stage_dir / filename)
         for filename in ("model.xyz", "run.in", "nep.txt")
@@ -648,6 +824,196 @@ def histogram_l1(reference: Mapping[str, Any], actual: Mapping[str, Any]) -> flo
     return maximum
 
 
+def temperature_statistics(thermo_path: Path, target_temperature: float) -> Dict[str, float]:
+    segments = baseline.parse_thermo(thermo_path)
+    if len(segments) != 1 or len(segments[0]["rows"]) < 2:
+        raise baseline.BaselineError("NVT thermo must contain one segment and at least two samples")
+    temperatures = [float(row[0]) for row in segments[0]["rows"]]
+    if not all(math.isfinite(value) for value in temperatures):
+        raise baseline.BaselineError("NVT temperature contains NaN or infinity")
+    mean = sum(temperatures) / len(temperatures)
+    variance = sum((value - mean) ** 2 for value in temperatures) / len(temperatures)
+    rmse = math.sqrt(
+        sum((value - target_temperature) ** 2 for value in temperatures)
+        / len(temperatures)
+    )
+    return {
+        "temperature_samples": float(len(temperatures)),
+        "temperature_mean_K": mean,
+        "temperature_std_K": math.sqrt(variance),
+        "temperature_rmse_K": rmse,
+        "temperature_min_K": min(temperatures),
+        "temperature_max_K": max(temperatures),
+    }
+
+
+def radial_distribution(
+    frame: Mapping[str, Any], rmax: float, bins: int, maximum_centers: int = 512
+) -> Dict[str, Any]:
+    """Calculate directed partial g_AB(r) from deterministic center samples."""
+    if bins <= 0 or rmax <= 0.0 or maximum_centers <= 0:
+        raise baseline.BaselineError("invalid RDF parameters")
+    lattice = [float(token) for token in frame["fields"]["Lattice"].split()]
+    if len(lattice) != 9 or any(
+        abs(lattice[index]) > 1.0e-12 for index in (1, 2, 3, 5, 6, 7)
+    ):
+        raise baseline.BaselineError("time-averaged RDF requires an orthogonal box")
+    lengths = [lattice[0], lattice[4], lattice[8]]
+    if any(length <= 0.0 for length in lengths):
+        raise baseline.BaselineError("RDF box lengths must be positive")
+    volume = lengths[0] * lengths[1] * lengths[2]
+    positions = frame_vectors(frame, "pos")
+    species = frame_species(frame)
+    populations: Dict[str, int] = {}
+    for name in species:
+        populations[name] = populations.get(name, 0) + 1
+
+    selected_count = min(len(positions), maximum_centers)
+    stride = max(1, len(positions) // selected_count)
+    while math.gcd(stride, len(positions)) != 1:
+        stride += 1
+    selected_centers = {
+        (index * stride) % len(positions) for index in range(selected_count)
+    }
+    center_populations: Dict[str, int] = {}
+    for atom in selected_centers:
+        name = species[atom]
+        center_populations[name] = center_populations.get(name, 0) + 1
+
+    cell_counts = [max(1, int(length / rmax)) for length in lengths]
+    cells: Dict[Tuple[int, int, int], List[int]] = {}
+    for atom, position in enumerate(positions):
+        key = tuple(
+            int((position[axis] % lengths[axis]) / lengths[axis] * cell_counts[axis])
+            % cell_counts[axis]
+            for axis in range(3)
+        )
+        cells.setdefault(key, []).append(atom)
+
+    counts: Dict[str, List[int]] = {}
+    for key, members in cells.items():
+        neighbor_keys = {
+            tuple((key[axis] + delta[axis]) % cell_counts[axis] for axis in range(3))
+            for delta in itertools.product((-1, 0, 1), repeat=3)
+        }
+        for atom in members:
+            if atom not in selected_centers:
+                continue
+            for neighbor_key in neighbor_keys:
+                for other in cells.get(neighbor_key, []):
+                    if other == atom:
+                        continue
+                    displacement = []
+                    for axis in range(3):
+                        value = positions[other][axis] - positions[atom][axis]
+                        value -= round(value / lengths[axis]) * lengths[axis]
+                        displacement.append(value)
+                    distance = math.sqrt(sum(value * value for value in displacement))
+                    if distance >= rmax:
+                        continue
+                    pair = f"{species[atom]}-{species[other]}"
+                    histogram = counts.setdefault(pair, [0] * bins)
+                    histogram[min(int(distance / rmax * bins), bins - 1)] += 1
+
+    width = rmax / bins
+    distributions: Dict[str, List[float]] = {}
+    for center_species, number_of_centers in center_populations.items():
+        for neighbor_species, population in populations.items():
+            available_neighbors = population - int(center_species == neighbor_species)
+            if available_neighbors <= 0:
+                continue
+            pair = f"{center_species}-{neighbor_species}"
+            histogram = counts.get(pair, [0] * bins)
+            values = []
+            for index, count in enumerate(histogram):
+                inner = index * width
+                outer = (index + 1) * width
+                shell_volume = 4.0 * math.pi * (outer ** 3 - inner ** 3) / 3.0
+                expected = number_of_centers * available_neighbors * shell_volume / volume
+                values.append(count / expected)
+            distributions[pair] = values
+    return {
+        "rmax_A": rmax,
+        "bins": bins,
+        "sampled_centers": len(selected_centers),
+        "distributions": distributions,
+    }
+
+
+def time_averaged_rdf(
+    trajectory_path: Path, rmax: float, bins: int, maximum_centers: int = 512
+) -> Dict[str, Any]:
+    frames = baseline.parse_xyz(trajectory_path)
+    if len(frames) < 2:
+        raise baseline.BaselineError("time-averaged RDF requires at least two trajectory frames")
+    frame_rdfs = [radial_distribution(frame, rmax, bins, maximum_centers) for frame in frames]
+    pairs = set().union(*(set(item["distributions"]) for item in frame_rdfs))
+    averaged: Dict[str, List[float]] = {}
+    for pair in pairs:
+        values = [0.0] * bins
+        for item in frame_rdfs:
+            frame_values = item["distributions"].get(pair, [0.0] * bins)
+            for index, value in enumerate(frame_values):
+                values[index] += value
+        averaged[pair] = [value / len(frame_rdfs) for value in values]
+    return {
+        "rmax_A": rmax,
+        "bins": bins,
+        "frames": len(frames),
+        "distributions": averaged,
+    }
+
+
+def rdf_l1(reference: Mapping[str, Any], actual: Mapping[str, Any]) -> float:
+    if reference["bins"] != actual["bins"] or reference["rmax_A"] != actual["rmax_A"]:
+        return math.inf
+    pairs = set(reference["distributions"]) | set(actual["distributions"])
+    maximum = 0.0
+    for pair in pairs:
+        left = reference["distributions"].get(pair)
+        right = actual["distributions"].get(pair)
+        if left is None or right is None or len(left) != len(right):
+            return math.inf
+        # Mean absolute bin difference is the discretized (1/rmax) integral
+        # of |g_ref(r)-g_test(r)| over the configured range.
+        maximum = max(maximum, sum(abs(x - y) for x, y in zip(left, right)) / len(left))
+    return maximum
+
+
+def msd_statistics(trajectory_path: Path) -> Dict[str, float]:
+    frames = baseline.parse_xyz(trajectory_path)
+    if len(frames) < 2:
+        raise baseline.BaselineError("MSD requires at least two trajectory frames")
+    if any("unwrapped_position" not in property_offsets(frame) for frame in frames):
+        raise baseline.BaselineError("MSD trajectory has no unwrapped_position property")
+    try:
+        times = [float(frame["fields"]["Time"]) for frame in frames]
+    except (KeyError, ValueError) as error:
+        raise baseline.BaselineError("MSD trajectory has no numeric Time field") from error
+    times = [value - times[0] for value in times]
+    origin = frame_vectors(frames[0], "unwrapped_position")
+    values = []
+    for frame in frames:
+        positions = frame_vectors(frame, "unwrapped_position")
+        if len(positions) != len(origin):
+            raise baseline.BaselineError("MSD trajectory atom count changed")
+        values.append(
+            sum(
+                sum((right[axis] - left[axis]) ** 2 for axis in range(3))
+                for left, right in zip(origin, positions)
+            )
+            / len(origin)
+        )
+    _, slope = linear_fit(values, times)
+    return {
+        "msd_samples": float(len(values)),
+        "msd_mean_A2": sum(values) / len(values),
+        "msd_final_A2": values[-1],
+        "msd_max_A2": max(values),
+        "msd_slope_A2_per_fs": slope,
+    }
+
+
 def quantile(values: Sequence[float], probability: float) -> float:
     if not values or not 0.0 <= probability <= 1.0:
         raise baseline.BaselineError("invalid quantile request")
@@ -705,5 +1071,45 @@ def enforce_noninferiority(
                 f"{label}: {key} is inferior to the locked GPUMD envelope: "
                 f"median={actual_summary['median']:.6e}/{median_limit:.6e}, "
                 f"q95={actual_summary['q95']:.6e}/{q95_limit:.6e}"
+            )
+    return report
+
+
+def enforce_distribution_equivalence(
+    reference: Sequence[Mapping[str, float]],
+    actual: Sequence[Mapping[str, float]],
+    metric_limits: Mapping[str, Mapping[str, float]],
+    label: str,
+) -> Dict[str, Any]:
+    if len(reference) != len(actual) or not reference:
+        raise baseline.BaselineError(f"{label}: metric populations do not match")
+    report: Dict[str, Any] = {}
+    for key, limits in metric_limits.items():
+        reference_summary = distribution_summary(reference, key)
+        actual_summary = distribution_summary(actual, key)
+        comparisons: Dict[str, Any] = {}
+        passed = True
+        for statistic in ("median", "q95"):
+            expected = reference_summary[statistic]
+            observed = actual_summary[statistic]
+            tolerance = max(
+                float(limits["absolute"]), float(limits["relative"]) * abs(expected)
+            )
+            difference = abs(observed - expected)
+            comparisons[statistic] = {
+                "difference": difference,
+                "tolerance": tolerance,
+                "passed": difference <= tolerance,
+            }
+            passed = passed and difference <= tolerance
+        report[key] = {
+            "reference": reference_summary,
+            "actual": actual_summary,
+            "comparisons": comparisons,
+            "passed": passed,
+        }
+        if not passed:
+            raise baseline.BaselineError(
+                f"{label}: {key} differs from the locked GPUMD distribution envelope"
             )
     return report

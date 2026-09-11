@@ -78,14 +78,13 @@ public:
     GPU_Vector<double>& force,
     GPU_Vector<double>& virial) = 0;
 
-  virtual void compute(
-    const float /* temperature */,
-    Box& /* box */,
-    const GPU_Vector<int>& /* type */,
-    const GPU_Vector<double>& /* position */,
-    GPU_Vector<double>& /* potential */,
-    GPU_Vector<double>& /* force */,
-    GPU_Vector<double>& /* virial */){}
+  // NOTE(dmg-md): the reference Potential interface also exposes a
+  // temperature-dependent compute overload. DMG-MD rejects temperature NEP
+  // models before construction, and the replicated NEP class intentionally
+  // does not carry that implementation. Keeping a base-class no-op here
+  // would make a future accidental dispatch silently produce zero force, so
+  // the unreachable overload is omitted together with the corresponding
+  // reference NEP implementation.
 
   virtual const GPU_Vector<int>& get_NN_radial_ptr()
   {

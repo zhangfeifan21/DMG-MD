@@ -1,8 +1,9 @@
-# DMG-MD 长程 NVE 正确性测试
+# DMG-MD 长程 NVE/NVT 正确性测试
 
-本目录实现独立于短程 committed golden 的长期正确性验收。它不生成或宣称性能数据，也不要求
-混沌轨迹在 100000 步后逐原子重合。GPUMD ordinary NEP 单 GPU仍是参考；DMG-MD 在相同初态
-上接受短程严格比较、长期守恒统计、双向构型回放和跨 rank restart 检查。
+本目录实现独立于短程 committed golden 的长期 NVE 与确定性 NVT 统计正确性验收。它不生成
+或宣称性能数据，也不要求混沌轨迹在 100000 步后逐原子重合。GPUMD ordinary NEP 单 GPU仍是
+参考；DMG-MD 在相同初态上接受短程严格比较、长期守恒、温度/RDF/MSD统计、双向构型回放和
+跨 rank restart 检查。
 
 ## 固定体系
 
@@ -20,16 +21,22 @@
 未来改成经 GPUMD 预平衡的科学体系，必须先做仅参考程序参与的 dt 收敛实验，再审查生成器、
 模型哈希和 manifest，不能根据 DMG-MD 的失败反向修改输入或门槛。
 
+同一 manifest 还包含 `carbon_nep5`、`dense_water_typewise_cutoff`、
+`batio3_flexible_zbl` 和 `batio3_typewise_zbl_cutoff`。它们从上述锁定 potential 确定性生成，
+生成后的完整文件也锁定 SHA-256；这些 compatibility case 只执行静态与短轨迹，用来封住此前
+没有覆盖的 NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL cutoff 分支。
+
 ## 三个 profile
 
-| profile | steps | 初态 | ranks | thermo | trajectory | 用途 |
-| --- | ---: | ---: | --- | ---: | ---: | --- |
-| `smoke` | 100 | C seed 0 | 1 | 每 10 步 | 每 50 步 | 验证完整编排 |
-| `nightly` | 10000 | 三体系 seed 0 | 1/2/4 | 每 100 步 | 每 1000 步 | 定期回归 |
-| `release` | 100000 | 三体系 seeds 0–9 | 1/2/4/8 | 每 100 步 | 每 10000 步 | 发布/阶段门槛 |
+| profile | NVE/NVT采样步数 | 初态 | ranks | backends | 用途 |
+| --- | ---: | --- | --- | --- | --- |
+| `smoke` | 100/100 | 三体系 seed 0 | 1 | HostStaged | 验证完整编排和全部语法变体 |
+| `nightly` | 10000/10000 | 三体系 seed 0 | 1/2/4 | HostStaged + CudaAware | 定期回归 |
+| `release` | 100000/100000 | 三体系 seeds 0–9 | 1/2/4/8 | HostStaged + CudaAware | 发布/阶段门槛 |
 
-默认通信后端是 HostStaged。CudaAware 使用同一 suite，但建议先用三组初态运行，再决定是否扩大
-到全部十组。无论 profile 如何，MPI 环境预检都先于数值作业执行。
+profile 已固定默认后端：smoke 为 HostStaged，nightly/release 为 HostStaged 与 CudaAware。
+`--backends` 可用于缩小诊断范围，但发布门槛不得据此删去后端。无论 profile 如何，MPI 环境
+预检都先于数值作业执行。
 
 ## 执行
 
@@ -38,7 +45,7 @@
 ```text
 source ../env/md-mpi.sh
 python3 tests/long_nve/run_long_nve.py \
-  --candidate ./build-openmpi-ucx/dmg-md \
+  --candidate ./build/dmg-md \
   --devices 0 --profile smoke \
   --report /tmp/dmgmd-long-nve-smoke.json
 ```
@@ -47,7 +54,7 @@ nightly：
 
 ```text
 python3 tests/long_nve/run_long_nve.py \
-  --candidate ./build-openmpi-ucx/dmg-md \
+  --candidate ./build/dmg-md \
   --devices 0,1,2,3 --profile nightly \
   --report /tmp/dmgmd-long-nve-nightly.json
 ```
@@ -56,7 +63,7 @@ python3 tests/long_nve/run_long_nve.py \
 
 ```text
 python3 tests/long_nve/run_long_nve.py \
-  --candidate ./build-openmpi-ucx/dmg-md \
+  --candidate ./build/dmg-md \
   --devices 0,1,2,3,4,5,6,7 --profile release \
   --report /tmp/dmgmd-long-nve-release.json
 ```
@@ -65,13 +72,13 @@ CudaAware 三初态扩展矩阵：
 
 ```text
 python3 tests/long_nve/run_long_nve.py \
-  --candidate ./build-openmpi-ucx/dmg-md \
+  --candidate ./build/dmg-md \
   --devices 0,1,2,3,4,5,6,7 --profile release \
   --seeds 0,1,2 --backends HostStaged,CudaAware \
   --report /tmp/dmgmd-long-nve-cuda-aware.json
 ```
 
-`--cases`、`--seeds`、`--ranks` 和 `--sections short,long,replay,restart` 可缩小诊断范围。
+`--cases`、`--seeds`、`--ranks` 和 `--sections short,long,replay,restart,nvt` 可缩小诊断范围。
 失败时临时工作目录总是保留；成功时只有显式 `--report` 指定的 JSON 报告会保留。
 
 ## 验收内容
@@ -97,6 +104,14 @@ python3 tests/long_nve/run_long_nve.py \
 manifest 在查看 candidate 长程结果前固定 25% 非劣 margin 和每项 absolute floor。运行器同时
 执行同批 GPUMD reference，分别比较十初态的 median 与 q95。最终 MSD 和最小距离作为诊断量；
 构型分布由元素对距离直方图的最大 L1 距离检查。
+
+### NVT统计正确性
+
+三个物理 case 以 300 K、`nvt_ber` coupling 100 先平衡后采样。运行器对 GPUMD 与 DMG-MD
+分别计算温度 mean/std/RMSE、以采样首帧为原点的 MSD mean/final/max/slope，以及按元素有向对
+归一化的时间平均 partial RDF。温度和 MSD 的 median/q95 做双侧 GPUMD 等价检查；RDF 使用
+manifest 固定的最大 mean-absolute-bin-difference 门槛。这个结果证明实现兼容，不把 Berendsen
+弱耦合 thermostat 或这些压力 fixture 宣称为 canonical NVT 科学采样。
 
 ### 双向构型回放
 

@@ -147,18 +147,18 @@ public:
     } small_box_data;
 
   NEP(const char* file_potential, const int num_atoms);
-  virtual ~NEP(void);
-  virtual void compute(
+  ~NEP(void) override;
+  void compute(
     Box& box,
     const GPU_Vector<int>& type,
     const GPU_Vector<double>& position,
     GPU_Vector<double>& potential,
     GPU_Vector<double>& force,
-    GPU_Vector<double>& virial);
+    GPU_Vector<double>& virial) override;
 
-  const GPU_Vector<int>& get_NN_radial_ptr();
+  const GPU_Vector<int>& get_NN_radial_ptr() override;
 
-  const GPU_Vector<int>& get_NL_radial_ptr();
+  const GPU_Vector<int>& get_NL_radial_ptr() override;
 
 private:
   ParaMB paramb;

@@ -21,6 +21,59 @@ class LongNveTests(unittest.TestCase):
                 common.validate_generated_model(case, seed, text)
                 self.assertEqual(int(text.splitlines()[0]), case["atoms"])
 
+    def test_all_generated_potentials_match_locked_hashes(self) -> None:
+        for case in self.manifest["cases"].values():
+            text = common.generate_potential(case)
+            common.validate_generated_potential(case, text)
+        self.assertTrue(
+            common.generate_potential(self.manifest["cases"]["carbon_nep5"])
+            .splitlines()[0]
+            .startswith("nep5 ")
+        )
+        typewise_cutoff = next(
+            line
+            for line in common.generate_potential(
+                self.manifest["cases"]["dense_water_typewise_cutoff"]
+            ).splitlines()
+            if line.startswith("cutoff ")
+        )
+        self.assertEqual(len(typewise_cutoff.split()), 7)
+        flexible = common.generate_potential(self.manifest["cases"]["batio3_flexible_zbl"])
+        self.assertIn("\nzbl 0 0\n", flexible)
+        typewise_zbl = next(
+            line
+            for line in common.generate_potential(
+                self.manifest["cases"]["batio3_typewise_zbl_cutoff"]
+            ).splitlines()
+            if line.startswith("zbl ")
+        )
+        self.assertEqual(len(typewise_zbl.split()), 4)
+
+    def test_release_matrix_covers_backends_variants_and_nvt_statistics(self) -> None:
+        release = self.manifest["profiles"]["release"]
+        self.assertEqual(release["backends"], ["HostStaged", "CudaAware"])
+        self.assertEqual(release["ranks"], [1, 2, 4, 8])
+        self.assertEqual(release["seeds"], list(range(10)))
+        self.assertIn("nvt", release["sections"])
+        for case in (
+            "carbon_nep5",
+            "dense_water_typewise_cutoff",
+            "batio3_flexible_zbl",
+            "batio3_typewise_zbl_cutoff",
+        ):
+            self.assertIn(case, release["cases"])
+        self.assertEqual(
+            set(self.manifest["statistical_acceptance"]["metrics"]),
+            {
+                "temperature_mean_K",
+                "temperature_std_K",
+                "temperature_rmse_K",
+                "msd_mean_A2",
+                "msd_final_A2",
+                "msd_slope_A2_per_fs",
+            },
+        )
+
     def test_generated_models_have_zero_mass_weighted_momentum(self) -> None:
         case = self.manifest["cases"]["dense_water"]
         text = common.generate_model(case, 3)
@@ -122,6 +175,65 @@ class LongNveTests(unittest.TestCase):
                 ("metric",),
                 0.25,
                 {"metric": 0.01},
+                "unit",
+            )
+
+    def test_nvt_temperature_msd_and_time_averaged_rdf_statistics(self) -> None:
+        thermo = """# dump_thermo 1
+# format_version 1
+# num_atoms 4
+# dt_output 1.0000000000e+00 fs
+# columns T KE PE sxx syy szz syz sxz sxy ax ay az bx by bz cx cy cz
+290 0 0 0 0 0 0 0 0 10 0 0 0 10 0 0 0 10
+300 0 0 0 0 0 0 0 0 10 0 0 0 10 0 0 0 10
+310 0 0 0 0 0 0 0 0 10 0 0 0 10 0 0 0 10
+"""
+        frames = []
+        atoms = (("A", 1.0, 1.0, 1.0), ("A", 4.0, 1.0, 1.0),
+                 ("B", 1.0, 4.0, 1.0), ("B", 4.0, 4.0, 1.0))
+        for time, shift in ((0.0, 0.0), (1.0, 1.0), (2.0, 2.0)):
+            frames.extend(
+                (
+                    "4",
+                    f'Time={time} pbc="T T T" Lattice="10 0 0 0 10 0 0 0 10" '
+                    'Properties=species:S:1:pos:R:3:unwrapped_position:R:3',
+                    *(
+                        f"{name} {x} {y} {z} {x + shift} {y} {z}"
+                        for name, x, y, z in atoms
+                    ),
+                )
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            thermo_path = Path(directory) / "thermo.out"
+            trajectory_path = Path(directory) / "nvt.xyz"
+            thermo_path.write_text(thermo, encoding="utf-8")
+            trajectory_path.write_text("\n".join(frames) + "\n", encoding="utf-8")
+            temperatures = common.temperature_statistics(thermo_path, 300.0)
+            msd = common.msd_statistics(trajectory_path)
+            rdf = common.time_averaged_rdf(trajectory_path, 4.5, 9)
+        self.assertAlmostEqual(temperatures["temperature_mean_K"], 300.0)
+        self.assertAlmostEqual(temperatures["temperature_rmse_K"], (200.0 / 3.0) ** 0.5)
+        self.assertAlmostEqual(msd["msd_mean_A2"], 5.0 / 3.0)
+        self.assertAlmostEqual(msd["msd_final_A2"], 4.0)
+        self.assertAlmostEqual(msd["msd_slope_A2_per_fs"], 2.0)
+        self.assertEqual(rdf["frames"], 3)
+        self.assertEqual(common.rdf_l1(rdf, rdf), 0.0)
+
+    def test_statistical_equivalence_is_two_sided(self) -> None:
+        reference = [{"metric": value} for value in (10.0, 11.0, 12.0)]
+        actual = [{"metric": value} for value in (10.5, 11.5, 12.5)]
+        report = common.enforce_distribution_equivalence(
+            reference,
+            actual,
+            {"metric": {"relative": 0.1, "absolute": 0.1}},
+            "unit",
+        )
+        self.assertTrue(report["metric"]["passed"])
+        with self.assertRaises(common.baseline.BaselineError):
+            common.enforce_distribution_equivalence(
+                reference,
+                [{"metric": value} for value in (5.0, 6.0, 7.0)],
+                {"metric": {"relative": 0.1, "absolute": 0.1}},
                 "unit",
             )
 

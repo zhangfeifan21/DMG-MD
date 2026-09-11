@@ -23,7 +23,8 @@ Open MPI+UCX 是固定运行栈，默认通信后端仍为 HostStaged，CudaAwar
 - 每 rank 保留完整 replicated input；balanced owned range 唯一负责积分、thermo 和输出。
   position/velocity 每步 Allgatherv，thermo 从 owned local sums Allreduce。
 - rank 0 是唯一 formatter/writer；非零 rank 的 GPUMD `neighbor.out` 内部写入被隔离到
-  rank-0 创建的临时目录并指向 `/dev/null`。
+  rank-0 创建的临时目录并指向 `/dev/null`。该实现只在单节点验证，跨节点依赖共享 `/tmp`
+  是已确认风险；整改方案已形成但等待审批，尚未修改 runtime。
 - 启动 stdout 记录 Open MPI implementation/version、Open MPI+UCX stack、hostname、
   world/local rank、CUDA device/UUID、capability、自检结果、backend 和 center coverage proof；
   默认每步记录 collective buffer 通信量，长测可按固定步数间隔采样。
@@ -42,8 +43,9 @@ Open MPI+UCX 是固定运行栈，默认通信后端仍为 HostStaged，CudaAwar
   `dump_xyz` 和 `dump_restart`。输出按 `global_id` 排序，保持 GPUMD 文件名、header、列序、
   precision、单位、append/overwrite 和多段 run 行为。
 - 新增长程正确性 suite：4096-atom C、12288-atom 水和 5000-atom BaTiO3/ZBL，十组哈希锁定
-  的显式初态，100/10000/100000-step profiles，真实 `E(0)` 的长期守恒指标、短程逐帧比较、
-  GPUMD↔DMG-MD 双向静态构型回放和跨 rank restart。该 suite 不采集性能数据。
+  的显式初态，100/10000/100000-step profiles，真实 `E(0)` 的长期守恒指标、确定性 NVT
+  温度/RDF/MSD统计、短程逐帧比较、GPUMD↔DMG-MD 双向静态构型回放和跨 rank restart。
+  release/nightly 默认覆盖双通信后端，并含四个额外 potential 兼容分支；该 suite 不采集性能数据。
 - `DMGMD_COMM_LOG_INTERVAL` 可为长测设置正整数采样周期；默认仍为 1，原 MPI differential
   继续检查每一步通信记录。
 
@@ -54,7 +56,7 @@ Open MPI+UCX 是固定运行栈，默认通信后端仍为 HostStaged，CudaAwar
 ```text
 source ../env/md-mpi.sh
 python3 tests/mpi/check_environment.py \
-  --candidate ./build-openmpi-ucx/dmg-md --devices 0,1,2,3 --ranks 4
+  --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4
 PASS environment: mpirun (Open MPI) 5.0.10; UCX 1.22.0; cuda_copy/cuda_ipc; CudaAware probe ranks=4
 ```
 
@@ -77,9 +79,9 @@ PASS environment: mpirun (Open MPI) 5.0.10; UCX 1.22.0; cuda_copy/cuda_ipc; Cuda
 
 ```text
 source ../env/md-mpi.sh
-cmake -S . -B build-openmpi-ucx -DCMAKE_BUILD_TYPE=Release
-cmake --build build-openmpi-ucx -j 4
-ctest --test-dir build-openmpi-ucx --output-on-failure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 4
+ctest --test-dir build --output-on-failure
 4/4 tests passed
 ```
 
@@ -96,7 +98,7 @@ CMake 实际选择 `/data/home/zhangyifei/software/openmpi-cuda` 和
 source ../env/md-mpi.sh
 python3 tests/baseline/run_baselines.py --reference ../gpumd-reference/src/gpumd --device 0
 PASS: all 4 baseline cases match for pinned GPUMD reference
-python3 tests/baseline/run_baselines.py --candidate ./build-openmpi-ucx/dmg-md --device 0
+python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0
 PASS: all 4 baseline cases match for candidate
 ```
 
@@ -110,7 +112,7 @@ PASS: all 4 baseline cases match for candidate
 ```text
 source ../env/md-mpi.sh
 python3 tests/mpi/run_mpi_differential.py \
-  --candidate ./build-openmpi-ucx/dmg-md --devices 0,1,2,3 --timeout 600
+  --candidate ./build/dmg-md --devices 0,1,2,3 --timeout 600
 PASS HostStaged ranks=1: NVE max_excursion=1.746927e-06 eV/atom slope=3.238564e-06 eV/(atom fs)
 PASS HostStaged ranks=2: NVE max_excursion=1.746927e-06 eV/atom slope=3.238564e-06 eV/(atom fs)
 PASS HostStaged ranks=4: NVE max_excursion=1.746927e-06 eV/atom slope=3.238564e-06 eV/(atom fs)
@@ -188,3 +190,26 @@ DMGMD_COMM step=1 backend=CudaAware collective_calls=8 mpi_input_bytes_global=18
   - `build/compile_commands.json` 不含任何 gpumd-reference 路径。
 - 规则更新：`AGENTS.md` 明确禁止 include/编译/链接/运行 gpumd-reference 代码；
   新需求一律在 `src/gpumd_compat/` 复现并加注释（决策 D-001 修订、新增 D-010）。
+
+## 2026-09-09：审计问题 3/4/5/6 整改
+
+- 验证矩阵补齐 release/nightly 的 HostStaged+CudaAware 默认组合，以及 NEP5、typewise
+  radial/angular cutoff、flexible ZBL、typewise ZBL cutoff 四个此前缺失的 potential 分支。
+  变换后的完整 potential 均锁定 SHA-256；compatibility case 执行静态和短轨迹严格差分。
+- 新增确定性 `nvt_ber` 平衡/采样段，统计温度 mean/std/RMSE、时间平均 partial RDF，以及
+  基于 `unwrapped_position` 的 MSD mean/final/max/slope。温度和 MSD 对 GPUMD 的多初态
+  median/q95 做双侧等价检查，RDF 使用预先固定的逐 bin 门槛。
+- 删除 `Potential` 中不可达的 temperature-dependent 空 `compute()`；`NEP` 的析构、普通
+  `compute()` 和 neighbor getters 显式 `override`。全新 Release 构建中原 partial-overload
+  NVCC warning 消失，NEP 数学和 kernel 未修改。
+- 修正 `compatibility-matrix.md` 的“尚未实现”陈述，支持项改为当前 `SUPPORTED`，并把实现与
+  锁定参考源码证据分开描述。
+- 多节点 I/O 隔离只提交 [待审批方案](./multi-node-io-plan.md)，未改 `src/runtime.cu`。
+- 验证：全新 `/tmp` Release build 的 CTest 4/4；committed golden 4/4；1/2/4 rank ×
+  HostStaged/CudaAware 短矩阵通过；扩展 smoke 的 3 个物理 case 与 4 个 compatibility case
+  全部通过，NVT 的 GPUMD↔DMG-MD 温度/MSD统计一致、时间平均 RDF L1 为 0；另对 C 体系
+  实跑 1/2/4 rank × HostStaged/CudaAware 的 NVT 统计矩阵并通过。
+- 完整十初态、1/2/4/8 rank、双后端、100000-step release **已定义但本次未执行**；不能据
+  smoke 结果宣称完整 release 门槛通过。
+- `build-openmpi-ucx/` 是 34 MB 的 ignored 可重建目录，且混有已移除 target 的旧静态库；在
+  全新构建和上述验证通过后已清理。规范构建目录统一为 `build/`。

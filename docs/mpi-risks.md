@@ -106,6 +106,7 @@
 | R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | rank0 aggregate或明确不支持；不能所有rankappend |
 | R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + 四类数值自检；同步；HostStaged fallback |
 | R27 | P2 | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | epoch/versioned views；迁移后统一capacity growth和重建 |
+| R28 | P0 | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `runtime.cu:80-129` | 非零rank无法chdir，异常路径可能collective hang | 待审批的每rank本地scratch和两阶段错误归约；见 [multi-node-io-plan.md](./multi-node-io-plan.md) |
 
 ## 4. PBC 与 triclinic 专项
 

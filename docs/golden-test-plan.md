@@ -20,7 +20,7 @@ GPUMD已有的 `tests_pytest/` 是重要起点。`tests_pytest/conftest.py:49-59
 
 ### 2.1 potential
 
-至少锁定以下原始文件，不做格式转换：
+至少锁定以下物理/语法分支：
 
 1. 单元素 `nep4`；
 2. 双元素 `nep4`，包含不同 type-pair；
@@ -30,7 +30,11 @@ GPUMD已有的 `tests_pytest/` 是重要起点。`tests_pytest/conftest.py:49-59
 6. typewise radial/angular cutoff；
 7. 专门构造的 cutoff/ZBL 边界文件（可能是invalid/UNKNOWN case）。
 
-所有potential保存SHA-256。rank 0读取后应记录参数buffer hash；各rank上传前host bytes/hash必须完全相同。
+当前长程 suite 直接锁定 NEP4 C、双元素 NEP4 water、universal NEP4-ZBL BaTiO3 三个原始
+文件，并从它们确定性生成数值等价的 NEP5、typewise radial/angular cutoff、flexible ZBL，
+另生成 typewise ZBL cutoff 分支。原始和生成后的完整 potential 都保存 SHA-256；变换器本身有
+CPU 单元测试，所有变体至少执行 GPUMD↔DMG-MD 静态/短轨迹比较。rank 0读取后应记录参数
+buffer hash；各rank上传前host bytes/hash必须完全相同。
 
 ### 2.2 model
 
@@ -178,9 +182,11 @@ rms_fluctuation = RMS(detrended E(t)/N)
 - 1/2/4 ranks的漂移不能随rank数系统恶化。
 
 当前已实现的执行入口为 `tests/long_nve/run_long_nve.py`，与短程 committed golden 分离。
-`release` profile 固定 100000 steps、十组显式初态和 1/2/4/8 ranks；`smoke`/`nightly` 分别为
-100/10000 steps。当前 fixture 是 4096-atom diamond C、12288-atom 确定性扰动水体系和
-5000-atom BaTiO3/ZBL 体系。生成器输出的每个完整 `model.xyz` 均由 manifest 锁定 SHA-256。
+`release` profile 固定 100000 steps、十组显式初态、1/2/4/8 ranks 和
+HostStaged/CudaAware 双后端；`smoke`/`nightly` 分别为 100/10000 steps。当前物理 fixture 是
+4096-atom diamond C、12288-atom 确定性扰动水体系和 5000-atom BaTiO3/ZBL 体系；上述四个
+potential 变体加入同一 profile，但只跑静态/短轨迹，避免对等价语法分支重复昂贵的长程统计。
+生成器输出的每个完整 `model.xyz` 均由 manifest 锁定 SHA-256。
 
 实现补充以下约束：
 
@@ -194,6 +200,22 @@ rms_fluctuation = RMS(detrended E(t)/N)
   candidate 失败后不得原地调宽；
 - 当前水与 ZBL fixture 是数值压力输入，不宣称是生产科学用的已平衡系综。若替换为预平衡
   样本，先用 GPUMD-only dt 扫描并审查全部输入哈希。
+
+### G7b — NVT统计、时间平均RDF与MSD
+
+三个物理 fixture 使用确定性显式初速和 `nvt_ber 300 300 100`，先执行不输出的平衡段，再在
+独立采样段输出 thermo 与含 `unwrapped_position` 的轨迹。对 GPUMD 和每个 DMG-MD
+rank/backend 配置计算：
+
+- 温度样本的 mean、population std、相对 300 K 的 RMSE、min/max；
+- 以采样段首帧为原点的 MSD mean/final/max 和线性斜率；
+- 对每帧按 global index 确定性选取至多 512 个中心，按元素有向对及壳层体积/数密度归一化
+  得到 partial `g_AB(r)`，随后逐 bin 做时间平均。
+
+温度与 MSD 对十初态分布的 median/q95 做**双侧** GPUMD 等价检查；RDF 检查所有元素对中最大
+的 mean absolute bin difference。阈值在 `manifest.json` 中预先固定。Berendsen 是确定性弱耦合
+温控，本门槛只证明 DMG-MD 与锁定 GPUMD 的实现/统计兼容，不宣称 canonical NVT 采样或
+fixture 已达到生产科学平衡。
 
 ### G8 — 输出格式与兼容错误
 

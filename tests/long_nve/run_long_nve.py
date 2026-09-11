@@ -58,12 +58,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seeds", type=integer_list)
     parser.add_argument("--ranks", type=integer_list)
     parser.add_argument(
-        "--backends", type=comma_list, default=["HostStaged"],
+        "--backends", type=comma_list,
         help="comma-separated HostStaged,CudaAware",
     )
     parser.add_argument(
-        "--sections", type=comma_list, default=["short", "long", "replay", "restart"],
-        help="comma-separated short,long,replay,restart",
+        "--sections", type=comma_list,
+        help="comma-separated short,long,replay,restart,nvt",
     )
     parser.add_argument("--timeout", type=int, default=7200, help="seconds allowed per process")
     parser.add_argument("--report", type=Path)
@@ -93,6 +93,7 @@ def resolve_selection(
     cases = args.cases or list(profile["cases"])
     seeds = args.seeds if args.seeds is not None else list(profile["seeds"])
     ranks = args.ranks if args.ranks is not None else list(profile["ranks"])
+    backends = args.backends if args.backends is not None else list(profile["backends"])
     if any(rank <= 0 for rank in ranks):
         raise baseline.BaselineError("MPI ranks must be positive")
     unknown_cases = sorted(set(cases) - set(manifest["cases"]))
@@ -101,13 +102,13 @@ def resolve_selection(
     unknown_seeds = sorted(set(seeds) - set(range(10)))
     if unknown_seeds:
         raise baseline.BaselineError(f"long-NVE seeds must be in [0,9]: {unknown_seeds}")
-    sections = list(args.sections)
-    unknown_sections = sorted(set(sections) - {"short", "long", "replay", "restart"})
+    sections = list(args.sections) if args.sections is not None else list(profile["sections"])
+    unknown_sections = sorted(set(sections) - {"short", "long", "replay", "restart", "nvt"})
     if unknown_sections:
         raise baseline.BaselineError(f"unknown long-NVE sections: {unknown_sections}")
     if "replay" in sections and "long" not in sections:
         raise baseline.BaselineError("replay requires the long section")
-    return profile, cases, seeds, ranks, normalized_backends(args.backends), sections
+    return profile, cases, seeds, ranks, normalized_backends(backends), sections
 
 
 def print_hashes(manifest: Mapping[str, Any]) -> None:
@@ -130,11 +131,7 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         potential = PROJECT_ROOT / case["potential"]
         if not potential.is_file():
             raise baseline.BaselineError(f"missing long-NVE potential: {potential}")
-        actual = baseline.sha256(potential)
-        if actual != case["potential_sha256"]:
-            raise baseline.BaselineError(
-                f"potential hash mismatch for {potential}: {actual}"
-            )
+        common.validate_generated_potential(case, common.generate_potential(case))
         for seed in range(10):
             common.validate_generated_model(case, seed, common.generate_model(case, seed))
 
@@ -167,14 +164,14 @@ def run_reference_stage(
     executable: Path,
     model: str,
     run: str,
-    potential: Path,
+    potential_text: str,
     directory: Path,
     env: Mapping[str, str],
     timeout: int,
     outputs: Sequence[str],
 ) -> Path:
     return common.execute_md(
-        executable, (), model, run, potential, directory, env, timeout, outputs
+        executable, (), model, run, potential_text, directory, env, timeout, outputs
     )
 
 
@@ -185,7 +182,7 @@ def run_candidate_stage(
     backend: str,
     model: str,
     run: str,
-    potential: Path,
+    potential_text: str,
     directory: Path,
     env: Mapping[str, str],
     timeout: int,
@@ -204,7 +201,7 @@ def run_candidate_stage(
         (str(mpiexec), "-n", str(ranks)),
         model,
         run,
-        potential,
+        potential_text,
         directory,
         stage_env,
         timeout,
@@ -229,11 +226,24 @@ def append_trajectory_metrics(
     return metrics, histogram
 
 
+def append_nvt_metrics(
+    stage: Path, case: Mapping[str, Any]
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    metrics = common.temperature_statistics(
+        stage / "thermo.out", float(case["nvt_temperature_K"])
+    )
+    metrics.update(common.msd_statistics(stage / "nvt.xyz"))
+    rdf = common.time_averaged_rdf(
+        stage / "nvt.xyz", float(case["rdf_rmax_A"]), int(case["rdf_bins"])
+    )
+    return metrics, rdf
+
+
 def replay_frames(
     source_trajectory: Path,
     evaluator: Path,
     launcher: Sequence[str],
-    potential: Path,
+    potential_text: str,
     root: Path,
     env: Mapping[str, str],
     timeout: int,
@@ -252,7 +262,7 @@ def replay_frames(
             launcher,
             common.frame_to_model(source_frame),
             common.static_run(),
-            potential,
+            potential_text,
             directory,
             evaluator_env,
             timeout,
@@ -277,6 +287,7 @@ def restart_transition(
     source_ranks: int,
     destination_ranks: int,
     model: str,
+    potential_text: str,
     case: Mapping[str, Any],
     profile: Mapping[str, Any],
     root: Path,
@@ -293,19 +304,17 @@ def restart_transition(
     run_b = common.restart_run(
         float(case["time_step_fs"]), half_steps, thermo_interval, "segment-b.xyz"
     )
-    potential = PROJECT_ROOT / case["potential"]
-
     reference_a = run_reference_stage(
-        reference, model, run_a, potential, root / "reference-a", reference_env, timeout,
+        reference, model, run_a, potential_text, root / "reference-a", reference_env, timeout,
         ("thermo.out", "restart.xyz", "segment-a.xyz"),
     )
     reference_restart_model = (reference_a / "restart.xyz").read_text(encoding="utf-8")
     reference_static = run_reference_stage(
-        reference, reference_restart_model, common.static_run(), potential,
+        reference, reference_restart_model, common.static_run(), potential_text,
         root / "reference-boundary", reference_env, timeout, ("thermo.out", "static.xyz"),
     )
     reference_b = run_reference_stage(
-        reference, reference_restart_model, run_b, potential, root / "reference-b",
+        reference, reference_restart_model, run_b, potential_text, root / "reference-b",
         reference_env, timeout, ("thermo.out", "restart.xyz", "segment-b.xyz"),
     )
     reference_metrics = common.nve_metrics(
@@ -316,7 +325,7 @@ def restart_transition(
         devices, source_ranks, backend, int(profile["communication_log_interval"])
     )
     actual_a = run_candidate_stage(
-        candidate, mpiexec, source_ranks, backend, model, run_a, potential,
+        candidate, mpiexec, source_ranks, backend, model, run_a, potential_text,
         root / f"candidate-r{source_ranks}-a", source_env, timeout,
         ("thermo.out", "restart.xyz", "segment-a.xyz"),
     )
@@ -331,7 +340,7 @@ def restart_transition(
     )
     actual_static = run_candidate_stage(
         candidate, mpiexec, destination_ranks, backend, actual_restart_model,
-        common.static_run(), potential, root / f"candidate-r{destination_ranks}-boundary",
+        common.static_run(), potential_text, root / f"candidate-r{destination_ranks}-boundary",
         destination_env, timeout, ("thermo.out", "static.xyz"),
     )
     common.compare_configuration_files(
@@ -339,7 +348,7 @@ def restart_transition(
         f"restart-boundary/{case['name']}/{backend}/r{source_ranks}-to-r{destination_ranks}",
     )
     actual_b = run_candidate_stage(
-        candidate, mpiexec, destination_ranks, backend, actual_restart_model, run_b, potential,
+        candidate, mpiexec, destination_ranks, backend, actual_restart_model, run_b, potential_text,
         root / f"candidate-r{destination_ranks}-b", destination_env, timeout,
         ("thermo.out", "restart.xyz", "segment-b.xyz"),
     )
@@ -418,27 +427,38 @@ def main() -> int:
     try:
         for case_name in case_names:
             case = manifest["cases"][case_name]
-            potential = PROJECT_ROOT / case["potential"]
+            potential_text = common.generate_potential(case)
+            common.validate_generated_potential(case, potential_text)
+            physics_case = case.get("coverage", "physics") == "physics"
             case_report: Dict[str, Any] = {
                 "atoms": case["atoms"],
                 "time_step_fs": case["time_step_fs"],
+                "coverage": case.get("coverage", "physics"),
+                "strict_differential": {},
                 "reference_metrics": {},
                 "candidate_metrics": {},
                 "pair_histogram_l1": {},
                 "replay_frames": {},
                 "noninferiority": {},
+                "nvt_reference_metrics": {},
+                "nvt_candidate_metrics": {},
+                "nvt_rdf_l1": {},
+                "nvt_equivalence": {},
                 "restart": [],
             }
             report["results"][case_name] = case_report
             reference_metrics_by_seed: Dict[int, Dict[str, float]] = {}
             candidate_metrics_by_config: Dict[str, Dict[int, Dict[str, float]]] = {}
+            reference_nvt_metrics_by_seed: Dict[int, Dict[str, float]] = {}
+            candidate_nvt_metrics_by_config: Dict[str, Dict[int, Dict[str, float]]] = {}
 
             for seed in seeds:
                 model = common.generate_model(case, seed)
                 common.validate_generated_model(case, seed, model)
                 seed_root = work_root / case_name / f"seed-{seed}"
                 reference_static = run_reference_stage(
-                    reference, model, common.static_run(), potential, seed_root / "reference-static",
+                    reference, model, common.static_run(), potential_text,
+                    seed_root / "reference-static",
                     reference_env, args.timeout, ("static.xyz", "thermo.out"),
                 )
                 reference_short = None
@@ -446,19 +466,19 @@ def main() -> int:
                     reference_short = run_reference_stage(
                         reference, model,
                         common.short_run(float(case["time_step_fs"]), int(profile["short_steps"])),
-                        potential, seed_root / "reference-short", reference_env, args.timeout,
+                        potential_text, seed_root / "reference-short", reference_env, args.timeout,
                         ("short.xyz", "thermo.out"),
                     )
                 reference_long = None
                 reference_histogram = None
-                if "long" in sections:
+                if "long" in sections and physics_case:
                     reference_long = run_reference_stage(
                         reference, model,
                         common.long_run(
                             float(case["time_step_fs"]), int(profile["steps"]),
                             int(profile["thermo_interval"]), int(profile["trajectory_interval"]),
                         ),
-                        potential, seed_root / "reference-long", reference_env, args.timeout,
+                        potential_text, seed_root / "reference-long", reference_env, args.timeout,
                         ("trajectory.xyz", "thermo.out", "restart.xyz"),
                     )
                     reference_metrics, reference_histogram = append_trajectory_metrics(
@@ -466,6 +486,33 @@ def main() -> int:
                     )
                     reference_metrics_by_seed[seed] = reference_metrics
                     case_report["reference_metrics"][str(seed)] = reference_metrics
+
+                reference_nvt_metrics = None
+                reference_nvt_rdf = None
+                if "nvt" in sections and physics_case:
+                    reference_nvt = run_reference_stage(
+                        reference,
+                        model,
+                        common.nvt_run(
+                            float(case["time_step_fs"]),
+                            int(profile["nvt_equilibration_steps"]),
+                            int(profile["nvt_sampling_steps"]),
+                            int(profile["nvt_thermo_interval"]),
+                            int(profile["nvt_trajectory_interval"]),
+                            float(case["nvt_temperature_K"]),
+                            float(profile["nvt_temperature_coupling"]),
+                        ),
+                        potential_text,
+                        seed_root / "reference-nvt",
+                        reference_env,
+                        args.timeout,
+                        ("nvt.xyz", "thermo.out"),
+                    )
+                    reference_nvt_metrics, reference_nvt_rdf = append_nvt_metrics(
+                        reference_nvt, case
+                    )
+                    reference_nvt_metrics_by_seed[seed] = reference_nvt_metrics
+                    case_report["nvt_reference_metrics"][str(seed)] = reference_nvt_metrics
 
                 for backend in backends:
                     for rank_count in ranks:
@@ -477,20 +524,21 @@ def main() -> int:
                         )
                         actual_static = run_candidate_stage(
                             candidate, mpiexec, rank_count, backend, model, common.static_run(),
-                            potential, config_root / "static", env, args.timeout,
+                            potential_text, config_root / "static", env, args.timeout,
                             ("static.xyz", "thermo.out"),
                         )
                         common.compare_configuration_files(
                             reference_static / "static.xyz", actual_static / "static.xyz", collector,
                             f"static/{case_name}/seed-{seed}/{config}",
                         )
+                        completed_strict_stages = ["static"]
                         if reference_short is not None:
                             actual_short = run_candidate_stage(
                                 candidate, mpiexec, rank_count, backend, model,
                                 common.short_run(
                                     float(case["time_step_fs"]), int(profile["short_steps"])
                                 ),
-                                potential, config_root / "short", env, args.timeout,
+                                potential_text, config_root / "short", env, args.timeout,
                                 ("short.xyz", "thermo.out"),
                             )
                             baseline.compare_xyz(
@@ -502,50 +550,107 @@ def main() -> int:
                                 reference_short / "thermo.out", actual_short / "thermo.out", collector,
                                 f"short/{case_name}/seed-{seed}/{config}/thermo.out",
                             )
-                        if reference_long is None or reference_histogram is None:
-                            continue
-                        actual_long = run_candidate_stage(
-                            candidate, mpiexec, rank_count, backend, model,
-                            common.long_run(
-                                float(case["time_step_fs"]), int(profile["steps"]),
-                                int(profile["thermo_interval"]),
-                                int(profile["trajectory_interval"]),
-                            ),
-                            potential, config_root / "long", env, args.timeout,
-                            ("trajectory.xyz", "thermo.out", "restart.xyz"),
-                        )
-                        actual_metrics, actual_histogram = append_trajectory_metrics(
-                            actual_static, actual_long, case
-                        )
-                        candidate_metrics_by_config.setdefault(config, {})[seed] = actual_metrics
-                        case_report["candidate_metrics"].setdefault(config, {})[str(seed)] = actual_metrics
-                        histogram_l1 = common.histogram_l1(reference_histogram, actual_histogram)
-                        case_report["pair_histogram_l1"].setdefault(config, {})[str(seed)] = histogram_l1
-                        if histogram_l1 > float(manifest["acceptance"]["pair_histogram_l1_limit"]):
-                            raise baseline.BaselineError(
-                                f"{case_name}/seed-{seed}/{config}: pair histogram L1 "
-                                f"{histogram_l1:.6e} exceeds limit"
+                            completed_strict_stages.append("short")
+                        case_report["strict_differential"].setdefault(config, {})[
+                            str(seed)
+                        ] = completed_strict_stages
+                        if reference_long is not None and reference_histogram is not None:
+                            actual_long = run_candidate_stage(
+                                candidate, mpiexec, rank_count, backend, model,
+                                common.long_run(
+                                    float(case["time_step_fs"]), int(profile["steps"]),
+                                    int(profile["thermo_interval"]),
+                                    int(profile["trajectory_interval"]),
+                                ),
+                                potential_text, config_root / "long", env, args.timeout,
+                                ("trajectory.xyz", "thermo.out", "restart.xyz"),
                             )
-                        if "replay" in sections:
-                            forward = replay_frames(
-                                reference_long / "trajectory.xyz", candidate,
-                                (str(mpiexec), "-n", str(rank_count)), potential,
-                                config_root / "replay-reference-in-candidate", env, args.timeout,
-                                collector, f"replay-reference/{case_name}/seed-{seed}/{config}",
-                                (rank_count, backend),
+                            actual_metrics, actual_histogram = append_trajectory_metrics(
+                                actual_static, actual_long, case
                             )
-                            reverse = replay_frames(
-                                actual_long / "trajectory.xyz", reference, (), potential,
-                                config_root / "replay-candidate-in-reference", reference_env,
-                                args.timeout, collector,
-                                f"replay-candidate/{case_name}/seed-{seed}/{config}", None,
+                            candidate_metrics_by_config.setdefault(config, {})[seed] = actual_metrics
+                            case_report["candidate_metrics"].setdefault(config, {})[
+                                str(seed)
+                            ] = actual_metrics
+                            histogram_l1 = common.histogram_l1(
+                                reference_histogram, actual_histogram
                             )
-                            case_report["replay_frames"].setdefault(config, {})[str(seed)] = {
-                                "reference_in_candidate": forward,
-                                "candidate_in_reference": reverse,
-                            }
+                            case_report["pair_histogram_l1"].setdefault(config, {})[
+                                str(seed)
+                            ] = histogram_l1
+                            if histogram_l1 > float(
+                                manifest["acceptance"]["pair_histogram_l1_limit"]
+                            ):
+                                raise baseline.BaselineError(
+                                    f"{case_name}/seed-{seed}/{config}: pair histogram L1 "
+                                    f"{histogram_l1:.6e} exceeds limit"
+                                )
+                            if "replay" in sections:
+                                forward = replay_frames(
+                                    reference_long / "trajectory.xyz", candidate,
+                                    (str(mpiexec), "-n", str(rank_count)), potential_text,
+                                    config_root / "replay-reference-in-candidate", env,
+                                    args.timeout, collector,
+                                    f"replay-reference/{case_name}/seed-{seed}/{config}",
+                                    (rank_count, backend),
+                                )
+                                reverse = replay_frames(
+                                    actual_long / "trajectory.xyz", reference, (), potential_text,
+                                    config_root / "replay-candidate-in-reference", reference_env,
+                                    args.timeout, collector,
+                                    f"replay-candidate/{case_name}/seed-{seed}/{config}", None,
+                                )
+                                case_report["replay_frames"].setdefault(config, {})[
+                                    str(seed)
+                                ] = {
+                                    "reference_in_candidate": forward,
+                                    "candidate_in_reference": reverse,
+                                }
 
-            if "long" in sections:
+                        if reference_nvt_metrics is not None and reference_nvt_rdf is not None:
+                            actual_nvt = run_candidate_stage(
+                                candidate,
+                                mpiexec,
+                                rank_count,
+                                backend,
+                                model,
+                                common.nvt_run(
+                                    float(case["time_step_fs"]),
+                                    int(profile["nvt_equilibration_steps"]),
+                                    int(profile["nvt_sampling_steps"]),
+                                    int(profile["nvt_thermo_interval"]),
+                                    int(profile["nvt_trajectory_interval"]),
+                                    float(case["nvt_temperature_K"]),
+                                    float(profile["nvt_temperature_coupling"]),
+                                ),
+                                potential_text,
+                                config_root / "nvt",
+                                env,
+                                args.timeout,
+                                ("nvt.xyz", "thermo.out"),
+                            )
+                            actual_nvt_metrics, actual_nvt_rdf = append_nvt_metrics(
+                                actual_nvt, case
+                            )
+                            candidate_nvt_metrics_by_config.setdefault(config, {})[
+                                seed
+                            ] = actual_nvt_metrics
+                            case_report["nvt_candidate_metrics"].setdefault(config, {})[
+                                str(seed)
+                            ] = actual_nvt_metrics
+                            nvt_rdf_l1 = common.rdf_l1(reference_nvt_rdf, actual_nvt_rdf)
+                            case_report["nvt_rdf_l1"].setdefault(config, {})[
+                                str(seed)
+                            ] = nvt_rdf_l1
+                            if nvt_rdf_l1 > float(
+                                manifest["statistical_acceptance"]["rdf_time_average_l1_limit"]
+                            ):
+                                raise baseline.BaselineError(
+                                    f"{case_name}/seed-{seed}/{config}: time-averaged RDF L1 "
+                                    f"{nvt_rdf_l1:.6e} exceeds limit"
+                                )
+
+            if "long" in sections and physics_case:
                 ordered_reference = [reference_metrics_by_seed[seed] for seed in seeds]
                 acceptance = manifest["acceptance"]
                 for config, values_by_seed in candidate_metrics_by_config.items():
@@ -557,7 +662,19 @@ def main() -> int:
                     )
                     case_report["noninferiority"][config] = comparison
 
-            if "restart" in sections:
+            if "nvt" in sections and physics_case:
+                ordered_reference = [reference_nvt_metrics_by_seed[seed] for seed in seeds]
+                for config, values_by_seed in candidate_nvt_metrics_by_config.items():
+                    ordered_actual = [values_by_seed[seed] for seed in seeds]
+                    comparison = common.enforce_distribution_equivalence(
+                        ordered_reference,
+                        ordered_actual,
+                        manifest["statistical_acceptance"]["metrics"],
+                        f"nvt/{case_name}/{config}",
+                    )
+                    case_report["nvt_equivalence"][config] = comparison
+
+            if "restart" in sections and physics_case:
                 restart_seed = seeds[0]
                 restart_model = common.generate_model(case, restart_seed)
                 transitions = [(min(ranks), max(ranks))]
@@ -571,7 +688,8 @@ def main() -> int:
                         )
                         result = restart_transition(
                             reference, candidate, mpiexec, reference_env, devices, backend,
-                            source_ranks, destination_ranks, restart_model, case, profile,
+                            source_ranks, destination_ranks, restart_model, potential_text,
+                            case, profile,
                             transition_root, args.timeout, collector,
                         )
                         result["backend"] = backend

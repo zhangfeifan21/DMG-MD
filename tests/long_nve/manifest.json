@@ -10,30 +10,63 @@
       "short_steps": 10,
       "thermo_interval": 10,
       "trajectory_interval": 50,
+      "nvt_equilibration_steps": 20,
+      "nvt_sampling_steps": 100,
+      "nvt_thermo_interval": 10,
+      "nvt_trajectory_interval": 50,
+      "nvt_temperature_coupling": 100,
       "communication_log_interval": 10,
       "ranks": [1],
       "seeds": [0],
-      "cases": ["carbon_crystal"]
+      "backends": ["HostStaged"],
+      "sections": ["short", "long", "replay", "restart", "nvt"],
+      "cases": [
+        "carbon_crystal", "dense_water", "batio3_zbl", "carbon_nep5",
+        "dense_water_typewise_cutoff", "batio3_flexible_zbl",
+        "batio3_typewise_zbl_cutoff"
+      ]
     },
     "nightly": {
       "steps": 10000,
       "short_steps": 100,
       "thermo_interval": 100,
       "trajectory_interval": 1000,
+      "nvt_equilibration_steps": 1000,
+      "nvt_sampling_steps": 10000,
+      "nvt_thermo_interval": 100,
+      "nvt_trajectory_interval": 1000,
+      "nvt_temperature_coupling": 100,
       "communication_log_interval": 100,
       "ranks": [1, 2, 4],
       "seeds": [0],
-      "cases": ["carbon_crystal", "dense_water", "batio3_zbl"]
+      "backends": ["HostStaged", "CudaAware"],
+      "sections": ["short", "long", "replay", "restart", "nvt"],
+      "cases": [
+        "carbon_crystal", "dense_water", "batio3_zbl", "carbon_nep5",
+        "dense_water_typewise_cutoff", "batio3_flexible_zbl",
+        "batio3_typewise_zbl_cutoff"
+      ]
     },
     "release": {
       "steps": 100000,
       "short_steps": 100,
       "thermo_interval": 100,
       "trajectory_interval": 10000,
+      "nvt_equilibration_steps": 10000,
+      "nvt_sampling_steps": 100000,
+      "nvt_thermo_interval": 100,
+      "nvt_trajectory_interval": 5000,
+      "nvt_temperature_coupling": 100,
       "communication_log_interval": 100,
       "ranks": [1, 2, 4, 8],
       "seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-      "cases": ["carbon_crystal", "dense_water", "batio3_zbl"]
+      "backends": ["HostStaged", "CudaAware"],
+      "sections": ["short", "long", "replay", "restart", "nvt"],
+      "cases": [
+        "carbon_crystal", "dense_water", "batio3_zbl", "carbon_nep5",
+        "dense_water_typewise_cutoff", "batio3_flexible_zbl",
+        "batio3_typewise_zbl_cutoff"
+      ]
     }
   },
   "acceptance": {
@@ -54,6 +87,17 @@
     },
     "pair_histogram_l1_limit": 0.10
   },
+  "statistical_acceptance": {
+    "rdf_time_average_l1_limit": 0.10,
+    "metrics": {
+      "temperature_mean_K": {"relative": 0.02, "absolute": 2.0},
+      "temperature_std_K": {"relative": 0.25, "absolute": 2.0},
+      "temperature_rmse_K": {"relative": 0.25, "absolute": 2.0},
+      "msd_mean_A2": {"relative": 0.25, "absolute": 1e-4},
+      "msd_final_A2": {"relative": 0.25, "absolute": 1e-4},
+      "msd_slope_A2_per_fs": {"relative": 0.25, "absolute": 1e-8}
+    }
+  },
   "cases": {
     "carbon_crystal": {
       "name": "carbon_crystal",
@@ -64,6 +108,8 @@
       "masses_amu": {"C": 12.011},
       "velocity_scale_A_fs_sqrt_amu": 0.014,
       "time_step_fs": 0.1,
+      "nvt_temperature_K": 300.0,
+      "coverage": "physics",
       "potential": "tests/baseline/inputs/potentials/nep_C.txt",
       "potential_sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
       "rdf_rmax_A": 6.0,
@@ -91,6 +137,8 @@
       "masses_amu": {"O": 15.9994, "H": 1.00794},
       "velocity_scale_A_fs_sqrt_amu": 0.014,
       "time_step_fs": 0.1,
+      "nvt_temperature_K": 300.0,
+      "coverage": "physics",
       "potential": "tests/baseline/inputs/potentials/nep_water.txt",
       "potential_sha256": "8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3",
       "rdf_rmax_A": 6.0,
@@ -119,6 +167,8 @@
       "masses_amu": {"Ba": 137.327, "Ti": 47.867, "O": 15.9994},
       "velocity_scale_A_fs_sqrt_amu": 0.014,
       "time_step_fs": 0.01,
+      "nvt_temperature_K": 300.0,
+      "coverage": "physics",
       "potential": "tests/baseline/inputs/potentials/nep_BaTiO3_zbl.txt",
       "potential_sha256": "d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02",
       "rdf_rmax_A": 6.0,
@@ -135,6 +185,30 @@
         "8": "af64db1c12ba1e94282c1c74ac7bb4c0dd0c82caf7ca2a398a0ec745be672786",
         "9": "bae879616c2d42e44811d089a5d1d3f15db18e37923cfcf402e9c19555fd235e"
       }
+    },
+    "carbon_nep5": {
+      "base_case": "carbon_crystal",
+      "coverage": "compatibility",
+      "potential_transforms": ["nep5_equivalent"],
+      "potential_sha256": "685fcc2b4eab8fa7e87de3f2112389a54f1940b12df9f276c06b82d0cf60d182"
+    },
+    "dense_water_typewise_cutoff": {
+      "base_case": "dense_water",
+      "coverage": "compatibility",
+      "potential_transforms": ["typewise_cutoff_equivalent"],
+      "potential_sha256": "4490b7c6e6ae833fd61626b5e46f64b3e9d0895f9e3a972193089442d6fb7bcd"
+    },
+    "batio3_flexible_zbl": {
+      "base_case": "batio3_zbl",
+      "coverage": "compatibility",
+      "potential_transforms": ["flexible_zbl_equivalent"],
+      "potential_sha256": "a29c98bafffae918404fec122a478567851ab1cbe557e482f3e235d6f08d5954"
+    },
+    "batio3_typewise_zbl_cutoff": {
+      "base_case": "batio3_zbl",
+      "coverage": "compatibility",
+      "potential_transforms": ["typewise_zbl_cutoff"],
+      "potential_sha256": "bcf5b4c69661cbb7f529f18a0ef1416eac69b1ee0c2f3765917d5c8397edd2f4"
     }
   }
 }
