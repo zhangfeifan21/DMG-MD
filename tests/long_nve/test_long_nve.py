@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import long_nve_common as common
+import run_long_nve as runner
 
 
 class LongNveTests(unittest.TestCase):
@@ -20,6 +25,12 @@ class LongNveTests(unittest.TestCase):
                 text = common.generate_model(case, seed)
                 common.validate_generated_model(case, seed, text)
                 self.assertEqual(int(text.splitlines()[0]), case["atoms"])
+
+    def test_retry_count_must_be_nonnegative(self) -> None:
+        self.assertEqual(runner.nonnegative_integer("0"), 0)
+        self.assertEqual(runner.nonnegative_integer("2"), 2)
+        with self.assertRaises(argparse.ArgumentTypeError):
+            runner.nonnegative_integer("-1")
 
     def test_all_generated_potentials_match_locked_hashes(self) -> None:
         for case in self.manifest["cases"].values():
@@ -236,6 +247,170 @@ class LongNveTests(unittest.TestCase):
                 {"metric": {"relative": 0.1, "absolute": 0.1}},
                 "unit",
             )
+
+    def test_execute_md_reuses_only_completed_matching_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "fake-md.py"
+            executable.write_text(
+                "\n".join(
+                    (
+                        f"#!{sys.executable}",
+                        "from pathlib import Path",
+                        "counter = Path('runs.txt')",
+                        "count = int(counter.read_text()) + 1 if counter.exists() else 1",
+                        "counter.write_text(str(count))",
+                        "Path('result.out').write_text('complete\\n')",
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            stage = root / "stage"
+            arguments = (
+                executable,
+                (),
+                "model\n",
+                "run\n",
+                "potential\n",
+                stage,
+                os.environ,
+                10,
+                ("result.out",),
+            )
+            common.execute_md(*arguments, resume=True)
+            common.execute_md(*arguments, resume=True)
+            self.assertEqual((stage / "runs.txt").read_text(encoding="utf-8"), "1")
+            self.assertEqual(common.stage_checkpoint_provenance(stage), "executed")
+            (stage / "result.out").write_text("corrupt\n", encoding="utf-8")
+            common.execute_md(*arguments, resume=True)
+            self.assertEqual((stage / "result.out").read_text(encoding="utf-8"), "complete\n")
+            self.assertEqual(len(list(root.glob("stage.failed-*"))), 1)
+
+    def test_execute_md_can_explicitly_adopt_legacy_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "unused-md.py"
+            executable.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+            executable.chmod(0o755)
+            stage = root / "stage"
+            stage.mkdir()
+            for name, text in (
+                ("model.xyz", "model\n"),
+                ("run.in", "run\n"),
+                ("nep.txt", "potential\n"),
+                ("result.out", "complete\n"),
+                ("execution.stdout", "legacy output\n"),
+                ("execution.stderr", ""),
+            ):
+                (stage / name).write_text(text, encoding="utf-8")
+            common.execute_md(
+                executable,
+                (),
+                "model\n",
+                "run\n",
+                "potential\n",
+                stage,
+                os.environ,
+                10,
+                ("result.out",),
+                resume=True,
+                adopt_existing=True,
+            )
+            self.assertEqual(
+                common.stage_checkpoint_provenance(stage),
+                "adopted-existing-unverified-executable",
+            )
+
+    def test_execute_md_retries_once_from_a_clean_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            counter = root / "attempts.txt"
+            executable = root / "fake-transient.py"
+            executable.write_text(
+                "\n".join(
+                    (
+                        f"#!{sys.executable}",
+                        "import sys",
+                        "from pathlib import Path",
+                        f"counter = Path({str(counter)!r})",
+                        "attempt = int(counter.read_text()) + 1 if counter.exists() else 1",
+                        "counter.write_text(str(attempt))",
+                        "if attempt == 1:",
+                        "    Path('partial.out').write_text('must not survive retry\\n')",
+                        "    print('transient failure', file=sys.stderr)",
+                        "    sys.exit(1)",
+                        "assert not Path('partial.out').exists()",
+                        "Path('result.out').write_text('complete\\n')",
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            stage = root / "stage"
+            common.execute_md(
+                executable,
+                (),
+                "model\n",
+                "run\n",
+                "potential\n",
+                stage,
+                os.environ,
+                10,
+                ("result.out",),
+            )
+            self.assertEqual(counter.read_text(encoding="utf-8"), "2")
+            self.assertFalse((stage / "partial.out").exists())
+            checkpoint = json.loads(
+                (stage / common.STAGE_COMPLETE_NAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(checkpoint["attempt"], 2)
+            self.assertEqual(checkpoint["max_attempts"], 2)
+            self.assertEqual(len(checkpoint["retry_failures"]), 1)
+            archived = list(root.glob("stage.failed-attempt-1-*"))
+            self.assertEqual(len(archived), 1)
+            self.assertIn(
+                "transient failure",
+                (archived[0] / "execution.stderr").read_text(encoding="utf-8"),
+            )
+
+    def test_execute_md_records_cuda_oom_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            counter = root / "attempts.txt"
+            executable = root / "fake-oom.py"
+            executable.write_text(
+                f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+                f"counter = Path({str(counter)!r})\n"
+                "attempt = int(counter.read_text()) + 1 if counter.exists() else 1\n"
+                "counter.write_text(str(attempt))\n"
+                "print('CUDA Error: out of memory', file=sys.stderr)\nsys.exit(1)\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            stage = root / "stage"
+            with self.assertRaises(common.baseline.BaselineError):
+                common.execute_md(
+                    executable,
+                    (),
+                    "model\n",
+                    "run\n",
+                    "potential\n",
+                    stage,
+                    os.environ,
+                    10,
+                    ("result.out",),
+                    resume=True,
+                )
+            failure = json.loads(
+                (stage / common.STAGE_FAILURE_NAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(failure["failure"], "cuda-out-of-memory")
+            self.assertEqual(failure["attempt"], 2)
+            self.assertEqual(failure["max_attempts"], 2)
+            self.assertEqual(counter.read_text(encoding="utf-8"), "2")
 
 
 if __name__ == "__main__":

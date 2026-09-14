@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -938,6 +940,82 @@ void MpiRuntime::log_step_communication(
             << " host_to_device_bytes_global=" << volume.host_to_device_bytes_global
             << " output_download_bytes=" << volume.output_download_bytes << '\n';
   std::cout.flush();
+}
+
+void MpiRuntime::log_timing(
+    const char* phase,
+    std::uint64_t sequence,
+    std::uint64_t steps,
+    std::size_t atoms,
+    double elapsed_seconds) const
+{
+  if (phase == nullptr || phase[0] == '\0') {
+    throw std::invalid_argument("timing phase must not be empty");
+  }
+  if (!std::isfinite(elapsed_seconds) || elapsed_seconds < 0.0) {
+    throw std::invalid_argument("timing duration must be finite and non-negative");
+  }
+  double minimum = 0.0;
+  double maximum = 0.0;
+  double sum = 0.0;
+  check_mpi(MPI_Reduce(&elapsed_seconds, &minimum, 1, MPI_DOUBLE, MPI_MIN, 0,
+                       MPI_COMM_WORLD),
+            "reduce minimum runtime timing");
+  check_mpi(MPI_Reduce(&elapsed_seconds, &maximum, 1, MPI_DOUBLE, MPI_MAX, 0,
+                       MPI_COMM_WORLD),
+            "reduce maximum runtime timing");
+  check_mpi(MPI_Reduce(&elapsed_seconds, &sum, 1, MPI_DOUBLE, MPI_SUM, 0,
+                       MPI_COMM_WORLD),
+            "reduce mean runtime timing");
+  if (!is_root()) return;
+
+  const double mean = sum / static_cast<double>(world_size());
+  const double atom_steps =
+      static_cast<double>(atoms) * static_cast<double>(steps);
+  const double throughput = maximum > 0.0 ? atom_steps / maximum : 0.0;
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(9)
+       << "DMGMD_TIMING phase=" << phase
+       << " sequence=" << sequence
+       << " steps=" << steps
+       << " atoms=" << atoms
+       << " ranks=" << world_size()
+       << " backend=" << backend_name()
+       << " seconds_min=" << minimum
+       << " seconds_mean=" << mean
+       << " seconds_max=" << maximum
+       << " global_atom_steps_per_second=" << throughput;
+  std::cout << line.str() << '\n';
+  std::cout.flush();
+}
+
+void MpiRuntime::report_error(const char* category, const std::string& message) const
+{
+  // Do not use an MPI collective here. A peer may still be blocked inside a
+  // failed collective or CUDA call, so gathering diagnostics before MPI_Abort
+  // could deadlock and hide the original failure. Open MPI/PRRTE forwards each
+  // remote rank's stderr to mpirun; the launcher-side test process captures the
+  // merged stream on the node from which the job was started.
+  std::string escaped;
+  escaped.reserve(message.size());
+  for (const char value : message) {
+    switch (value) {
+      case '\\': escaped += "\\\\"; break;
+      case '"': escaped += "\\\""; break;
+      case '\n': escaped += "\\n"; break;
+      case '\r': escaped += "\\r"; break;
+      default: escaped += value; break;
+    }
+  }
+  std::ostringstream record;
+  record << "DMGMD_ERROR rank=" << world_rank()
+         << " local_rank=" << local_rank()
+         << " hostname=" << impl_->hostname
+         << " category=" << (category == nullptr ? "unknown" : category)
+         << " message=\"" << escaped << "\"\n";
+  const std::string line = record.str();
+  std::fwrite(line.data(), sizeof(char), line.size(), stderr);
+  std::fflush(stderr);
 }
 
 [[noreturn]] void MpiRuntime::abort(int error_code) const

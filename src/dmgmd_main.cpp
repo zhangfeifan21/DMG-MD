@@ -12,16 +12,16 @@
 
 namespace {
 
-void print_input_error(const dmgmd::InputError& error)
+std::string describe_input_error(const dmgmd::InputError& error)
 {
+  std::string message = error.what();
   const auto& location = error.location();
-  std::cerr << "dmg-md input error";
   if (!location.file.empty()) {
-    std::cerr << " at " << location.file;
-    if (location.line != 0) std::cerr << ':' << location.line;
+    message += " at " + location.file;
+    if (location.line != 0) message += ':' + std::to_string(location.line);
   }
-  std::cerr << ": " << error.what() << '\n';
-  if (!location.text.empty()) std::cerr << "  " << location.text << '\n';
+  if (!location.text.empty()) message += " [" + location.text + ']';
+  return message;
 }
 
 }  // namespace
@@ -73,13 +73,11 @@ int main(int argc, char** argv)
       dmgmd::run_replicated(program, std::move(model), *potential_filename, mpi);
       return EXIT_SUCCESS;
     } catch (const dmgmd::InputError& error) {
-      if (mpi.is_root()) print_input_error(error);
+      mpi.report_error("input", describe_input_error(error));
       if (mpi.world_size() > 1) mpi.abort(EXIT_FAILURE);
       return EXIT_FAILURE;
     } catch (const std::exception& error) {
-      if (mpi.is_root()) {
-        std::cerr << "dmg-md runtime error: " << error.what() << '\n';
-      }
+      mpi.report_error("runtime", error.what());
       if (mpi.world_size() > 1) mpi.abort(EXIT_FAILURE);
       return EXIT_FAILURE;
     }

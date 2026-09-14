@@ -79,7 +79,35 @@ python3 tests/long_nve/run_long_nve.py \
 ```
 
 `--cases`、`--seeds`、`--ranks` 和 `--sections short,long,replay,restart,nvt` 可缩小诊断范围。
-失败时临时工作目录总是保留；成功时只有显式 `--report` 指定的 JSON 报告会保留。
+每个 MD stage 默认在失败后用相同参数从干净目录重试一次（最多两次尝试）；`--retries N` 可调整
+额外尝试次数，`--retries 0` 可关闭重试。失败时临时工作目录总是保留；成功时只有显式
+`--report` 指定的 JSON 报告会保留。
+
+运行器为每个成功 stage 原子写入 `.dmgmd-stage-complete.json`，记录输入、可执行文件、launcher、
+关键环境和输出哈希；失败 stage 写入 `.dmgmd-stage-failure.json`。从失败处续跑时，使用日志末尾
+给出的 retained work directory，并保持原 profile/selection/candidate 不变：
+
+```text
+python3 tests/long_nve/run_long_nve.py \
+  --candidate ./build/dmg-md \
+  --devices 0,1,2,3,4,5,6,7 --profile release \
+  --report /persistent/path/dmgmd-long-nve-release.json \
+  --keep-work \
+  --resume-work /persistent/path/work/dmgmd-long-nve-release-XXXXXXXX
+```
+
+续跑会重新核验 checkpoint 和输出哈希、重做 Python 数值比较，但不会重新启动已经完成的 MD
+stage；失败或不匹配的旧 stage 会保留为 `.failed-<UTC>` 后再执行。一次 stage 内触发重试时，
+失败尝试保留为 `.failed-attempt-<N>-<UTC>`，其中包含该次的 stdout、stderr 和 failure JSON；
+新尝试重新创建原 stage 目录，避免半成品输出污染重试。checkpoint 功能加入之前的
+工作目录没有可验证的可执行文件身份，只能显式增加 `--adopt-existing` 做一次迁移；报告会标记
+这种 provenance 为 unverified，不应在生产代码发生物理变化后采用。
+
+终端以 `LONG_NVE_PLAN`、`LONG_NVE_CONFIG` 和 `LONG_NVE_STAGE` 记录总配置数、已完成/待完成数、
+当前 stage、复用和失败状态。DMG-MD 的每个 `execution.stdout` 还包含机器可解析的
+`DMGMD_TIMING`：`phase=run` 是同步后的每个 run segment（包含通信和该段输出），`phase=total`
+是 replicated runtime 总耗时；`global_atom_steps_per_second` 使用全局原子数和所有 rank 中的
+最大耗时计算，不把 replicated-full NEP 的重复计算量算成额外吞吐。
 
 ## 验收内容
 

@@ -1055,6 +1055,7 @@ void run_replicated(
     const std::string& potential_filename,
     MpiRuntime& mpi)
 {
+  const auto total_started = std::chrono::steady_clock::now();
   // The full Model is replicated input. `owned` below is the only authority
   // for integration, thermodynamics and output; this phase has no ghosts or
   // atom migration. Keep this boundary aligned with docs/replicated-mpi.md.
@@ -1099,6 +1100,7 @@ void run_replicated(
   std::vector<Measurement> measurements;
   double global_time = 0.0;
   std::uint64_t global_step = 0;
+  std::uint64_t run_sequence = 0;
 
   for (const Command& command : program.commands) {
     try {
@@ -1134,9 +1136,19 @@ void run_replicated(
       } else if (const auto* run = std::get_if<RunCommand>(&command.data)) {
         if (!potential_seen) throw std::runtime_error("run requires a preceding potential command");
         if (!ensemble) throw std::runtime_error("run requires a preceding ensemble command");
+        check_cuda(cudaDeviceSynchronize(), "synchronize before timed run segment");
+        mpi.barrier();
+        const auto segment_started = std::chrono::steady_clock::now();
         run_segment(run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
                     measurements, global_time, global_step, box, model.atoms, atoms, *force,
                     owned, mpi);
+        check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
+        const double segment_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - segment_started).count();
+        mpi.log_timing(
+            "run", run_sequence, static_cast<std::uint64_t>(run->steps),
+            model.atoms.counts.global_count, segment_seconds);
+        ++run_sequence;
         measurements.clear();
         velocity_correction.reset();
         maximum_distance.reset();
@@ -1154,6 +1166,10 @@ void run_replicated(
   check_cuda(cudaDeviceSynchronize(), "finish replicated MPI run");
   force.reset();
   rank_io.finish();
+  const double total_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - total_started).count();
+  mpi.log_timing(
+      "total", 0, global_step, model.atoms.counts.global_count, total_seconds);
 }
 
 }  // namespace dmgmd

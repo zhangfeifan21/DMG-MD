@@ -95,6 +95,28 @@ HostStaged 同一步的 D2H/H2D 分别也是 `48N + 64P` 和 `48NP + 64P`。adap
 增加同量 D2H；CudaAware 在 rank 0 增加同量 output download。启动日志、输入 fingerprint 和
 中心 coverage 属于一次性 control-plane 通信，不计入 step 行。
 
+## 时间记录
+
+rank 0 为每个 `run` command 输出一行 `DMGMD_TIMING phase=run`，并在作业结束输出一行
+`phase=total`。run segment 在计时前执行 CUDA synchronize 和 MPI barrier，结束后再次同步
+CUDA；记录各 rank wall time 的 min/mean/max。`global_atom_steps_per_second` 使用
+`global_count * steps / seconds_max`，表示用户问题规模的吞吐，不把 replicated-full NEP 在各
+rank 的重复计算量累计为额外工作。`phase=run` 包含该 segment 的 MPI collective 与输出，
+`phase=total` 还包含 replicated runtime 初始化和清理。
+
+这些数据是诊断记录，不是当前正确性 suite 的性能验收门槛；当前 replicated-data 原型也不据此
+发布 speedup 或 scaling 结论。
+
+## 异常日志
+
+进入 `MPI_Abort` 前，发生异常的 rank 向 stderr 写入并立即 flush 一条
+`DMGMD_ERROR rank=... local_rank=... hostname=... category=... message="..."`。异常路径不调用
+`MPI_Gather` 或其他 collective：某些 peer 可能仍阻塞在 CUDA/MPI 调用中，此时为了聚合日志而
+执行 collective 会死锁并掩盖原始错误。Open MPI/PRRTE 的 I/O forwarding 负责把多节点 rank
+的 stderr 转发到 `mpirun` 启动端（本项目部署约定中为 rank 0 所在节点）；测试运行器捕获这个
+合并后的 stderr 并保存为 `execution.stderr`。记录中的 world rank 与 hostname 用于区分来源，
+记录顺序不作为执行顺序证据。
+
 ## I/O 与 NEP_MULTIGPU
 
 所有 thermo/XYZ/restart formatter 只在 world rank 0 调用。GPUMD ordinary NEP 内部会周期性
@@ -123,8 +145,8 @@ capability、UCX `cuda_copy/cuda_ipc`、GPU 唯一绑定及实际 device-pointer
 100000-step release 正确性验收，包括真实 `E(0)`、长期守恒统计、确定性 NVT 温度统计、时间
 平均 RDF、MSD、GPUMD↔DMG-MD 双向静态构型回放及跨 rank restart。release/nightly 同时覆盖
 NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL cutoff 的静态/短轨迹分支，并默认执行
-HostStaged 与 CudaAware。它不测 wall time、吞吐、speedup 或 scaling；replicated-full NEP
-阶段不发布多卡性能结论。
+HostStaged 与 CudaAware。它保存 wall time/吞吐诊断但不设置性能通过门槛；replicated-full NEP
+阶段不发布多卡 speedup 或 scaling 结论。
 
 ## 后续演进
 

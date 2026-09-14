@@ -76,7 +76,13 @@ passed，生产 collective 才能接收 device pointer；否则回退 `HostStage
 rank、CUDA ordinal/UUID、capability、自检结果、实际 backend 和 ordinary single-device NEP
 策略。默认每步的 collective buffer 字节数写到 rank 0 stdout；长期正确性测试可设置正整数
 `DMGMD_COMM_LOG_INTERVAL` 做低频采样。物理链路字节数取决于 collective 算法，不伪装成
-精确值。
+精确值。每个 run segment 和整个 replicated runtime 还会输出 rank 0 汇总的 `DMGMD_TIMING`，
+包含各 rank wall time 的 min/mean/max 和按最慢 rank 计算的全局 atom-steps/s；它是诊断记录，
+不是当前正确性 suite 的性能通过门槛。
+
+发生异常时，出错 rank 会在 `MPI_Abort` 前写入并 flush 一条带 world/local rank、hostname 和
+错误类别的 `DMGMD_ERROR` 到 stderr。异常路径不执行可能死锁的 MPI 日志汇聚；Open MPI/PRRTE
+把远端 stderr 转发到 `mpirun` 启动端，由调用方统一捕获。
 
 在同时包含 `run.in` 和 `model.xyz` 的工作目录执行：
 

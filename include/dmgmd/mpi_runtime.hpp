@@ -83,6 +83,13 @@ class MpiRuntime {
 
   double allreduce_max_host(double value, CommunicationVolume& volume) const;
   void log_step_communication(std::uint64_t step, const CommunicationVolume& volume) const;
+  void log_timing(
+      const char* phase,
+      std::uint64_t sequence,
+      std::uint64_t steps,
+      std::size_t atoms,
+      double elapsed_seconds) const;
+  void report_error(const char* category, const std::string& message) const;
 
   [[noreturn]] void abort(int error_code) const;
 

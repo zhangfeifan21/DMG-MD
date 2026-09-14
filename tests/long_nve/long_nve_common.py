@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import itertools
 import json
 import math
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -21,6 +24,15 @@ import run_baselines as baseline  # noqa: E402
 
 
 MANIFEST_PATH = SUITE_DIR / "manifest.json"
+STAGE_COMPLETE_NAME = ".dmgmd-stage-complete.json"
+STAGE_FAILURE_NAME = ".dmgmd-stage-failure.json"
+CHECKPOINT_ENVIRONMENT = (
+    "CUDA_DEVICE_ORDER",
+    "CUDA_VISIBLE_DEVICES",
+    "DMGMD_COMM_BACKEND",
+    "DMGMD_COMM_LOG_INTERVAL",
+)
+DEFAULT_STAGE_RETRIES = 1
 
 
 def load_manifest() -> Dict[str, Any]:
@@ -511,36 +523,280 @@ def execute_md(
     env: Mapping[str, str],
     timeout: int,
     required_outputs: Iterable[str],
+    resume: bool = False,
+    adopt_existing: bool = False,
+    retries: int = DEFAULT_STAGE_RETRIES,
 ) -> Path:
-    stage_dir.mkdir(parents=True, exist_ok=False)
-    (stage_dir / "model.xyz").write_text(model_text, encoding="utf-8")
-    (stage_dir / "run.in").write_text(run_text, encoding="utf-8")
-    (stage_dir / "nep.txt").write_text(potential_text, encoding="utf-8")
-    input_hashes = {
-        filename: baseline.sha256(stage_dir / filename)
-        for filename in ("model.xyz", "run.in", "nep.txt")
+    if retries < 0:
+        raise ValueError("retries must be non-negative")
+    required_outputs = tuple(required_outputs)
+    launcher_executable_sha256 = None
+    if launcher:
+        launcher_path = shutil.which(launcher[0])
+        if launcher_path is not None and Path(launcher_path).is_file():
+            launcher_executable_sha256 = baseline.sha256(Path(launcher_path))
+    signature = {
+        "executable": str(executable.resolve()),
+        "executable_sha256": baseline.sha256(executable),
+        "launcher": list(launcher),
+        "launcher_executable_sha256": launcher_executable_sha256,
+        "input_sha256": {
+            "model.xyz": text_sha256(model_text),
+            "run.in": text_sha256(run_text),
+            "nep.txt": text_sha256(potential_text),
+        },
+        "environment": {name: env.get(name) for name in CHECKPOINT_ENVIRONMENT},
+        "required_outputs": sorted(required_outputs),
     }
-    result = subprocess.run(
-        [*launcher, str(executable)],
-        cwd=stage_dir,
-        env=dict(env),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
-    (stage_dir / "execution.stdout").write_text(result.stdout, encoding="utf-8")
-    (stage_dir / "execution.stderr").write_text(result.stderr, encoding="utf-8")
-    if result.returncode != 0:
-        raise baseline.BaselineError(
-            f"{stage_dir}: executable exited {result.returncode}\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+    def write_json(path: Path, payload: Mapping[str, Any]) -> None:
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    baseline.stage_inputs_unchanged(stage_dir, input_hashes)
-    missing = [name for name in required_outputs if not (stage_dir / name).is_file()]
-    if missing:
-        raise baseline.BaselineError(f"{stage_dir}: missing outputs {missing}")
-    return stage_dir
+        temporary.replace(path)
+
+    def outputs_are_complete(checkpoint: Mapping[str, Any]) -> bool:
+        if checkpoint.get("signature") != signature:
+            return False
+        output_hashes = checkpoint.get("output_sha256")
+        if not isinstance(output_hashes, dict):
+            return False
+        for name in required_outputs:
+            path = stage_dir / name
+            if not path.is_file() or output_hashes.get(name) != baseline.sha256(path):
+                return False
+        return True
+
+    def adopt_legacy_stage() -> bool:
+        expected_inputs = {
+            "model.xyz": model_text,
+            "run.in": run_text,
+            "nep.txt": potential_text,
+        }
+        if any(
+            not (stage_dir / name).is_file()
+            or (stage_dir / name).read_text(encoding="utf-8") != text
+            for name, text in expected_inputs.items()
+        ):
+            return False
+        if any(not (stage_dir / name).is_file() for name in required_outputs):
+            return False
+        stdout_path = stage_dir / "execution.stdout"
+        stderr_path = stage_dir / "execution.stderr"
+        if not stdout_path.is_file() or not stderr_path.is_file():
+            return False
+        diagnostic = stderr_path.read_text(encoding="utf-8").lower()
+        failure_fragments = (
+            "out of memory",
+            "exited with non-zero status",
+            "cuda error",
+            "error code:",
+        )
+        if any(fragment in diagnostic for fragment in failure_fragments):
+            return False
+        write_json(
+            stage_dir / STAGE_COMPLETE_NAME,
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "completed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "provenance": "adopted-existing-unverified-executable",
+                "signature": signature,
+                "output_sha256": {
+                    name: baseline.sha256(stage_dir / name) for name in required_outputs
+                },
+            },
+        )
+        return True
+
+    if stage_dir.exists() and resume:
+        complete_path = stage_dir / STAGE_COMPLETE_NAME
+        if complete_path.is_file():
+            try:
+                checkpoint = json.loads(complete_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                checkpoint = {}
+            if outputs_are_complete(checkpoint):
+                print(f"LONG_NVE_STAGE status=reused path={stage_dir}", flush=True)
+                return stage_dir
+        elif adopt_existing and adopt_legacy_stage():
+            print(
+                "LONG_NVE_STAGE status=adopted-existing "
+                f"path={stage_dir} executable_provenance=unverified",
+                flush=True,
+            )
+            return stage_dir
+
+        suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        archived = stage_dir.with_name(f"{stage_dir.name}.failed-{suffix}")
+        stage_dir.rename(archived)
+        print(
+            f"LONG_NVE_STAGE status=archived-incomplete path={stage_dir} archived={archived}",
+            flush=True,
+        )
+
+    command = [*launcher, str(executable)]
+    max_attempts = retries + 1
+    retry_failures: List[Dict[str, Any]] = []
+
+    def prepare_stage() -> Dict[str, str]:
+        stage_dir.mkdir(parents=True, exist_ok=False)
+        (stage_dir / "model.xyz").write_text(model_text, encoding="utf-8")
+        (stage_dir / "run.in").write_text(run_text, encoding="utf-8")
+        (stage_dir / "nep.txt").write_text(potential_text, encoding="utf-8")
+        return {
+            filename: baseline.sha256(stage_dir / filename)
+            for filename in ("model.xyz", "run.in", "nep.txt")
+        }
+
+    for attempt in range(1, max_attempts + 1):
+        input_hashes = prepare_stage()
+        print(
+            f"LONG_NVE_STAGE status=running attempt={attempt} "
+            f"max_attempts={max_attempts} path={stage_dir}",
+            flush=True,
+        )
+        started = time.monotonic()
+        failure: Optional[str] = None
+        failure_details: Dict[str, Any] = {}
+        failure_exception: Optional[BaseException] = None
+        stdout = ""
+        stderr = ""
+        try:
+            result = subprocess.run(
+                command,
+                cwd=stage_dir,
+                env=dict(env),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+            stdout = result.stdout
+            stderr = result.stderr
+            if result.returncode != 0:
+                diagnostic = (stdout + "\n" + stderr).lower()
+                failure = (
+                    "cuda-out-of-memory"
+                    if "out of memory" in diagnostic
+                    else "nonzero-exit"
+                )
+                failure_details["returncode"] = result.returncode
+                failure_exception = baseline.BaselineError(
+                    f"{stage_dir}: executable exited {result.returncode}\n"
+                    f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                )
+        except subprocess.TimeoutExpired as error:
+            stdout = error.stdout or ""
+            stderr = error.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            failure = "timeout"
+            failure_details["timeout_seconds"] = timeout
+            failure_exception = error
+        except OSError as error:
+            failure = "launch-error"
+            stderr = f"{type(error).__name__}: {error}\n"
+            failure_exception = error
+
+        (stage_dir / "execution.stdout").write_text(stdout, encoding="utf-8")
+        (stage_dir / "execution.stderr").write_text(stderr, encoding="utf-8")
+        if failure is None:
+            try:
+                baseline.stage_inputs_unchanged(stage_dir, input_hashes)
+            except baseline.BaselineError as error:
+                failure = "input-mutated"
+                failure_exception = error
+        if failure is None:
+            missing = [name for name in required_outputs if not (stage_dir / name).is_file()]
+            if missing:
+                failure = "missing-output"
+                failure_details["missing_outputs"] = missing
+                failure_exception = baseline.BaselineError(
+                    f"{stage_dir}: missing outputs {missing}"
+                )
+
+        elapsed = time.monotonic() - started
+        if failure is None:
+            write_json(
+                stage_dir / STAGE_COMPLETE_NAME,
+                {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "completed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "elapsed_seconds": elapsed,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "retry_failures": retry_failures,
+                    "provenance": "executed",
+                    "signature": signature,
+                    "output_sha256": {
+                        name: baseline.sha256(stage_dir / name) for name in required_outputs
+                    },
+                },
+            )
+            print(
+                f"LONG_NVE_STAGE status=passed attempt={attempt} "
+                f"max_attempts={max_attempts} elapsed_seconds={elapsed:.6f} "
+                f"path={stage_dir}",
+                flush=True,
+            )
+            return stage_dir
+
+        failure_record = {
+            "schema_version": 1,
+            "status": "failed",
+            "failed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "failure": failure,
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "elapsed_seconds": elapsed,
+            "signature": signature,
+            "retry_failures": retry_failures,
+            **failure_details,
+        }
+        write_json(stage_dir / STAGE_FAILURE_NAME, failure_record)
+        if attempt < max_attempts:
+            suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            archived = stage_dir.with_name(
+                f"{stage_dir.name}.failed-attempt-{attempt}-{suffix}"
+            )
+            stage_dir.rename(archived)
+            retry_failures.append(
+                {"attempt": attempt, "failure": failure, "path": str(archived)}
+            )
+            print(
+                f"LONG_NVE_STAGE status=retrying failed_attempt={attempt} "
+                f"next_attempt={attempt + 1} max_attempts={max_attempts} "
+                f"reason={failure} archived={archived} path={stage_dir}",
+                flush=True,
+            )
+            continue
+
+        print(
+            f"LONG_NVE_STAGE status=failed attempt={attempt} "
+            f"max_attempts={max_attempts} reason={failure} path={stage_dir}",
+            flush=True,
+        )
+        assert failure_exception is not None
+        raise failure_exception
+
+    raise AssertionError("stage retry loop exhausted without a result")
+
+
+def stage_checkpoint_provenance(stage_dir: Path) -> Optional[str]:
+    checkpoint = stage_dir / STAGE_COMPLETE_NAME
+    if not checkpoint.is_file():
+        return None
+    try:
+        payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    provenance = payload.get("provenance")
+    return provenance if isinstance(provenance, str) else None
 
 
 def property_offsets(frame: Mapping[str, Any]) -> Dict[str, Tuple[int, int]]:

@@ -28,6 +28,8 @@ import run_mpi_differential as mpi_differential  # noqa: E402
 
 baseline = common.baseline
 DEFAULT_REFERENCE = PROJECT_ROOT.parent / "gpumd-reference" / "src" / "gpumd"
+RUN_CHECKPOINT_NAME = ".dmgmd-run-checkpoint.json"
+CONFIG_COMPLETE_NAME = ".dmgmd-config-complete.json"
 
 
 def comma_list(text: str) -> List[str]:
@@ -45,6 +47,16 @@ def integer_list(text: str) -> List[int]:
     if any(value < 0 for value in values):
         raise argparse.ArgumentTypeError("values must be non-negative")
     return values
+
+
+def nonnegative_integer(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be an integer") from error
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be non-negative")
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,13 +78,99 @@ def parse_args() -> argparse.Namespace:
         help="comma-separated short,long,replay,restart,nvt",
     )
     parser.add_argument("--timeout", type=int, default=7200, help="seconds allowed per process")
+    parser.add_argument(
+        "--retries", type=nonnegative_integer, default=common.DEFAULT_STAGE_RETRIES,
+        help="retries after a failed stage (default: 1, for at most two attempts)",
+    )
     parser.add_argument("--report", type=Path)
     parser.add_argument("--keep-work", action="store_true")
+    parser.add_argument(
+        "--resume-work", type=Path,
+        help="resume a retained work directory and reuse verified stage checkpoints",
+    )
+    parser.add_argument(
+        "--adopt-existing", action="store_true",
+        help="with --resume-work, explicitly adopt pre-checkpoint stage directories",
+    )
     parser.add_argument(
         "--print-model-hashes", action="store_true",
         help="print deterministic model hashes and exit without using a GPU",
     )
     return parser.parse_args()
+
+
+def write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def initialize_work_root(
+    args: argparse.Namespace,
+    contract: Mapping[str, Any],
+) -> Tuple[Path, bool]:
+    if args.adopt_existing and args.resume_work is None:
+        raise baseline.BaselineError("--adopt-existing requires --resume-work")
+    if args.resume_work is None:
+        root = Path(tempfile.mkdtemp(prefix=f"dmgmd-long-nve-{args.profile}-"))
+        write_json_atomic(
+            root / RUN_CHECKPOINT_NAME,
+            {
+                "schema_version": 1,
+                "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "contract": dict(contract),
+            },
+        )
+        return root, False
+
+    root = args.resume_work.resolve()
+    if not root.is_dir():
+        raise baseline.BaselineError(f"resume work directory does not exist: {root}")
+    checkpoint_path = root / RUN_CHECKPOINT_NAME
+    if checkpoint_path.is_file():
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as error:
+            raise baseline.BaselineError(
+                f"cannot read run checkpoint {checkpoint_path}: {error}"
+            ) from error
+        if checkpoint.get("contract") != contract:
+            raise baseline.BaselineError(
+                "resume contract differs from the retained run; use the same profile, "
+                "selection, reference, candidate binary and MPI launcher"
+            )
+    else:
+        if not args.adopt_existing:
+            raise baseline.BaselineError(
+                f"{root} predates checkpoint support; pass --adopt-existing once to "
+                "validate and explicitly adopt its completed stages"
+            )
+        write_json_atomic(
+            checkpoint_path,
+            {
+                "schema_version": 1,
+                "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "contract": dict(contract),
+                "legacy_adoption": True,
+                "warning": "pre-existing stage executable provenance is unverified",
+            },
+        )
+        print(
+            "LONG_NVE_RESUME status=adopting-existing "
+            f"work_root={root} executable_provenance=unverified",
+            flush=True,
+        )
+    return root, True
+
+
+def checkpoint_provenance_summary(work_root: Path) -> Dict[str, int]:
+    summary: Dict[str, int] = {}
+    for checkpoint in work_root.rglob(common.STAGE_COMPLETE_NAME):
+        provenance = common.stage_checkpoint_provenance(checkpoint.parent) or "unknown"
+        summary[provenance] = summary.get(provenance, 0) + 1
+    return summary
 
 
 def normalized_backends(values: Sequence[str]) -> List[str]:
@@ -158,6 +256,39 @@ def candidate_environment(
 
 def validate_candidate_stage(stage: Path, ranks: int, backend: str) -> None:
     mpi_differential.validate_runtime_record(stage, ranks, backend)
+    stdout = (stage / "execution.stdout").read_text(encoding="utf-8")
+    timings = [line for line in stdout.splitlines() if line.startswith("DMGMD_TIMING ")]
+    if not timings:
+        provenance = common.stage_checkpoint_provenance(stage)
+        if provenance == "adopted-existing-unverified-executable":
+            print(
+                f"LONG_NVE_TIMING status=unavailable reason=adopted-existing path={stage}",
+                flush=True,
+            )
+            return
+        raise baseline.BaselineError(f"{stage}: missing DMGMD_TIMING records")
+    total_records = []
+    for line in timings:
+        fields = mpi_differential.key_values(line)
+        required = {
+            "phase", "sequence", "steps", "atoms", "ranks", "backend",
+            "seconds_min", "seconds_mean", "seconds_max",
+            "global_atom_steps_per_second",
+        }
+        if not required.issubset(fields):
+            raise baseline.BaselineError(f"{stage}: incomplete timing record: {line}")
+        if int(fields["ranks"]) != ranks or fields["backend"] != backend:
+            raise baseline.BaselineError(f"{stage}: inconsistent timing rank/backend record")
+        minimum = float(fields["seconds_min"])
+        mean = float(fields["seconds_mean"])
+        maximum = float(fields["seconds_max"])
+        throughput = float(fields["global_atom_steps_per_second"])
+        if minimum < 0.0 or not minimum <= mean <= maximum or throughput < 0.0:
+            raise baseline.BaselineError(f"{stage}: invalid timing values: {line}")
+        if fields["phase"] == "total":
+            total_records.append(line)
+    if len(total_records) != 1:
+        raise baseline.BaselineError(f"{stage}: expected exactly one total timing record")
 
 
 def run_reference_stage(
@@ -169,9 +300,13 @@ def run_reference_stage(
     env: Mapping[str, str],
     timeout: int,
     outputs: Sequence[str],
+    resume: bool,
+    adopt_existing: bool,
+    retries: int,
 ) -> Path:
     return common.execute_md(
-        executable, (), model, run, potential_text, directory, env, timeout, outputs
+        executable, (), model, run, potential_text, directory, env, timeout, outputs,
+        resume=resume, adopt_existing=adopt_existing, retries=retries,
     )
 
 
@@ -187,6 +322,9 @@ def run_candidate_stage(
     env: Mapping[str, str],
     timeout: int,
     outputs: Sequence[str],
+    resume: bool,
+    adopt_existing: bool,
+    retries: int,
 ) -> Path:
     stage_env = dict(env)
     total_steps = sum(
@@ -206,6 +344,9 @@ def run_candidate_stage(
         stage_env,
         timeout,
         outputs,
+        resume=resume,
+        adopt_existing=adopt_existing,
+        retries=retries,
     )
     validate_candidate_stage(result, ranks, backend)
     return result
@@ -250,6 +391,9 @@ def replay_frames(
     collector: baseline.DiffCollector,
     label: str,
     candidate_runtime: Tuple[int, str] | None,
+    resume: bool,
+    adopt_existing: bool,
+    retries: int,
 ) -> int:
     frames = baseline.parse_xyz(source_trajectory)
     evaluator_env = dict(env)
@@ -267,6 +411,9 @@ def replay_frames(
             evaluator_env,
             timeout,
             ("static.xyz", "thermo.out"),
+            resume=resume,
+            adopt_existing=adopt_existing,
+            retries=retries,
         )
         if candidate_runtime is not None:
             validate_candidate_stage(evaluated, candidate_runtime[0], candidate_runtime[1])
@@ -293,6 +440,9 @@ def restart_transition(
     root: Path,
     timeout: int,
     collector: baseline.DiffCollector,
+    resume: bool,
+    adopt_existing: bool,
+    retries: int,
 ) -> Dict[str, Any]:
     half_steps = int(profile["steps"]) // 2
     thermo_interval = int(profile["thermo_interval"])
@@ -306,16 +456,18 @@ def restart_transition(
     )
     reference_a = run_reference_stage(
         reference, model, run_a, potential_text, root / "reference-a", reference_env, timeout,
-        ("thermo.out", "restart.xyz", "segment-a.xyz"),
+        ("thermo.out", "restart.xyz", "segment-a.xyz"), resume, adopt_existing, retries,
     )
     reference_restart_model = (reference_a / "restart.xyz").read_text(encoding="utf-8")
     reference_static = run_reference_stage(
         reference, reference_restart_model, common.static_run(), potential_text,
         root / "reference-boundary", reference_env, timeout, ("thermo.out", "static.xyz"),
+        resume, adopt_existing, retries,
     )
     reference_b = run_reference_stage(
         reference, reference_restart_model, run_b, potential_text, root / "reference-b",
         reference_env, timeout, ("thermo.out", "restart.xyz", "segment-b.xyz"),
+        resume, adopt_existing, retries,
     )
     reference_metrics = common.nve_metrics(
         reference_static / "thermo.out", reference_b / "thermo.out", int(case["atoms"])
@@ -327,7 +479,7 @@ def restart_transition(
     actual_a = run_candidate_stage(
         candidate, mpiexec, source_ranks, backend, model, run_a, potential_text,
         root / f"candidate-r{source_ranks}-a", source_env, timeout,
-        ("thermo.out", "restart.xyz", "segment-a.xyz"),
+        ("thermo.out", "restart.xyz", "segment-a.xyz"), resume, adopt_existing, retries,
     )
     actual_restart_model = (actual_a / "restart.xyz").read_text(encoding="utf-8")
     restart_spec = {"kind": "restart"}
@@ -341,7 +493,7 @@ def restart_transition(
     actual_static = run_candidate_stage(
         candidate, mpiexec, destination_ranks, backend, actual_restart_model,
         common.static_run(), potential_text, root / f"candidate-r{destination_ranks}-boundary",
-        destination_env, timeout, ("thermo.out", "static.xyz"),
+        destination_env, timeout, ("thermo.out", "static.xyz"), resume, adopt_existing, retries,
     )
     common.compare_configuration_files(
         reference_static / "static.xyz", actual_static / "static.xyz", collector,
@@ -350,7 +502,7 @@ def restart_transition(
     actual_b = run_candidate_stage(
         candidate, mpiexec, destination_ranks, backend, actual_restart_model, run_b, potential_text,
         root / f"candidate-r{destination_ranks}-b", destination_env, timeout,
-        ("thermo.out", "restart.xyz", "segment-b.xyz"),
+        ("thermo.out", "restart.xyz", "segment-b.xyz"), resume, adopt_existing, retries,
     )
     actual_metrics = common.nve_metrics(
         actual_static / "thermo.out", actual_b / "thermo.out", int(case["atoms"])
@@ -404,7 +556,48 @@ def main() -> int:
     except mpi_environment.EnvironmentError as error:
         raise baseline.BaselineError(str(error)) from error
 
-    work_root = Path(tempfile.mkdtemp(prefix=f"dmgmd-long-nve-{args.profile}-"))
+    run_contract = {
+        "profile": args.profile,
+        "profile_parameters": dict(profile),
+        "cases": case_names,
+        "seeds": seeds,
+        "ranks": ranks,
+        "backends": backends,
+        "sections": sections,
+        "reference": str(reference),
+        "reference_sha256": baseline.sha256(reference),
+        "candidate": str(candidate),
+        "candidate_sha256": baseline.sha256(candidate),
+        "mpiexec": str(mpiexec),
+        "devices": devices,
+        "stage_retries": args.retries,
+    }
+    work_root, resumed = initialize_work_root(args, run_contract)
+    resume_stages = resumed
+    expected_configs = {
+        (case_name, seed, backend, rank_count)
+        for case_name in case_names
+        for seed in seeds
+        for backend in backends
+        for rank_count in ranks
+    }
+    completed_configs = {
+        key
+        for key in expected_configs
+        if (
+            work_root / key[0] / f"seed-{key[1]}" / f"{key[2]}-r{key[3]}" /
+            CONFIG_COMPLETE_NAME
+        ).is_file()
+    }
+    print(
+        f"LONG_NVE_PLAN profile={args.profile} total_configs={len(expected_configs)} "
+        f"completed_configs={len(completed_configs)} "
+        f"pending_configs={len(expected_configs) - len(completed_configs)} "
+        f"cases={','.join(case_names)} seeds={','.join(str(value) for value in seeds)} "
+        f"ranks={','.join(str(value) for value in ranks)} backends={','.join(backends)} "
+        f"sections={','.join(sections)} retries={args.retries} work_root={work_root}",
+        flush=True,
+    )
     succeeded = False
     report: Dict[str, Any] = {
         "schema_version": 1,
@@ -420,6 +613,10 @@ def main() -> int:
         "reference_sha256": baseline.sha256(reference),
         "candidate": str(candidate),
         "candidate_sha256": baseline.sha256(candidate),
+        "work_root": str(work_root),
+        "resumed": resumed,
+        "adopted_existing": bool(args.adopt_existing),
+        "stage_retries": args.retries,
         "results": {},
     }
     reference_env = reference_environment(devices[0])
@@ -460,6 +657,7 @@ def main() -> int:
                     reference, model, common.static_run(), potential_text,
                     seed_root / "reference-static",
                     reference_env, args.timeout, ("static.xyz", "thermo.out"),
+                    resume_stages, args.adopt_existing, args.retries,
                 )
                 reference_short = None
                 if "short" in sections:
@@ -468,6 +666,7 @@ def main() -> int:
                         common.short_run(float(case["time_step_fs"]), int(profile["short_steps"])),
                         potential_text, seed_root / "reference-short", reference_env, args.timeout,
                         ("short.xyz", "thermo.out"),
+                        resume_stages, args.adopt_existing, args.retries,
                     )
                 reference_long = None
                 reference_histogram = None
@@ -480,6 +679,7 @@ def main() -> int:
                         ),
                         potential_text, seed_root / "reference-long", reference_env, args.timeout,
                         ("trajectory.xyz", "thermo.out", "restart.xyz"),
+                        resume_stages, args.adopt_existing, args.retries,
                     )
                     reference_metrics, reference_histogram = append_trajectory_metrics(
                         reference_static, reference_long, case
@@ -507,6 +707,9 @@ def main() -> int:
                         reference_env,
                         args.timeout,
                         ("nvt.xyz", "thermo.out"),
+                        resume_stages,
+                        args.adopt_existing,
+                        args.retries,
                     )
                     reference_nvt_metrics, reference_nvt_rdf = append_nvt_metrics(
                         reference_nvt, case
@@ -518,6 +721,15 @@ def main() -> int:
                     for rank_count in ranks:
                         config = f"{backend}-r{rank_count}"
                         config_root = seed_root / config
+                        config_key = (case_name, seed, backend, rank_count)
+                        print(
+                            "LONG_NVE_CONFIG status="
+                            f"{'revalidating' if config_key in completed_configs else 'running'} "
+                            f"completed={len(completed_configs)} total={len(expected_configs)} "
+                            f"pending={len(expected_configs) - len(completed_configs)} "
+                            f"case={case_name} seed={seed} backend={backend} ranks={rank_count}",
+                            flush=True,
+                        )
                         env = candidate_environment(
                             devices, rank_count, backend,
                             int(profile["communication_log_interval"]),
@@ -526,6 +738,7 @@ def main() -> int:
                             candidate, mpiexec, rank_count, backend, model, common.static_run(),
                             potential_text, config_root / "static", env, args.timeout,
                             ("static.xyz", "thermo.out"),
+                            resume_stages, args.adopt_existing, args.retries,
                         )
                         common.compare_configuration_files(
                             reference_static / "static.xyz", actual_static / "static.xyz", collector,
@@ -540,6 +753,7 @@ def main() -> int:
                                 ),
                                 potential_text, config_root / "short", env, args.timeout,
                                 ("short.xyz", "thermo.out"),
+                                resume_stages, args.adopt_existing, args.retries,
                             )
                             baseline.compare_xyz(
                                 reference_short / "short.xyz", actual_short / "short.xyz",
@@ -564,6 +778,7 @@ def main() -> int:
                                 ),
                                 potential_text, config_root / "long", env, args.timeout,
                                 ("trajectory.xyz", "thermo.out", "restart.xyz"),
+                                resume_stages, args.adopt_existing, args.retries,
                             )
                             actual_metrics, actual_histogram = append_trajectory_metrics(
                                 actual_static, actual_long, case
@@ -593,12 +808,14 @@ def main() -> int:
                                     args.timeout, collector,
                                     f"replay-reference/{case_name}/seed-{seed}/{config}",
                                     (rank_count, backend),
+                                    resume_stages, args.adopt_existing, args.retries,
                                 )
                                 reverse = replay_frames(
                                     actual_long / "trajectory.xyz", reference, (), potential_text,
                                     config_root / "replay-candidate-in-reference", reference_env,
                                     args.timeout, collector,
                                     f"replay-candidate/{case_name}/seed-{seed}/{config}", None,
+                                    resume_stages, args.adopt_existing, args.retries,
                                 )
                                 case_report["replay_frames"].setdefault(config, {})[
                                     str(seed)
@@ -628,6 +845,9 @@ def main() -> int:
                                 env,
                                 args.timeout,
                                 ("nvt.xyz", "thermo.out"),
+                                resume_stages,
+                                args.adopt_existing,
+                                args.retries,
                             )
                             actual_nvt_metrics, actual_nvt_rdf = append_nvt_metrics(
                                 actual_nvt, case
@@ -649,6 +869,26 @@ def main() -> int:
                                     f"{case_name}/seed-{seed}/{config}: time-averaged RDF L1 "
                                     f"{nvt_rdf_l1:.6e} exceeds limit"
                                 )
+                        write_json_atomic(
+                            config_root / CONFIG_COMPLETE_NAME,
+                            {
+                                "schema_version": 1,
+                                "status": "complete",
+                                "completed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                                "case": case_name,
+                                "seed": seed,
+                                "backend": backend,
+                                "ranks": rank_count,
+                            },
+                        )
+                        completed_configs.add(config_key)
+                        print(
+                            f"LONG_NVE_CONFIG status=passed completed={len(completed_configs)} "
+                            f"total={len(expected_configs)} "
+                            f"pending={len(expected_configs) - len(completed_configs)} "
+                            f"case={case_name} seed={seed} backend={backend} ranks={rank_count}",
+                            flush=True,
+                        )
 
             if "long" in sections and physics_case:
                 ordered_reference = [reference_metrics_by_seed[seed] for seed in seeds]
@@ -691,15 +931,19 @@ def main() -> int:
                             source_ranks, destination_ranks, restart_model, potential_text,
                             case, profile,
                             transition_root, args.timeout, collector,
+                            resume_stages, args.adopt_existing, args.retries,
                         )
                         result["backend"] = backend
                         result["seed"] = restart_seed
                         case_report["restart"].append(result)
 
         report["field_differences"] = collector.stats
+        report["checkpoint_provenance"] = checkpoint_provenance_summary(work_root)
+        report["completed_configs"] = len(completed_configs)
+        report["total_configs"] = len(expected_configs)
         report_path = args.report.resolve() if args.report else work_root / "report.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_json_atomic(report_path, report)
         print(
             f"PASS long-NVE profile={args.profile} cases={case_names} seeds={seeds} "
             f"ranks={ranks} backends={backends}"
@@ -709,10 +953,16 @@ def main() -> int:
         succeeded = True
         return 0
     finally:
-        if succeeded and not args.keep_work:
+        if succeeded and not args.keep_work and not resumed:
             shutil.rmtree(work_root)
         else:
             print(f"work directory retained: {work_root}", file=sys.stderr)
+            if not succeeded:
+                print(
+                    "resume with the same selection and add: "
+                    f"--resume-work {work_root}",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":
