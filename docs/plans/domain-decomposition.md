@@ -1,12 +1,14 @@
 # 域分解与 halo 通信协议（设计稿）
 
-状态：**设计待审批**。本文档规定 DMG-MD 从 replicated-data 原型演进为 owned/ghost 域分解
+类别：待实施计划。状态：PROPOSED，未实施。
+
+本文档规定 DMG-MD 从 replicated-data 原型演进为 owned/ghost 域分解
 runtime 的数据面协议，并定义 M0 快速优化。实现前须按 AGENTS.md 由维护者确认方向；
 本文档不修改任何生产代码。
 
-前置阅读：[replicated-mpi.md](./replicated-mpi.md)（现行协议）、
-[mpi-risks.md](./mpi-risks.md)（风险登记）、[kernel-inventory.md](./kernel-inventory.md)
-（kernel 证据）、[open-questions.md](./open-questions.md)（Q4/Q5/Q12/Q14/Q15 决策记录）。
+前置阅读：[replicated-mpi.md](../standards/replicated-mpi.md)（现行协议）、
+[risk-and-backlog.md](./risk-and-backlog.md)（风险与待办登记）、
+[kernel-inventory.md](../standards/kernel-inventory.md)（kernel 证据）。
 
 ## 1. 动机与现状核算
 
@@ -38,7 +40,7 @@ force（`run.cu:273-283`）；两个半步都由 `Ensemble::velocity_verlet`
 ### 1.2 DMG-MD 现行协议与开销
 
 DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank（`src/runtime.cu:910-1048`），
-力不汇总回任何单一 GPU。但数据面仍是复制态，每步（`docs/replicated-mpi.md:9-19`）：
+力不汇总回任何单一 GPU。但数据面仍是复制态，每步（`docs/standards/replicated-mpi.md`）：
 
 | 步骤 | 位置 | 通信 |
 | --- | --- | --- |
@@ -106,7 +108,7 @@ DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank�
   不改容差直接复用；
 - `DMGMD_COMM` 每步记录（`mpi_runtime.cu:927-941`）的 velocity 字段随协议更新，
   differential 测试中对通信记录的断言同步修订；
-- `docs/replicated-mpi.md` 每步顺序（第 7 条）与字节表（`replicated-mpi.md:78-96`）
+- `docs/standards/replicated-mpi.md` 的每步顺序与字节表
   须随实现一并修订。
 
 附注（非必须）：`adaptive_time_step` 在启用 `max_dist` 时每步把完整 3N velocity D2H
@@ -117,7 +119,8 @@ DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank�
 ### 3.1 从下标分块到空间 slab
 
 现行 `balanced_owned_range`（`include/dmgmd/partition.hpp:20-35`）按全局下标均衡切块，
-与空间无关，这是复制态阶段刻意简化的产物（`replicated-mpi.md:5-7`）。域分解阶段改为：
+与空间无关，这是复制态阶段刻意简化的产物（见
+`docs/standards/replicated-mpi.md`）。域分解阶段改为：
 
 - 沿一个 partition 轴把 box 切成 P 个连续 slab，每个 rank 拥有一个 slab；
 - slab 边界对齐 `rc/2` cell 网格（与 cell list 一致：`src/gpumd_compat/neighbor.cu:298`
@@ -151,7 +154,7 @@ DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank�
 ### 3.3 box 范围（第一切口）
 
 按 Q6 已确认决策：第一切口只支持**正交全周期大盒**。triclinic / 非周期方向输入 parse 后
-明确报 `unsupported`，不得静默投影（`mpi-risks.md` §4 列出的全部倾斜盒用例移入后续
+明确报 `unsupported`，不得静默投影（`risk-and-backlog.md` §4 列出的全部倾斜盒用例移入后续
 里程碑）。非周期方向在 3D 分解（§12）前不参与切分。
 
 ### 3.4 本地排序稳定性
@@ -179,12 +182,12 @@ NEP large-box 力计算对位置的依赖是两跳的：
    2rc 内的第三原子。
 
 结论：owned 原子的力需要 **owned ± 2rc 内全部原子的坐标**，仅交换 rc 深度坐标 halo 会
-产生"看似连续、系统性错误"的边界力（`mpi-risks.md` R1 失败模式）。
+产生"看似连续、系统性错误"的边界力（`risk-and-backlog.md` R1 失败模式）。
 
 ### 4.2 三层窗口定义
 
 `NEP_MULTIGPU` 的窗口布局（`gpumd-reference/src/force/nep_multigpu.cuh:42-55`、分区计算
-`nep_multigpu.cu:1476-1544`，`kernel-inventory.md` §7 的映射表）给出三层域的数值语义，
+`nep_multigpu.cu:1476-1544`，`docs/standards/kernel-inventory.md` §7 的映射表）给出三层域的数值语义，
 本项目按 MPI 概念重新表述（cell 宽 `rc/2`，2 cells = 1 rc）：
 
 | 域 | 窗口（不含 skin） | NEP 工作内容 | MPI 概念 |
@@ -206,7 +209,7 @@ NEP large-box 力计算对位置的依赖是两跳的：
 - **descriptor 域 = owned ± (rc_max + skin)**：ghost 成员在每次重建时重估；
 - ghost **位置每步刷新**（每原子 24 B），type/mass/group 随成员变化交换；
 - 重建判据是全局 OR：任一 rank 的 owned 原子超阈值 ⇒ 全体重建（R11）；迁移
-  完成后强制重建并作废全部 NEP 中间量（`mpi-risks.md` §5 不变量 7）。
+  完成后强制重建并作废全部 NEP 中间量（`risk-and-backlog.md` §5 不变量 7）。
 
 ### 4.4 有效半径的确定（R12，M2 前置任务）
 
@@ -257,7 +260,7 @@ descriptor（`nep.cu:1086`）、radial force（`nep.cu:1112`）、angular partia
 ### 5.2 邻居构建器的域分离（R8）
 
 现行 `gpu_find_neighbor_ON1` 要求候选 n2 也在中心域 `[N1,N2)` 内
-（参考实现 `gpumd-reference/src/force/neighbor.cu:144`，`mpi-risks.md` R8）。新接口必须
+（参考实现 `gpumd-reference/src/force/neighbor.cu:144`，`risk-and-backlog.md` R8）。新接口必须
 分离**中心域**（写 NL 行的原子，`[ND1,ND2)`）与**候选域**（可进入邻居行的原子，全部
 local 槽位 owned+ghost）。ELL 容量按 `neighbor.cu:478-483` 的 `(rc+skin)^3/rc^3` 放大
 逻辑对 local 体系重算（Q13 的越界行为保持"安全报错"）。
@@ -275,7 +278,7 @@ local 槽位 owned+ghost）。ELL 容量按 `neighbor.cu:478-483` 的 `(rc+skin)
 
 ## 6. 每步协议（M2 目标时序）
 
-替换 `replicated-mpi.md:9-19` 的复制态协议。slab 分解下每方向的通信对象 ≤ 2 个相邻
+替换 `docs/standards/replicated-mpi.md` 的复制态协议。slab 分解下每方向的通信对象 ≤ 2 个相邻
 rank（PBC 下首尾互为邻居；P=1 时全部为空操作）：
 
 1. **（correct_velocity 触发步）** velocity 全量 Allgatherv → root CPU 修正 →
@@ -338,7 +341,7 @@ slab 邻居应映射到同节点：rank 顺序按 slab 空间顺序排列，`MPI
 rank 分组排序以保证 pack/unpack 连续（复用 `pack_owned_soa/unpack_global_soa` 的
 SoA 打包思路，`mpi_runtime.cu:163-191`）。
 
-每 force 步在 debug 构建断言 `mpi-risks.md` §5 的全部不变量（owner 唯一性、ghost 不进
+每 force 步在 debug 构建断言 `risk-and-backlog.md` §5 的全部不变量（owner 唯一性、ghost 不进
 thermo、local index < local_count、行容量不越界等）。
 
 ## 8. 迁移协议
@@ -353,7 +356,7 @@ thermo、local index < local_count、行容量不越界等）。
   （`dump_restart` 写全局顺序，`runtime.cu:810-843`）保持；
 - **PBC**：跨周期端迁移到 wrap 邻居 slab；unwrapped 坐标的 image 簿记随载荷传递；
 - **作废**：迁移完成后强制邻居表重建，旧邻居表/边映射/descriptor/partial 全部作废
-  （R11、`mpi-risks.md` §5.7）；`GPU_Vector` 容量变化引发的 view 悬空按 R27 用
+  （R11、`risk-and-backlog.md` §5.7）；`GPU_Vector` 容量变化引发的 view 悬空按 R27 用
   epoch/versioned view 防；
 - **group labels**：现行复制态下 identity 在全 rank 可用；域分解后 labels 随原子迁移
   （R14），dump group 时由 rank 0 从 Gatherv 载荷重建全局 contents。
@@ -390,7 +393,7 @@ M2b 的取舍（Q4）：深层带消除节省 `ρA(d−s)` 原子的坐标字节
 partial 的交换；字节上未必占优，收益主要是消除 halo 冗余 descriptor 计算。以 M2a 为
 oracle 逐原子比对后裁决（§10）。
 
-replicated 阶段"不发布多卡性能结论"的约定（`replicated-mpi.md:126-127`）在 M3 才由
+replicated 阶段"不发布多卡性能结论"的约定（`docs/standards/replicated-mpi.md`）在 M3 才由
 scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 
 ## 10. 验证计划
@@ -406,14 +409,14 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
   - **单 rank 退化门**：P=1 时 ghost=0、所有中心区间退化为 `0..N`，输出与现行单 rank
     逐字节一致；
   - **边界 fixture**：2-rank，原子贴 slab 边界（s=0、s=1、恰在边界）、跨一个周期的
-    构型（`mpi-risks.md` §4 用例子集，正交全周期内）；
+    构型（`risk-and-backlog.md` §4 用例子集，正交全周期内）；
   - per-atom energy/force/virial 对 GPUMD golden；短轨迹 + `tests/long_nve/`
     `run_long_nve.py` 的守恒统计（4096/12288/5000 原子、100,000 步、漂移斜率、RDF、
     MSD）；
-  - debug 构建启用 `mpi-risks.md` §5 不变量断言。
+  - debug 构建启用 `risk-and-backlog.md` §5 不变量断言。
 - **M2b**：与 M2a oracle 的逐原子 force/virial 等价（Q4 验收）+ 同套长程守恒。
 - **M3**：`check_environment.py` 扩展点对点 device 自检；多节点 I/O 按
-  [multi-node-io-plan.md](./multi-node-io-plan.md)；跨节点 restart；强扩展 scaling 基准
+  [multi-node-io.md](./multi-node-io.md)；跨节点 restart；强扩展 scaling 基准
   （在此之后才允许发布性能结论）。
 
 容差层级（R16）：逐字段精确（M0、单 rank 退化）→ 确定性数值容差（分片累加顺序差异，
@@ -437,7 +440,7 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 | R25 `neighbor.out` 副作用 | rank0 聚合 vs 明确不支持，随 M2 裁决（Q18） | §5.3 |
 | R26 CUDA-aware 同步 | p2p 自检两道门；默认 stream + 阻塞语义（Q40） | §6.1 |
 | R27 容量变化 view 失效 | epoch/versioned view | §8 |
-| R28 多节点临时目录 | M3 按 multi-node-io-plan.md | §10 |
+| R28 多节点临时目录 | M3 按 [multi-node-io.md](./multi-node-io.md) | §10 |
 
 Q4（halo 协议选择）：本文档按已确认决策落地为 M2a 先行、M2b 以 oracle 验证（§4.5）。
 Q5（通信边匹配键）：仅 M2b 需要，键定义见 §7。Q14（skin 语义）：保持 skin=1 Å 与
@@ -461,5 +464,5 @@ M3  多节点硬化：点对点后端自检、rank-slab 节点布局、多节点
 ```
 
 依赖关系：M0 独立；M1 → M2a → M2b；M3 依赖 M2a（M2b 可与 M3 并行）。
-每个里程碑的实现必须同步更新 `docs/replicated-mpi.md`（协议与字节表）或以本文档的
+每个里程碑的实现必须同步更新 `docs/standards/replicated-mpi.md`（协议与字节表）或以本文档的
 对应章节替代之，并保持 `DMGMD_COMM` 记录与测试断言一致。

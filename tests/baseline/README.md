@@ -14,7 +14,7 @@ python3 tests/baseline/run_baselines.py
 reference commit、reference executable SHA-256 和每个输入文件的 SHA-256。无 GPU 时会以
 CUDA 错误失败，不会把测试标记为 skip。可用 `--device GPU_ID_OR_UUID` 选择另一张单卡。
 
-将未来 DMG-MD 可执行程序与 GPUMD goldens 做 differential 比较：
+将 DMG-MD 可执行程序与 GPUMD goldens 做 differential 比较：
 
 ```bash
 source ../env/md-mpi.sh
@@ -44,8 +44,8 @@ python3 tests/baseline/run_baselines.py --calibrate 30
   原生文本输入；执行时只按固定文件名复制到空工作目录，不解析后重写或转换。
 
 完整覆盖、每项通过标准、单位、容差校准和已知非确定性来源见
-[`docs/baseline-results.md`](../../docs/baseline-results.md)。
+[`docs/status/baseline-results.md`](../../docs/status/baseline-results.md)。
 
 本目录继续只承担 8/9 原子、最多 6 个连续 NVE steps 的短程 committed golden。4096/12288/
-5000 原子、100000-step、十初态、双向构型回放和跨 rank restart 位于
+5000 原子、100000-step、五初态 release、双向构型回放和跨 rank restart 位于
 [`tests/long_nve/`](../long_nve/README.md)，两套基线不会互相覆盖或更新。

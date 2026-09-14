@@ -1,4 +1,6 @@
-# DMG-MD MPI 改造风险登记
+# DMG-MD 风险与待办登记
+
+类别：待实施计划。状态：IN PROGRESS（持续登记）。本文只登记仍影响未来实现的风险和待决事项。
 
 ## 1. 风险评级
 
@@ -106,7 +108,7 @@
 | R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | rank0 aggregate或明确不支持；不能所有rankappend |
 | R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + 四类数值自检；同步；HostStaged fallback |
 | R27 | P2 | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | epoch/versioned views；迁移后统一capacity growth和重建 |
-| R28 | P0 | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `runtime.cu:80-129` | 非零rank无法chdir，异常路径可能collective hang | 待审批的每rank本地scratch和两阶段错误归约；见 [multi-node-io-plan.md](./multi-node-io-plan.md) |
+| R28 | P0 | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `runtime.cu:80-129` | 非零rank无法chdir，异常路径可能collective hang | 待审批的每rank本地scratch和两阶段错误归约；见 [multi-node-io.md](./multi-node-io.md) |
 
 ## 4. PBC 与 triclinic 专项
 
@@ -154,3 +156,32 @@ halo selection = physical cutoff relative to triclinic rank faces
 6. 最后考虑triclinic、small-box、fix和随机thermostat。
 
 在R1-R8未由golden tests关闭前，不应把性能优化或通信压缩作为主目标。
+
+## 7. 未决事项
+
+旧未决问题文档中的初始仓库快照、已经确认的第一切口决策和已经实现的功能不再保留在
+工作树中；这些历史可从 Git 和 [架构决策](../standards/architecture-decisions.md) 查询。以下只
+登记仍会影响当前兼容性或未来实现的事项。
+
+| ID | 未决事项 | 关闭条件 |
+| --- | --- | --- |
+| B1 | NEP3 是否纳入产品范围 | pinned reference negative test，并明确支持矩阵 |
+| B2 | `Ra > Rr`、ZBL outer cutoff 大于 angular cutoff 的实际语义 | 合成 potential 对 reference/candidate 的静态与边界测试 |
+| B3 | large/small neighbor capacity overflow 的安全行为 | 高密度 fixture、sanitizer 和明确错误合同 |
+| B4 | 每 1000 次隐式 `neighbor.out` 是否长期保持兼容 | 产品决策；若保留则定义 rank-0 语义，若删除则记录兼容差异 |
+| B5 | malformed NEP 文件中宽松解析与安全拒绝的边界 | 建立 malformed corpus，锁定错误类别和关键 message |
+| B6 | 负 `time_step`、`run 0`、缺失 ensemble 等边界行为 | reference negative corpus 与 parser/runtime 自动测试 |
+| B7 | 多 potential、`potential FILE x|y|z` 的产品语义 | 明确 unsupported 或实现相加/方向语义，并加入 golden |
+| B8 | 默认随机初速度与未来随机 thermostat 的跨 rank 可重复性 | 基于 global ID 的 RNG 设计、rank-count 和 restart 测试 |
+| B9 | 是否提供跨 rank 数确定性归约模式 | 明确产品承诺；默认仍为结构 exact、数值容差、长程统计 |
+| B10 | restart 是否允许保存 time/RNG/thermostat 的 sidecar | 保持主文件兼容的产品决策和跨 rank 测试 |
+| B11 | rank 0 gather 的规模上限与分块输出 | 大 N 内存门槛、分块 Gatherv 或保持顺序的并行 I/O 方案 |
+| B12 | unwrapped position 跨 migration/restart 的生命周期 | image counter 协议和 reference 对比 |
+| B13 | 单 rank 异常的无死锁传播和错误分类 | 故障注入、全 rank 有界退出和唯一诊断记录 |
+| B14 | small/large NEP 每原子 virial 归属是否统一 | 同构 fixture 的逐原子与总量比较 |
+| B15 | XYZ charge 的单位和普通 NEP 语义 | manual/代码证据与兼容测试 |
+| B16 | 自适应 `time_step DT MAX_DISTANCE` 是否支持 | 全局最大速度归约设计和多段 run golden |
+
+域分解的 halo 深度、edge key、排序、迁移和 triclinic 问题统一在
+[domain-decomposition.md](./domain-decomposition.md) 中关闭；多节点临时目录问题统一在
+[multi-node-io.md](./multi-node-io.md) 中关闭，避免在三处复制同一计划。

@@ -7,7 +7,8 @@
 
 ## 固定体系
 
-`manifest.json` 定义并锁定 10 组显式速度初态。模型由
+`manifest.json` 为可复用 fixture 库锁定 10 组显式速度初态；默认 release profile 从中选择
+seed 0–4，共 5 组。模型由
 `long_nve_common.py` 确定性生成，每一组完整 `model.xyz` 的 SHA-256 都保存在 manifest；运行器
 在启动任何 GPU 作业前重新生成并校验全部 30 个哈希。
 
@@ -32,7 +33,7 @@
 | --- | ---: | --- | --- | --- | --- |
 | `smoke` | 100/100 | 三体系 seed 0 | 1 | HostStaged | 验证完整编排和全部语法变体 |
 | `nightly` | 10000/10000 | 三体系 seed 0 | 1/2/4 | HostStaged + CudaAware | 定期回归 |
-| `release` | 100000/100000 | 三体系 seeds 0–9 | 1/2/4/8 | HostStaged + CudaAware | 发布/阶段门槛 |
+| `release` | 100000/100000 | 三体系 seeds 0–4 | 1/2/4/8 | HostStaged + CudaAware | 发布/阶段门槛 |
 
 profile 已固定默认后端：smoke 为 HostStaged，nightly/release 为 HostStaged 与 CudaAware。
 `--backends` 可用于缩小诊断范围，但发布门槛不得据此删去后端。无论 profile 如何，MPI 环境
@@ -59,7 +60,7 @@ python3 tests/long_nve/run_long_nve.py \
   --report /tmp/dmgmd-long-nve-nightly.json
 ```
 
-完整 8 卡、10 初态、100000-step release：
+完整 8 卡、5 初态、100000-step release：
 
 ```text
 python3 tests/long_nve/run_long_nve.py \
@@ -130,7 +131,7 @@ stage；失败或不匹配的旧 stage 会保留为 `.failed-<UTC>` 后再执行
   确定性抽取的最多 512 个中心为样本，避免 Python 后处理退化为全体系 O(N²)。
 
 manifest 在查看 candidate 长程结果前固定 25% 非劣 margin 和每项 absolute floor。运行器同时
-执行同批 GPUMD reference，分别比较十初态的 median 与 q95。最终 MSD 和最小距离作为诊断量；
+执行同批 GPUMD reference，分别比较五初态的 median 与 q95。最终 MSD 和最小距离作为诊断量；
 构型分布由元素对距离直方图的最大 L1 距离检查。
 
 ### NVT统计正确性

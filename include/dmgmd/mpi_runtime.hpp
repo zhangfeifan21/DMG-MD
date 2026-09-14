@@ -15,7 +15,7 @@ enum class CommunicationBackend {
   cuda_aware,
 };
 
-// Keep this public boundary synchronized with docs/replicated-mpi.md: callers
+// Keep this public boundary synchronized with docs/standards/replicated-mpi.md: callers
 // supply replicated input buffers plus an OwnedRange, while MpiRuntime owns
 // backend selection, staging, collective calls, and byte accounting.
 // Collective-buffer volume, not an estimate of physical network traffic.

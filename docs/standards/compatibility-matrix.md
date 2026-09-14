@@ -1,5 +1,7 @@
 # GPUMD 输入/输出兼容性矩阵
 
+类别：现行标准。实际支持行为以生产代码和自动化测试为准。
+
 ## 1. 兼容性声明边界
 
 本文记录 DMG-MD 当前已经实现的兼容合同，数值和文件行为以
@@ -329,7 +331,7 @@ ordinary large-box NEP 每1000次 `compute_large_box()`（包括第一次调用�
 
 DMG-MD 当前保留 rank 0 的这一兼容副作用；非零 rank 的同名内部输出进入隔离目录，不得竞争
 用户作业目录。现有隔离目录只适用于单节点/共享临时目录假设，多节点改造按
-[multi-node-io-plan.md](./multi-node-io-plan.md) 审批后实施。
+[multi-node-io.md](../plans/multi-node-io.md) 审批后实施。
 
 ## 9. 单位汇总
 
@@ -357,4 +359,4 @@ DMG-MD 当前保留 rank 0 的这一兼容副作用；非零 rank 的同名内�
 3. 单位和文件名有测试；
 4. header、列顺序、format precision和step触发有测试；
 5. MPI下只从owned数据产生一次物理贡献；
-6. 与锁定GPUMD executable的golden结果达到 [golden-test-plan.md](./golden-test-plan.md) 定义的比较级别。
+6. 与锁定GPUMD executable的golden结果达到 [golden-test-standard.md](./golden-test-standard.md) 定义的比较级别。

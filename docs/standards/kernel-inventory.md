@@ -1,5 +1,7 @@
 # NEP MD CUDA kernel 清单与通信依赖
 
+类别：现行标准与代码审计证据。
+
 ## 1. 范围和记号
 
 参考版本：`../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e`。

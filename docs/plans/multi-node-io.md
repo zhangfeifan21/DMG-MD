@@ -1,5 +1,7 @@
 # 多节点 rank I/O 隔离整改方案（待审批）
 
+类别：待实施计划。
+
 状态：**PROPOSED，尚未修改生产源码**。本方案针对 replicated-data MPI prototype；经维护者
 审批后才修改 `src/runtime.cu`。
 

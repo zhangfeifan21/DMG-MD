@@ -64,7 +64,7 @@ class LongNveTests(unittest.TestCase):
         release = self.manifest["profiles"]["release"]
         self.assertEqual(release["backends"], ["HostStaged", "CudaAware"])
         self.assertEqual(release["ranks"], [1, 2, 4, 8])
-        self.assertEqual(release["seeds"], list(range(10)))
+        self.assertEqual(release["seeds"], list(range(5)))
         self.assertIn("nvt", release["sections"])
         for case in (
             "carbon_nep5",

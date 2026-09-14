@@ -74,7 +74,7 @@ std::uint64_t file_fingerprint(const std::filesystem::path& path)
   return hash;
 }
 
-// File ownership is part of docs/replicated-mpi.md, not merely a test setup:
+// File ownership is part of docs/standards/replicated-mpi.md, not merely a test setup:
 // non-root ranks execute legacy GPUMD-derived code in disposable directories
 // so any still-internal fopen cannot collide with rank 0's compatible output.
 class RankIoIsolation {
@@ -473,7 +473,7 @@ class NepForce {
   NepForce(const std::string& filename, const AtomCounts& counts)
       : nep_(filename.c_str(), checked_int(counts.local_count(), "local_count"))
   {
-    // See the NEP completeness proof in docs/replicated-mpi.md. The pinned
+    // See the NEP completeness proof in docs/standards/replicated-mpi.md. The pinned
     // ordinary NEP implementation reads Fp(n2) and reverse
     // directed partials belonging to neighboring centers. Merely assigning a
     // rank-local N1/N2 leaves those arrays incomplete. Until phase-level
@@ -923,7 +923,7 @@ void run_segment(
     OwnedRange owned_range,
     MpiRuntime& mpi)
 {
-  // Per-step protocol (docs/replicated-mpi.md): integrate owned positions,
+  // Per-step protocol (docs/standards/replicated-mpi.md): integrate owned positions,
   // allgather replicated coordinates, evaluate full NEP scratch, integrate
   // owned velocities, reduce owned thermo, then allgather velocities. Output
   // gathers are conditional and every collective contributes to the log.
@@ -1058,7 +1058,7 @@ void run_replicated(
   const auto total_started = std::chrono::steady_clock::now();
   // The full Model is replicated input. `owned` below is the only authority
   // for integration, thermodynamics and output; this phase has no ghosts or
-  // atom migration. Keep this boundary aligned with docs/replicated-mpi.md.
+  // atom migration. Keep this boundary aligned with docs/standards/replicated-mpi.md.
   if (model.atoms.counts.ghost_count != 0 ||
       model.atoms.counts.owned_count != model.atoms.counts.global_count) {
     throw std::logic_error(

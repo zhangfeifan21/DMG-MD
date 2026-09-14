@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-// Runtime contract and accounting formulas: docs/replicated-mpi.md. Keep the
+// Runtime contract and accounting formulas: docs/standards/replicated-mpi.md. Keep the
 // DMGMD_MPI, DMGMD_CENTER_* and DMGMD_COMM records stable because the MPI
 // differential test parses them as executable evidence for that document.
 namespace dmgmd {
@@ -263,7 +263,7 @@ class MpiRuntime::Impl {
       std::replace(mpi_library.begin(), mpi_library.end(), '\r', ' ');
 
       // This is a deliberate deployment contract, mirrored by CMake, the MPI
-      // preflight, and docs/replicated-mpi.md.  Failing here prevents a stale
+      // preflight, and docs/standards/replicated-mpi.md. Failing here prevents a stale
       // system libmpi from masquerading as a force/trajectory regression.
       if (mpi_library.find("Open MPI") == std::string::npos) {
         throw std::runtime_error("dmg-md requires the Open MPI + UCX runtime stack");

@@ -1,5 +1,7 @@
 # Replicated-data MPI prototype
 
+类别：现行标准。本文描述当前已实现的 replicated-data runtime 合同。
+
 ## 数据所有权与每步顺序
 
 每个 rank 的 device arrays 都以全局 `N` 为 SoA stride，持有完整 position/type/mass 等输入。
@@ -123,7 +125,7 @@ rank 的重复计算量累计为额外工作。`phase=run` 包含该 segment 的
 append `neighbor.out`；非零 rank 被切换到由 rank 0 创建的临时工作目录，其中
 `neighbor.out` 指向 `/dev/null`，所以作业目录仍只有 rank 0 写。正常退出时 rank 0 清理临时
 目录。该实现依赖 rank 0 临时目录对全部节点可见，目前只验证了单节点；多节点改为每 rank
-本地 scratch 的方案见 [multi-node-io-plan.md](./multi-node-io-plan.md)，状态为待审批，尚未修改
+本地 scratch 的方案见 [multi-node-io.md](../plans/multi-node-io.md)，状态为待审批，尚未修改
 runtime。
 
 runtime 直接构造 ordinary `NEP`，并在选择 CUDA device 后不再枚举设备决定势实现；没有
@@ -141,7 +143,7 @@ capability、UCX `cuda_copy/cuda_ipc`、GPU 唯一绑定及实际 device-pointer
 - 每 rank 启动记录、唯一 GPU UUID、owned coverage proof 和每步通信记录；
 - 默认对 HostStaged 和 CudaAware 运行同一矩阵并做 cross-backend differential。
 
-`tests/long_nve/run_long_nve.py` 在此短矩阵之外提供 4096/12288/5000 原子、十显式初态和
+`tests/long_nve/run_long_nve.py` 在此短矩阵之外提供 4096/12288/5000 原子、五显式初态和
 100000-step release 正确性验收，包括真实 `E(0)`、长期守恒统计、确定性 NVT 温度统计、时间
 平均 RDF、MSD、GPUMD↔DMG-MD 双向静态构型回放及跨 rank restart。release/nightly 同时覆盖
 NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL cutoff 的静态/短轨迹分支，并默认执行
@@ -151,5 +153,5 @@ HostStaged 与 CudaAware。它保存 wall time/吞吐诊断但不设置性能通
 ## 后续演进
 
 从本协议演进到 owned/ghost 域分解与 halo 通信的设计（含 M0 删除每步 velocity
-Allgatherv 的快速优化）见 [domain-decomposition.md](./domain-decomposition.md)，状态为
+Allgatherv 的快速优化）见 [domain-decomposition.md](../plans/domain-decomposition.md)，状态为
 设计待审批，尚未修改 runtime。

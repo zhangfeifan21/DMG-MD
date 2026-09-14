@@ -1,5 +1,7 @@
 # DMG-MD 数据结构与内存布局
 
+类别：现行标准。
+
 更新日期：2026-09-03。
 
 本文档描述当前 single-rank 与 replicated-data MPI `dmg-md` 的数据面，并以现有代码为
@@ -194,4 +196,5 @@ owned range，并在 rank 0 按 `global_id` 恢复顺序；thermo 只对 owned r
 全局归约。
 
 single-rank 实现以及 Open MPI+UCX 环境下的 HostStaged/CudaAware 1/2/4-rank prototype 均已
-在沙箱外 GPU 上通过四组锁定 GPUMD golden。验证状态与命令见 [progress.md](./progress.md)。
+在沙箱外 GPU 上通过四组锁定 GPUMD golden。验证状态与命令见
+[current.md](../status/current.md)。

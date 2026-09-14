@@ -71,9 +71,7 @@ nohup.out
 # Benchmark generated data
 # ============================================================
 
-benchmarks/**/trajectory.xyz
-benchmarks/**/dump.*
-benchmarks/**/restart.*
+dmgmd-*/
 
 # Authoritative GPUMD baseline outputs are intentionally versioned test fixtures.
 !tests/baseline/goldens/

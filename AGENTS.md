@@ -30,19 +30,15 @@
 - 不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
 - 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
 
-本阶段的实现、所有权、通信量和验证契约位于 `docs/replicated-mpi.md`。
+本阶段的实现、所有权、通信量和验证契约位于
+`docs/standards/replicated-mpi.md`。所有文档从 `docs/README.md` 进入：
 
-当前设计与审计的权威交付物位于：
+- `docs/standards/`：当前已经生效的产品、架构和测试合同；
+- `docs/status/`：带日期、revision、环境和命令的进度或实测备忘；
+- `docs/plans/`：尚未实施或待审批的方案、风险和待办。
 
-- `docs/critical-path.md`
-- `docs/kernel-inventory.md`
-- `docs/data-layout.md`
-- `docs/minimal-source-manifest.md`
-- `docs/compatibility-matrix.md`
-- `docs/mpi-risks.md`
-- `docs/golden-test-plan.md`
-- `docs/open-questions.md`
-- `docs/domain-decomposition.md`（域分解与 halo 通信设计稿，待审批）
+域分解与 halo 通信仍是 `docs/plans/domain-decomposition.md` 中的待实施计划，不得描述为当前
+runtime 能力。
 
 ## GPUMD 复现边界（强制）
 
@@ -148,6 +144,20 @@ GPUMD 是数值和兼容性参考。验证至少分四层：
 4. MPI domain decomposition。
 
 比较邻居关系、每原子能量/力/virial、总 thermo、短轨迹、NVE 漂移、输出字节结构和 restart。不得为了让测试通过而随意放宽容差；容差必须来自重复的基线实验，并区分逐字段精确、确定性数值容差和随机/混沌轨迹的统计比较。
+
+## 文档治理
+
+- 测试行为以测试脚本为第一事实源；case、profile、输入哈希、容差和统计门槛以对应
+  `manifest.json` 为第一事实源。测试目录 README 说明操作方法，
+  `docs/standards/golden-test-standard.md` 说明验收原则，不得复制维护另一套参数。
+- `docs/standards/` 只描述当前已经生效的合同。代码、支持范围、数据布局或测试门槛变化时，
+  必须在同一修改中更新对应标准。
+- `docs/status/` 只记录某次实际状态或验证结果。通过声明必须包含日期、代码 revision、环境、
+  精确命令和结果；“测试已定义”不得写成“当前已通过”。
+- `docs/plans/` 必须标明 `PROPOSED`、`APPROVED` 或 `IN PROGRESS`，不得被 README 或标准描述为
+  已实现。计划完成后，将最终合同迁入 standards、实测结果写入 status，并删除已完成的重复步骤。
+- 新文档必须从 `docs/README.md` 归类和链接。文档移动后使用 `rg` 检查 Markdown 链接、源码
+  注释和测试 docstring；Git 历史保存旧快照，不在工作树中新建重复 archive 文档。
 
 ## Agent 工作方式
 

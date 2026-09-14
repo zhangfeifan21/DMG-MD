@@ -1,5 +1,7 @@
 # DMG-MD 架构决策
 
+类别：现行标准。
+
 更新日期：2026-09-09。参考 GPUMD commit：
 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 
@@ -17,7 +19,7 @@ DMG-MD 不可达的路径（DFTD3、temperature/active-learning 重载、ILP/SW 
 GPLv3，复制进本仓库后的发布/分发策略仍须遵守其许可证。
 
 历史：2026-09-03 的旧版决策是 CMake 直接编译只读 GPUMD checkout 中的源文件
-（`GPUMD_SOURCE_DIR` + commit 校验）。该模式已被 D-010 取代。
+（`GPUMD_SOURCE_DIR` + commit 校验）。该模式已于 2026-09-09 由本决策修订并废除。
 
 ## D-002：全局元数据与本地寻址从 single-rank 起分离
 
@@ -90,20 +92,4 @@ NEP scratch。不能直接把 `NEP::N1/N2` 设为 owned range。
 
 原因：锁定 NEP force 读取远端中心 `Fp` 和反向 directed partial；没有 phase-level exchange
 时，直接中心分片不完整。启动 coverage collective 证明 owned ranges 恰好覆盖一次，并明确
-记录 NEP kernel 仍为 replicated-full。见 `docs/replicated-mpi.md`。
-
-## D-010：GPUMD 代码只允许仓库内复现（2026-09-09）
-
-决定：废除"直接编译 `../gpumd-reference` 源文件"的构建模式，改为在
-`src/gpumd_compat/` 复现（见 D-001 修订）。规则写入 `AGENTS.md`：DMG-MD 源码不得
-include/编译/链接/运行 GPUMD reference 中的任何代码；需要 GPUMD 已验证实现时，先在
-`src/gpumd_compat/` 复现并加注释（用途 + GPUMD 对应文件/符号），再接入 runtime。
-
-复现范围与验证：15 个文件（common、gpu_macro、error、gpu_vector、box、neighbor、
-potential、nep_utilities、nep、nep_small_box 及其 .cu），约 7.6k 行；裁剪 DFTD3、
-temperature/active-learning kernel 重载、ILP/SW/stream 邻居变体、双精度 many-body gather
-等不可达路径。数值等价性由既有 golden 基线证明：`tests/baseline` 4/4 案例通过
-（force/energy/virial 误差 <= 2e-15 相对量级），MPI 差分矩阵 1/2/4 rank x
-HostStaged/CudaAware 全部一致，long NVE smoke 通过。`error.cu` 仍按 C++ 编译以保持
-parser 单测 CPU-only；`gpumd_compat` 使用整程序 CUDA 编译（无 separable），与参考
-GPUMD 构建一致。
+记录 NEP kernel 仍为 replicated-full。见 [replicated-mpi.md](./replicated-mpi.md)。

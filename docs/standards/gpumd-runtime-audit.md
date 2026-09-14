@@ -1,4 +1,6 @@
-# GPUMD 普通 NEP MD 最小关键路径
+# GPUMD 普通 NEP MD runtime 审计
+
+类别：现行标准与代码审计证据。
 
 ## 1. 审计边界与参考版本
 
@@ -253,3 +255,24 @@ DMG-MD 为保持可见格式兼容，可以继续输出相同列；但内部必�
 2. large-box kernel 家族最适合作为首个复用对象；其 center-owned 写模型可避免 reverse **force** exchange，但需要交换邻居中心的 descriptor/partial 中间场，或用经证明的更深位置 halo重算这些场。
 3. small-box 不是简单 fallback：它改变为 Newton atomic scatter 和显式多 image 语义，通信及身份模型完全不同。
 4. 当前 `NEP_MULTIGPU` 只证明了 NEP 存在两层依赖窗口；它仍由 GPU 0 持有全局 `N`、全局 cell list 和最终全局输出，不能直接映射成 MPI runtime。
+
+## 11. DMG-MD 最小源码闭包
+
+历史上的独立源码清单同时混入了早期设计建议、已删除实现和当前事实。
+本节只保留仍生效的源码边界；历史取舍由 Git 和
+[架构决策](./architecture-decisions.md) 保存。
+
+| 层 | 当前文件/目录 | 责任 |
+| --- | --- | --- |
+| compat core | `src/gpumd_compat/` | tokenizer、Box、GPU_Vector、neighbor、Potential、NEP/NEP-ZBL loader 与 kernels |
+| input | `include/dmgmd/model.hpp`、`include/dmgmd/run_ir.hpp`、`src/model_parser.cpp`、`src/run_parser.cpp` | model/run 兼容解析、typed IR 和错误位置 |
+| runtime | `src/runtime.cu`、`include/dmgmd/runtime.hpp` | device atoms、积分、thermo、输出与 replicated NEP adapter |
+| MPI | `src/mpi_runtime.cu`、`include/dmgmd/mpi_runtime.hpp`、`include/dmgmd/partition.hpp` | lifecycle、device binding、collectives、owned range 和诊断 |
+| entry | `src/dmgmd_main.cpp` | parse/validate 后启动 runtime，协调错误退出 |
+
+构建必须显式列出这些文件，不得通过 glob 把 GPUMD 的其他模块带入。当前产品范围排除 PIMD、
+MC、phonon、minimize、deposition、PLUMED、长程静电、其他势函数、高级 ensemble 和完整
+measurement 系统；对应命令仍应识别并明确报 unsupported。
+
+未来 domain decomposition 所需的 migration、halo、intermediate exchange 和 local neighbor
+builder 不属于当前闭包，统一由 [域分解计划](../plans/domain-decomposition.md) 管理。

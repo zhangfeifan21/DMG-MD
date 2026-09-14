@@ -7,7 +7,7 @@
 namespace dmgmd {
 
 // Half-open global-index range owned by one rank. The ownership proof and
-// replicated-input exception are specified in docs/replicated-mpi.md.
+// replicated-input exception is specified in docs/standards/replicated-mpi.md.
 // Replicated inputs continue to use global_count as their stride; this range
 // only grants write/reduction ownership for outputs and integration state.
 struct OwnedRange {

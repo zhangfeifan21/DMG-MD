@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the acceptance matrix specified by docs/replicated-mpi.md.
+"""Run the acceptance matrix specified by docs/standards/replicated-mpi.md.
 
 Besides numerical golden comparisons, this checks the machine-readable
 startup/backend records, the exact owned-center coverage proof, per-step

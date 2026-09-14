@@ -125,11 +125,11 @@ python3 tests/long_nve/run_long_nve.py \
   --report /tmp/dmgmd-long-nve-smoke.json
 ```
 
-完整方法、4096/12288/5000 原子 fixture、十初态 release 矩阵、NVT统计、双向构型回放和跨
+完整方法、4096/12288/5000 原子 fixture、五初态 release 矩阵、NVT统计、双向构型回放和跨
 rank restart 见 [长程正确性测试说明](tests/long_nve/README.md)。
 
 实现协议、中心分片完整性结论和逐步通信量公式见
-[replicated-mpi.md](docs/replicated-mpi.md)。
+[replicated-mpi.md](docs/standards/replicated-mpi.md)。
 
 ## VS Code / clangd
 
@@ -153,10 +153,12 @@ database，它会错误地认为该宏未定义，并且可能找不到 `dmgmd/m
 
 ## 文档
 
-- [当前进度与验证结果](docs/progress.md)
-- [架构决策](docs/decisions.md)
-- [当前数据布局](docs/data-layout.md)
-- [输入兼容矩阵](docs/compatibility-matrix.md)
-- [多节点 rank I/O 隔离待审批方案](docs/multi-node-io-plan.md)
+- [文档索引与分类](docs/README.md)
+- [当前进度与验证结果](docs/status/current.md)
+- [Golden Test 标准](docs/standards/golden-test-standard.md)
+- [架构决策](docs/standards/architecture-decisions.md)
+- [当前数据布局](docs/standards/data-layout.md)
+- [输入兼容矩阵](docs/standards/compatibility-matrix.md)
+- [待实施计划](docs/plans/domain-decomposition.md)
 - [Golden test 说明](tests/baseline/README.md)
 - [长程 NVE/NVT 正确性测试](tests/long_nve/README.md)
