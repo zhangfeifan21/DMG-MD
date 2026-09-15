@@ -4,7 +4,7 @@
 
 更新日期：2026-09-15。
 
-代码基线：`ec23d2c`；工作区未提交修改不计入已验证结论。
+代码基线：`f1480c9` 加上工作区未提交的 M0 修改；未提交修改不计入历史已验证结论。
 
 ## 当前结论
 
@@ -26,7 +26,8 @@
 - 支持 NEP4、NEP5、对应 ZBL/typewise/flexible 分支，以及 NVE、`nvt_ber`、
   `correct_velocity`、thermo/XYZ/restart 和多段 run；
 - `model.xyz` 和 `run.in` 先完成兼容解析与 fail-fast 校验，再初始化 GPU；
-- position/velocity 每步 Allgatherv，owned thermo Allreduce，输出由 rank 0 按 global ID
+- position 每步 Allgatherv，owned thermo Allreduce，velocity 不再每步复制（M0：
+  仅 correct_velocity 触发步在修正前恢复复制态），输出由 rank 0 按 global ID
   恢复稳定顺序；
 - runtime 输出 `DMGMD_COMM`、center coverage、MPI/GPU 环境记录和
   `DMGMD_TIMING phase=run/total`；
@@ -69,13 +70,38 @@ baseline 的环境、命令、case 和校准证据见 [baseline-results.md](./ba
 
 - R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双物理节点
   （互不可见 TMPDIR）验收也尚未执行，见 [multi-node-io.md](../plans/multi-node-io.md)；
-- domain decomposition、ghost/halo、migration 和真正的 NEP 中心分片仍是计划，见
-  [域分解计划](../plans/domain-decomposition.md)；
+- domain decomposition 的 M1/M2/M3（空间 slab 所有权、ghost/halo、migration 和真正的
+  NEP 中心分片）仍是计划，见
+  [域分解计划](../plans/domain-decomposition.md)；M0 已实施（见下）；
 - malformed potential corpus、若干 cutoff/ZBL 边界和 future command 语义仍待验证，见
   [风险与待办](../plans/risk-and-backlog.md)；
 - replicated-full 阶段禁止从 `DMGMD_TIMING` 或正确性作业 wall time 推导性能结论。
 
 ## 最近变更
+
+2026-09-15 M0（删除每步 velocity Allgatherv）已实施并验收：
+
+- 修改 `src/runtime.cu`：删除 `run_segment` 段末的每步 velocity Allgatherv；
+  correct_velocity 触发步（`step % interval == 0`）在调用 `correct_device_velocity`
+  之前补一次 velocity Allgatherv 恢复复制态，修正后的 Bcast 重新复制完整数组；
+- 同步修订 `tests/mpi/run_mpi_differential.py` 的 `collective_calls` 下限断言
+  （3→2，普通步只剩 position Allgatherv + thermo Allreduce）与
+  `docs/standards/replicated-mpi.md` 的每步顺序和字节表；
+- 验证环境：`../env/md-mpi.sh`（Open MPI 5.0.10 + UCX 1.22.0），4× RTX 4090，
+  `source ../env/md-mpi.sh` 后：
+  - `ctest --test-dir build`：4/4 通过；
+  - `python3 tests/mpi/run_mpi_differential.py --candidate ./build/dmg-md --devices
+    0,1,2,3`：1/2/4 rank × HostStaged/CudaAware 六组全 PASS，容差未放宽，
+    NVE excursion/slope 与基线一致；
+  - pre/post 二进制 A/B（同一 GPU 矩阵、同一输入）：committed 四个 baseline case
+    全部输出（含 multi_nvt_restart 的 initial+resume 段）120 个文件、以及自建
+    correct_velocity 输入（25 步、interval 10、NVE/NVT 两体系）48 个文件，
+    pre/post 逐字节一致（`cmp`，0 差异）；
+  - `DMGMD_COMM` 字节核算与修订后标准逐字段吻合：普通步 MPI input `24N+64P`、
+    output `24NP+64P`（输出步另加 `152N` gather）；correct_velocity 触发步
+    input `72N+64P`、output `72NP+64P`；HostStaged 普通步 D2H/H2D 各减
+    `24N`/`24NP`（实例 N=8、P=2：D2H 1728→1536、H2D 896→512 B）。
+    基线二进制为修改前构建（`f1480c9` 工作树，`/tmp/dmg-md-preM0`）。
 
 2026-09-14 新增：
 

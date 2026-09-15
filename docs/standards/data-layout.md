@@ -138,7 +138,7 @@ GPUMD 的 `GPU_Vector` 管理设备内存：
 | `mass` | `double` | `local` | replicated input；积分/thermo 按 MPI owned range 读 |
 | `charge` | `float` | `local` | replicated input；rank 0 formatter 使用 |
 | `position` | `double` | `3 * local` | replicated input；积分只写 MPI owned range |
-| `velocity` | `double` | `3 * local` | replicated state；积分/控温只写 MPI owned range |
+| `velocity` | `double` | `3 * local` | replicated buffer；非 owned 槽位不每步同步（M0），仅 correct_velocity 触发步恢复复制态；积分/控温只写 MPI owned range |
 | `force` | `double` | `3 * local` | NEP 写全量 scratch；仅 MPI owned range authoritative |
 | `potential` | `double` | `local` | NEP 写全量 scratch；thermo/dump 只认 MPI owned range |
 | `virial` | `double` | `9 * local` | NEP 写全量 scratch；thermo/dump 只认 MPI owned range |

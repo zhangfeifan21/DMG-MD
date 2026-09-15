@@ -183,8 +183,8 @@ def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> N
                 raise baseline.BaselineError(f"{stage_dir}: negative communication volume")
         if int(fields["mpi_input_bytes_global"]) == 0 or int(fields["mpi_output_bytes_global"]) == 0:
             raise baseline.BaselineError(f"{stage_dir}: empty per-step MPI byte accounting")
-        if int(fields["collective_calls"]) < 3:
-            raise baseline.BaselineError(f"{stage_dir}: expected position/velocity/thermo collectives")
+        if int(fields["collective_calls"]) < 2:
+            raise baseline.BaselineError(f"{stage_dir}: expected position/thermo collectives")
         if backend_name == "HostStaged":
             if int(fields["device_to_host_bytes_global"]) == 0:
                 raise baseline.BaselineError(f"{stage_dir}: HostStaged omitted device-to-host bytes")

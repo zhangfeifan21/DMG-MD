@@ -10,15 +10,23 @@ rank `r` 唯一拥有半开区间 `owned=[begin_r,end_r)`；区间使用 quotien
 
 每步执行顺序为：
 
-1. 只对 owned 区间做 velocity-Verlet first half；
-2. 将 owned position 打包成 AoS，以 `MPI_Allgatherv` 恢复每张 GPU 的完整 position；
-3. 每张 GPU 用 ordinary `NEP` 对完整 replicated coordinates 计算 scratch output；
-4. 只对 owned 区间做 velocity-Verlet second half；
-5. 只对 owned kinetic/PE/virial 求 local sum，再对 8 个 double 做 `MPI_Allreduce`；
-6. NVT 如需缩放，只写 owned velocity；
-7. `MPI_Allgatherv` owned velocity，恢复 replicated velocity；
+1. （correct_velocity 触发步）先 `MPI_Allgatherv` owned velocity 恢复复制态，root 在 CPU 上对
+   全体系修正后 `MPI_Bcast` 完整 velocity；
+2. 只对 owned 区间做 velocity-Verlet first half；
+3. 将 owned position 打包成 AoS，以 `MPI_Allgatherv` 恢复每张 GPU 的完整 position；
+4. 每张 GPU 用 ordinary `NEP` 对完整 replicated coordinates 计算 scratch output；
+5. 只对 owned 区间做 velocity-Verlet second half；
+6. 只对 owned kinetic/PE/virial 求 local sum，再对 8 个 double 做 `MPI_Allreduce`；
+7. NVT 如需缩放，只写 owned velocity；
 8. 输出步只 `MPI_Gatherv` owned position/velocity/force/PE/virial 到 rank 0；rank 0 按 global ID
    写文件。
+
+velocity 不再每步复制（M0）。非 owned velocity 槽位保持最近一次全量复制（初始化/`velocity`
+命令的 broadcast，或 correct_velocity 的 Bcast）之后的陈旧值；本 runtime 没有任何消费者读取
+它——VV 两半、Berendsen 缩放、thermo、adaptive timestep 与输出 gather 都只访问 owned 区间，
+NEP 只读 position。唯一例外是 correct_velocity：root 的 CPU 修正读取全体系 position+velocity，
+position 已由每步的 Allgatherv 保持复制态，velocity 则在触发步步首恢复；修正后的 Bcast 重新
+复制完整数组，段内后续步骤无需再同步。
 
 non-owned NEP output 只是 scratch，不参加积分、thermo 或输出。它没有 ghost 身份；本阶段
 `ghost_count` 必须为 0，也没有 halo、迁移或 neighbor cache 跨步所有权。
@@ -83,14 +91,15 @@ step 为 K 的倍数的采样行；每一行仍是该单步的量，不是 K 步
 | --- | ---: | ---: |
 | position Allgatherv (3 doubles/atom) | `24N` | `24NP` |
 | thermo Allreduce (8 doubles/rank) | `64P` | `64P` |
-| velocity Allgatherv (3 doubles/atom) | `24N` | `24NP` |
-| 合计 | `48N + 64P` | `48NP + 64P` |
+| 合计 | `24N + 64P` | `24NP + 64P` |
 
-HostStaged 同一步的 D2H/H2D 分别也是 `48N + 64P` 和 `48NP + 64P`。adaptive timestep 另加
+HostStaged 同一步的 D2H/H2D 分别也是 `24N + 64P` 和 `24NP + 64P`。adaptive timestep 另加
 一个 host double max Allreduce，即 MPI input/output 各 `8P`。
 
-若本步触发 `correct_velocity`，另加一个 3N-double velocity Bcast：MPI input `24N`、output
-`24NP`；HostStaged 同时增加 D2H `24N` 和 H2D `24NP`。
+若本步触发 `correct_velocity`，步首先恢复复制态：一次 velocity Allgatherv（MPI input `24N`、
+output `24NP`；HostStaged 增加同量 D2H/H2D），随后既有修正路径的 3N-double velocity Bcast
+（MPI input `24N`、output `24NP`；HostStaged 同时增加 D2H `24N` 和 H2D `24NP`）。触发步合计
+MPI input `72N + 64P`、output `72NP + 64P`。
 
 输出步 gather 的基础 snapshot 包含 position(3)、velocity(3)、force(3)、PE(1)、virial(9)，
 额外 MPI input/output 各 `19 * 8N = 152N` bytes；unwrapped position 再加 `24N`。HostStaged
@@ -183,6 +192,7 @@ TMPDIR 根（单节点模拟 node-local temp）、成功后作业目录只含 ra
 
 ## 后续演进
 
-从本协议演进到 owned/ghost 域分解与 halo 通信的设计（含 M0 删除每步 velocity
-Allgatherv 的快速优化）见 [domain-decomposition.md](../plans/domain-decomposition.md)，状态为
-设计待审批，尚未修改 runtime。
+从本协议演进到 owned/ghost 域分解与 halo 通信的设计见
+[domain-decomposition.md](../plans/domain-decomposition.md)。其中 M0（删除每步 velocity
+Allgatherv，correct_velocity 触发步保留恢复复制态）已实施并纳入本标准；其余里程碑（M1 起的
+空间 slab 所有权、halo 与迁移）仍为待审批计划，尚未修改 runtime。

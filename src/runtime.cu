@@ -1253,8 +1253,11 @@ void run_segment(
 {
   // Per-step protocol (docs/standards/replicated-mpi.md): integrate owned positions,
   // allgather replicated coordinates, evaluate full NEP scratch, integrate
-  // owned velocities, reduce owned thermo, then allgather velocities. Output
-  // gathers are conditional and every collective contributes to the log.
+  // owned velocities, then reduce owned thermo. Replicated velocity is no
+  // longer refreshed every step (M0): no consumer reads non-owned velocity, so
+  // it is restored by an Allgatherv only on correct_velocity trigger steps,
+  // right before the root reads the full array. Output gathers are conditional
+  // and every collective contributes to the log.
   int thermo_count = 0;
   int restart_count = 0;
   for (const Measurement& measurement : measurements) {
@@ -1289,6 +1292,13 @@ void run_segment(
   for (int step = 0; step < steps; ++step) {
     CommunicationVolume communication;
     if (velocity_correction && step % velocity_correction->interval == 0) {
+      // M0 exception: correct_device_velocity reads the full replicated
+      // velocity on the root rank, and non-owned slots may be stale since the
+      // per-step velocity allgather was removed. Restore the replicated state
+      // here; the corrected broadcast_device below re-replicates the full
+      // array, so later steps in this segment need no further sync.
+      mpi.allgather_owned_device_soa(
+          atoms.velocity.data(), 3, atoms.counts.local_count(), owned_range, communication);
       correct_device_velocity(atoms, identity, *velocity_correction, mpi, communication);
     }
     const double time_step = adaptive_time_step(
@@ -1334,9 +1344,6 @@ void run_segment(
         check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
       }
     }
-    mpi.allgather_owned_device_soa(
-        atoms.velocity.data(), 3, atoms.counts.local_count(), owned_range, communication);
-
     bool need_snapshot = false;
     for (const Measurement& measurement : measurements) {
       if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {

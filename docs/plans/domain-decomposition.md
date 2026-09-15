@@ -1,10 +1,13 @@
 # 域分解与 halo 通信协议（设计稿）
 
-类别：待实施计划。状态：PROPOSED，未实施。
+类别：实施中计划。状态：IN PROGRESS——M0 已于 2026-09-15 实施并验收，M1 及之后待审批、
+未实施。
 
 本文档规定 DMG-MD 从 replicated-data 原型演进为 owned/ghost 域分解
-runtime 的数据面协议，并定义 M0 快速优化。实现前须按 AGENTS.md 由维护者确认方向；
-本文档不修改任何生产代码。
+runtime 的数据面协议，并定义 M0 快速优化。M0 已按维护者指令实施，其协议与字节合同并入
+[replicated-mpi.md](../standards/replicated-mpi.md)，实测记录见
+[status/current.md](../status/current.md)；后续里程碑实现前仍须按 AGENTS.md 由维护者确认
+方向。
 
 前置阅读：[replicated-mpi.md](../standards/replicated-mpi.md)（现行协议）、
 [risk-and-backlog.md](./risk-and-backlog.md)（风险与待办登记）、
@@ -39,6 +42,9 @@ force（`run.cu:273-283`）；两个半步都由 `Ensemble::velocity_verlet`
 
 ### 1.2 DMG-MD 现行协议与开销
 
+（下表为 M0 实施前的证据快照；M0 后每步只剩一次 position Allgatherv，现行合同见
+[replicated-mpi.md](../standards/replicated-mpi.md)。）
+
 DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank（`src/runtime.cu:910-1048`），
 力不汇总回任何单一 GPU。但数据面仍是复制态，每步（`docs/standards/replicated-mpi.md`）：
 
@@ -65,6 +71,10 @@ DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank�
 网络流量从全员集合通信收缩为节点内点对点。
 
 ## 2. M0：删除每步 velocity Allgatherv
+
+状态：已实施（2026-09-15）。现行合同与字节表以
+[replicated-mpi.md](../standards/replicated-mpi.md) 为准；本节的行号引用基于实施前代码，
+仅作证据保留。
 
 ### 2.1 消费者清单（证据）
 
@@ -450,7 +460,7 @@ M1 量化。
 ## 12. 里程碑路线图
 
 ```text
-M0  删除每步 velocity Allgatherv（correct_velocity 触发步保留恢复复制）
+M0  删除每步 velocity Allgatherv（correct_velocity 触发步保留恢复复制）【已实施 2026-09-15】
     门：differential 矩阵逐字节一致                        ← 独立，可先行
 M1  空间 slab 所有权 + 迁移机制（数据仍复制、仍 Allgather、NEP 仍全量）
     门：golden 差分 + 迁移 fixture + 跨 rank restart
