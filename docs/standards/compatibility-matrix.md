@@ -329,9 +329,11 @@ ensemble wall_mirror ti_rs ti_as wall_harmonic ti_liquid npt_qtb
 
 ordinary large-box NEP 每1000次 `compute_large_box()`（包括第一次调用，计数从0）把最大 radial/angular neighbor count D2H，并 append `neighbor.out` (`src/force/nep.cu:1007-1025`)。它不是 `run.in` dump命令。
 
-DMG-MD 当前保留 rank 0 的这一兼容副作用；非零 rank 的同名内部输出进入隔离目录，不得竞争
-用户作业目录。现有隔离目录只适用于单节点/共享临时目录假设，多节点改造按
-[multi-node-io.md](../plans/multi-node-io.md) 审批后实施。
+DMG-MD 当前保留 rank 0 的这一兼容副作用；非零 rank 的同名内部输出进入本机私有 scratch 目录
+（`mkdtemp` 原子创建、mode 0700、普通文件 neighbor.out），不得竞争用户作业目录。该隔离不广播
+任何文件系统路径，各节点 `/tmp` 互不可见亦可运行；合同见
+[replicated-mpi.md](./replicated-mpi.md) 的“I/O 与 NEP_MULTIGPU”一节；尚未完成的严格双节点
+验收见 [multi-node-io.md](../plans/multi-node-io.md)。
 
 ## 9. 单位汇总
 

@@ -46,6 +46,7 @@ class MpiRuntime {
   [[nodiscard]] bool is_root() const noexcept;
   [[nodiscard]] CommunicationBackend backend() const noexcept;
   [[nodiscard]] const char* backend_name() const noexcept;
+  [[nodiscard]] const std::string& hostname() const noexcept;
 
   // Kept separate from MPI initialization so run/model syntax errors retain
   // the single-rank fail-fast behavior and do not require a working GPU.
@@ -55,6 +56,22 @@ class MpiRuntime {
   void broadcast_doubles(double* values, std::size_t count, int root = 0) const;
   void assert_same_fingerprint(std::uint64_t fingerprint, const char* name) const;
   void verify_and_log_center_partition(std::size_t global_count, OwnedRange owned) const;
+
+  // Control-plane collectives for the rank I/O isolation handshake
+  // (docs/standards/replicated-mpi.md). They are one-time setup/teardown
+  // coordination, so they are deliberately outside CommunicationVolume.
+  //
+  // allreduce_all_passed returns true only when every rank passed true; the
+  // isolation protocol requires this check before any rank may act on a local
+  // filesystem failure, so all ranks take the same branch and no rank is left
+  // waiting inside a later collective.
+  [[nodiscard]] bool allreduce_all_passed(bool local_passed, const char* operation) const;
+
+  // Gathers one diagnostic string per rank to rank 0 (empty means "nothing to
+  // report"); non-root ranks always get an empty vector. Valid only inside the
+  // cooperative isolation handshakes where every rank is known to participate;
+  // exception paths must use report_error instead (see its comment for why).
+  [[nodiscard]] std::vector<std::string> gather_strings(const std::string& value) const;
 
   void allgather_owned_device_soa(
       double* device_values,

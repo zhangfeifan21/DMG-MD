@@ -114,19 +114,42 @@ rank 的重复计算量累计为额外工作。`phase=run` 包含该 segment 的
 进入 `MPI_Abort` 前，发生异常的 rank 向 stderr 写入并立即 flush 一条
 `DMGMD_ERROR rank=... local_rank=... hostname=... category=... message="..."`。异常路径不调用
 `MPI_Gather` 或其他 collective：某些 peer 可能仍阻塞在 CUDA/MPI 调用中，此时为了聚合日志而
-执行 collective 会死锁并掩盖原始错误。Open MPI/PRRTE 的 I/O forwarding 负责把多节点 rank
+执行 collective 会死锁并掩盖原始失败。Open MPI/PRRTE 的 I/O forwarding 负责把多节点 rank
 的 stderr 转发到 `mpirun` 启动端（本项目部署约定中为 rank 0 所在节点）；测试运行器捕获这个
 合并后的 stderr 并保存为 `execution.stderr`。记录中的 world rank 与 hostname 用于区分来源，
-记录顺序不作为执行顺序证据。
+记录顺序不作为执行顺序证据。rank I/O 隔离的共享失败出口（见下节）与该规则一致：它在抛出
+异常**之前**已完成状态 Allreduce、诊断 Gather 和消息 Bcast，因此任何 rank 都不会带着未完成的
+collective 进入异常路径。
 
 ## I/O 与 NEP_MULTIGPU
 
-所有 thermo/XYZ/restart formatter 只在 world rank 0 调用。GPUMD ordinary NEP 内部会周期性
-append `neighbor.out`；非零 rank 被切换到由 rank 0 创建的临时工作目录，其中
-`neighbor.out` 指向 `/dev/null`，所以作业目录仍只有 rank 0 写。正常退出时 rank 0 清理临时
-目录。该实现依赖 rank 0 临时目录对全部节点可见，目前只验证了单节点；多节点改为每 rank
-本地 scratch 的方案见 [multi-node-io.md](../plans/multi-node-io.md)，状态为待审批，尚未修改
-runtime。
+所有 thermo/XYZ/restart formatter 只在 world rank 0 调用。GPUMD ordinary NEP 会周期性 append
+`neighbor.out`（每 1000 次调用，含首次）；rank 0 保留这一兼容副作用，直接写作业目录。
+每个非零 rank 在**本机** `temp_directory_path()` 下用 `mkdtemp` 原子创建
+`dmgmd-rank-io-<nonce>-r<rank>-XXXXXX`：目录 mode 恒为 0700（owner-only，不受 umask 影响），
+唯一性由 `mkdtemp` 的六字符随机后缀保证，不依赖 nonce 或时间戳。rank 在该目录中创建普通
+`neighbor.out` 文件后 chdir 进入；不创建任何 symlink，也不广播任何文件系统路径，因此各节点
+`/tmp` 互不可见亦可运行。
+
+setup 是两阶段 collective：各 rank 捕获本地错误（解析 TMPDIR、mkdtemp、创建 neighbor.out、
+chdir）后先 `Allreduce` 成功标志；任一失败时，已 chdir 的 rank **先恢复原 cwd**，随后所有
+rank 抛出同一条聚合错误（包含每个失败 rank 的 world rank、hostname、目标路径与系统错误），
+经常规 `MPI_Abort` 出口有界退出，不产生 collective hang。若恢复 cwd 本身失败，该 rank 不得
+删除仍可能作为进程 cwd 的 scratch；聚合错误明确记录跳过清理并保留精确目录供诊断。
+
+`finish()` 分三阶段：恢复状态归约（任一失败判作业失败，即使 MD 输出已完成）→ 各非零 rank
+经安全边界校验后只删除**自己的**目录（父目录必须等于启动时记录的本机 temp 根、basename 必须
+是完整前缀加 mkdtemp 六随机字符、且不是 symlink；校验失败保留目录并报警，删除范围不扩大）
+→ cleanup 状态汇总。cleanup 失败不判作业失败：rank 0 输出一行
+`DMGMD_RANK_IO_CLEANUP status=warning rank=... hostname=... ...` 并保留该 rank 的精确目录供
+诊断。析构函数只做本地、best-effort、无 MPI 的恢复/清理；需要 collective 的错误传播与清理
+只存在于构造函数与 `finish()`，从不在栈展开期间执行。
+
+`DMGMD_RANK_IO_FAULT="<world_rank>:<op>"`（op ∈
+`mkdir/file/chdir/setup_restore/restore/cleanup`）是仅供测试使用的故障注入钩子，使且仅使指定
+rank 在指定步骤失败；`setup_restore` 专用于组合测试，不是用户可配置行为。该合同由
+`tests/mpi/run_rank_io_isolation.py` 驱动验证（见验证入口）。尚未完成的双节点验收见
+[multi-node-io.md](../plans/multi-node-io.md)。
 
 runtime 直接构造 ordinary `NEP`，并在选择 CUDA device 后不再枚举设备决定势实现；没有
 构造 `NEP_MULTIGPU`，因此 MPI rank 看见多张本机 GPU 也不会自动占用它们。
@@ -149,6 +172,14 @@ capability、UCX `cuda_copy/cuda_ipc`、GPU 唯一绑定及实际 device-pointer
 NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL cutoff 的静态/短轨迹分支，并默认执行
 HostStaged 与 CudaAware。它保存 wall time/吞吐诊断但不设置性能通过门槛；replicated-full NEP
 阶段不发布多卡 speedup 或 scaling 结论。
+
+`tests/mpi/run_rank_io_isolation.py` 在同一环境门槛后验证上文 I/O 隔离合同：每 rank 独立
+TMPDIR 根（单节点模拟 node-local temp）、成功后作业目录只含 rank 0 兼容输出且无 scratch
+泄漏、五种本地故障（mkdir/file/chdir/restore/cleanup）单 rank 注入的有界可诊断退出、restore
+失败判作业失败而 cleanup 失败仅报警并保留 0700 目录与普通 neighbor.out 供诊断。脚本接受
+可重复的 `--mpiexec-arg` 传入跨节点 launcher 参数；每个正常返回的 rank 先报告本地状态，随后
+独立 MPI probe 扫描每个已分配节点，因此验证不依赖启动端能看见远端节点的临时文件系统。
+三 rank 及以上还覆盖 setup 失败与另一 rank 的 `setup_restore` 失败组合。
 
 ## 后续演进
 

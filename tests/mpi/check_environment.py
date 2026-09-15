@@ -88,6 +88,7 @@ def validate_environment(
     devices: Sequence[str],
     ranks: int,
     timeout: int,
+    mpiexec_args: Sequence[str] = (),
 ) -> Path:
     """Validate installations, linkage, transports, GPUs, then active collectives."""
 
@@ -198,7 +199,14 @@ def validate_environment(
     probe_environment["DMGMD_COMM_BACKEND"] = "CudaAware"
     try:
         result = subprocess.run(
-            [str(mpiexec), "-n", str(ranks), str(candidate), "--probe-mpi-environment"],
+            [
+                str(mpiexec),
+                *mpiexec_args,
+                "-n",
+                str(ranks),
+                str(candidate),
+                "--probe-mpi-environment",
+            ],
             cwd=PROJECT_ROOT,
             env=probe_environment,
             capture_output=True,
@@ -265,8 +273,21 @@ def main() -> int:
     parser.add_argument("--devices", required=True, type=_comma_list)
     parser.add_argument("--ranks", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--mpiexec-arg",
+        action="append",
+        default=[],
+        help="additional launcher argument; repeat as needed (use --mpiexec-arg=--host)",
+    )
     args = parser.parse_args()
-    validate_environment(args.candidate, args.mpiexec, args.devices, args.ranks, args.timeout)
+    validate_environment(
+        args.candidate,
+        args.mpiexec,
+        args.devices,
+        args.ranks,
+        args.timeout,
+        args.mpiexec_arg,
+    )
     return 0
 
 

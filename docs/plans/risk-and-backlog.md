@@ -108,7 +108,7 @@
 | R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | rank0 aggregate或明确不支持；不能所有rankappend |
 | R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + 四类数值自检；同步；HostStaged fallback |
 | R27 | P2 | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | epoch/versioned views；迁移后统一capacity growth和重建 |
-| R28 | P0 | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `runtime.cu:80-129` | 非零rank无法chdir，异常路径可能collective hang | 待审批的每rank本地scratch和两阶段错误归约；见 [multi-node-io.md](./multi-node-io.md) |
+| R28 | P0（整改与验证进行中） | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `src/runtime.cu` `RankIoIsolation`（整改前 `runtime.cu:80-129`） | 非零rank无法chdir，异常路径可能collective hang | 目标合同：每 rank 本机 `mkdtemp` scratch（0700）+ 两阶段错误归约共享出口 + 三阶段 finish；严格关闭条件为 [multi-node-io.md](./multi-node-io.md) 的双物理节点验收，现行合同见 [replicated-mpi.md](../standards/replicated-mpi.md) |
 
 ## 4. PBC 与 triclinic 专项
 
@@ -183,5 +183,5 @@ halo selection = physical cutoff relative to triclinic rank faces
 | B16 | 自适应 `time_step DT MAX_DISTANCE` 是否支持 | 全局最大速度归约设计和多段 run golden |
 
 域分解的 halo 深度、edge key、排序、迁移和 triclinic 问题统一在
-[domain-decomposition.md](./domain-decomposition.md) 中关闭；多节点临时目录问题统一在
-[multi-node-io.md](./multi-node-io.md) 中关闭，避免在三处复制同一计划。
+[domain-decomposition.md](./domain-decomposition.md) 中关闭；多节点临时目录问题按
+[multi-node-io.md](./multi-node-io.md) 完成严格双节点验收后关闭（R28），避免在三处复制同一计划。

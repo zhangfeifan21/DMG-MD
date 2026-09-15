@@ -13,8 +13,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -74,65 +76,391 @@ std::uint64_t file_fingerprint(const std::filesystem::path& path)
   return hash;
 }
 
-// File ownership is part of docs/standards/replicated-mpi.md, not merely a test setup:
-// non-root ranks execute legacy GPUMD-derived code in disposable directories
-// so any still-internal fopen cannot collide with rank 0's compatible output.
+// mkdtemp replaces exactly six trailing 'X' characters with random text.
+constexpr std::size_t kScratchRandomSuffixLength = 6;
+
+// Test-only fault injection hook. Setting
+// DMGMD_RANK_IO_FAULT="<world_rank>:<operation>" (operation in {mkdir, file,
+// chdir, setup_restore, restore, cleanup}) makes exactly that rank fail
+// exactly that step, with no filesystem side effect.
+// tests/mpi/run_rank_io_isolation.py uses it to prove that one rank's local
+// failure routes every rank through the same bounded failure exit instead of
+// hanging in a collective. Unset or non-matching values disable injection.
+bool rank_io_fault_requested(const char* operation, int world_rank)
+{
+  const char* value = std::getenv("DMGMD_RANK_IO_FAULT");
+  if (value == nullptr) return false;
+  const std::string specification(value);
+  const std::size_t separator = specification.find(':');
+  if (separator == std::string::npos) return false;
+  return specification.substr(0, separator) == std::to_string(world_rank) &&
+         specification.substr(separator + 1) == operation;
+}
+
+// Normalizes a trailing separator (e.g. TMPDIR="/tmp/") so the safety
+// boundary's parent comparison against the recorded temp root is exact.
+std::filesystem::path strip_trailing_separators(std::filesystem::path path)
+{
+  while (path.has_relative_path() && path.filename().empty()) {
+    path = path.parent_path();
+  }
+  return path;
+}
+
+// Random hex token used only for scratch naming and diagnostics. Uniqueness of
+// the scratch directories themselves is owned by mkdtemp, so even a repeated
+// nonce across concurrent jobs cannot make two ranks share a directory.
+std::string make_job_nonce()
+{
+  // The nonce is diagnostic only; mkdtemp owns directory uniqueness. Keep
+  // generation free of entropy-device failures because rank 0 produces it
+  // before the first isolation collective.
+  std::uint64_t value = static_cast<std::uint64_t>(
+      std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  value ^= static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count()) << 1;
+  static constexpr char kHexadecimal[] = "0123456789abcdef";
+  std::string nonce(16, '0');
+  for (std::size_t index = nonce.size(); index-- > 0;) {
+    nonce[index] = kHexadecimal[value & UINT64_C(0xF)];
+    value >>= 4;
+  }
+  return nonce;
+}
+
+// Guards the broadcast nonce against anything that is not a safe, fixed-shape
+// path component. A violation is identical on every rank (they all received
+// the same broadcast), so throwing here is already a symmetric exit.
+bool is_hex_token(const std::string& text)
+{
+  if (text.size() != 16) return false;
+  for (const unsigned char character : text) {
+    if (!((character >= '0' && character <= '9') ||
+          (character >= 'a' && character <= 'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// One self-describing diagnostic per rank. World rank and hostname are what
+// an operator needs to locate the failing node in a multi-node job; the
+// target path and reason identify the local filesystem failure.
+std::string rank_io_diagnostic(
+    const MpiRuntime& mpi,
+    const char* operation,
+    const std::filesystem::path& target,
+    const std::string& reason)
+{
+  return "rank=" + std::to_string(mpi.world_rank()) + " hostname=" + mpi.hostname() +
+         " " + operation + " " + target.string() + ": " + reason;
+}
+
+// File ownership is part of docs/standards/replicated-mpi.md, not merely a
+// test setup: only world rank 0 may write the user's job directory, while
+// legacy GPUMD-derived code opens files by relative name (ordinary NEP
+// appends neighbor.out every 1000 force calls). Every non-root rank therefore
+// executes inside a private scratch directory on its OWN node. The previous
+// design let rank 0 create one shared temp root and broadcast its path, which
+// silently assumed a cross-node visible /tmp and could hang when a remote
+// chdir failed; no filesystem path is broadcast anymore.
+//
+// Protocol: docs/standards/replicated-mpi.md "I/O 与 NEP_MULTIGPU"; remaining
+// dual-node verification: docs/plans/multi-node-io.md.
+//   * Setup is a two-phase collective. Each non-root rank locally creates
+//     <local tmp>/dmgmd-rank-io-<nonce>-r<rank>-XXXXXX with mkdtemp - one
+//     atomic step that is unique by construction and owner-only (mode 0700,
+//     independent of umask) - creates a plain neighbor.out inside, and chdirs
+//     there. All local failures are captured, never thrown directly; one
+//     success-flag Allreduce decides the outcome. On any failure every rank
+//     restores its own cwd first, then all ranks leave through one shared
+//     failure exit (identical exception everywhere -> bounded MPI_Abort, no
+//     rank left waiting in a collective).
+//   * finish() runs three ordered phases: (1) restore-cwd reduction, where
+//     any failure fails the job; (2) local deletion of the rank's OWN
+//     directory behind a safety boundary; (3) a cleanup status summary, where
+//     failure only warns and keeps the exact directory for diagnosis.
+//   * The destructor is local, best-effort and MPI-free; collectives run only
+//     in finish(), never during stack unwinding.
 class RankIoIsolation {
  public:
   explicit RankIoIsolation(MpiRuntime& mpi)
-      : mpi_(mpi), original_(std::filesystem::current_path())
+      : mpi_(mpi)
   {
     if (mpi_.world_size() == 1) return;
-    std::string base;
-    if (mpi_.is_root()) {
-      const auto timestamp = std::chrono::high_resolution_clock::now()
-                                 .time_since_epoch()
-                                 .count();
-      root_ = std::filesystem::temp_directory_path() /
-              ("dmgmd-rank-io-" + std::to_string(timestamp));
-      std::filesystem::create_directories(root_);
-      for (int rank = 1; rank < mpi_.world_size(); ++rank) {
-        const auto directory = root_ / ("rank-" + std::to_string(rank));
-        std::filesystem::create_directory(directory);
-        std::filesystem::create_symlink(original_ / "run.in", directory / "run.in");
-        std::filesystem::create_symlink("/dev/null", directory / "neighbor.out");
-      }
-      base = root_.string();
-    }
-    base = mpi_.broadcast_string(std::move(base));
-    root_ = base;
-    mpi_.barrier();
+
+    // Capturing cwd is itself a rank-local filesystem operation. Keep its
+    // error inside the same setup handshake as TMPDIR/mkdtemp/file/chdir so a
+    // single broken cwd cannot strand peers in a later collective.
+    std::string setup_error;
     if (!mpi_.is_root()) {
-      std::filesystem::current_path(root_ / ("rank-" + std::to_string(mpi_.world_rank())));
+      std::error_code error;
+      original_ = std::filesystem::current_path(error);
+      if (error) {
+        setup_error = rank_io_diagnostic(
+            mpi_, "resolve original cwd", std::filesystem::path("<cwd>"), error.message());
+      }
+    }
+
+    // The nonce is a naming/diagnostic token only (see make_job_nonce).
+    std::string nonce;
+    if (mpi_.is_root()) nonce = make_job_nonce();
+    nonce = mpi_.broadcast_string(std::move(nonce));
+    if (!is_hex_token(nonce)) {
+      throw std::logic_error("rank I/O isolation received a malformed job nonce");
+    }
+    name_prefix_ =
+        "dmgmd-rank-io-" + nonce + "-r" + std::to_string(mpi_.world_rank()) + "-";
+
+    // Phase 1: local preparation with captured errors. A direct throw here
+    // would strand the other ranks inside the status Allreduce below.
+    if (!mpi_.is_root() && setup_error.empty()) {
+      setup_error = prepare_local_scratch();
+    }
+
+    // Phase 2: one collective outcome for the whole world. On any local
+    // failure every rank restores its cwd FIRST (a rank must not unwind while
+    // still sitting inside the directory being diagnosed), removes its own
+    // half-built or completed scratch best-effort, and only then all ranks
+    // throw the same aggregated error.
+    if (!mpi_.allreduce_all_passed(setup_error.empty(),
+                                   "reduce rank I/O isolation setup status")) {
+      std::string error = setup_error;
+      const std::string restore = restore_cwd("setup_restore");
+      if (!restore.empty()) error += error.empty() ? restore : "; " + restore;
+      std::string removal_note;
+      if (restore.empty()) {
+        try_delete_scratch(&removal_note);
+      } else if (!scratch_.empty()) {
+        removal_note = rank_io_diagnostic(
+            mpi_, "keep scratch after failed cwd restore", scratch_, "cleanup skipped");
+      }
+      if (!removal_note.empty()) error += error.empty() ? removal_note : "; " + removal_note;
+      fail_together("setup", error);
     }
     active_ = true;
   }
 
-  ~RankIoIsolation()
+  // Local, best-effort, MPI-free unwind guarantee. finish() owns all
+  // collective teardown; this covers exceptions thrown between setup and
+  // finish(), where running collectives during unwinding could deadlock.
+  // Failures are not reported - the originating exception owns the exit.
+  ~RankIoIsolation() noexcept
   {
     if (!active_) return;
-    if (!mpi_.is_root()) {
-      std::error_code error;
-      std::filesystem::current_path(original_, error);
+    try {
+      if (in_scratch_ && !restore_cwd().empty()) return;
+      if (!scratch_.empty()) {
+        std::string ignored;
+        try_delete_scratch(&ignored);
+      }
+    } catch (...) {
+      // Best-effort destructors must never replace the exception currently
+      // unwinding the runtime. A failed cleanup deliberately leaves scratch.
     }
   }
 
+  // Symmetric teardown; every rank must call it exactly once (run_replicated
+  // does, after all segments completed successfully).
   void finish()
   {
     if (!active_) return;
-    if (!mpi_.is_root()) std::filesystem::current_path(original_);
-    mpi_.barrier();
-    if (mpi_.is_root()) {
-      std::error_code error;
-      std::filesystem::remove_all(root_, error);
+
+    // Phase 1 - restore reduction. A rank that cannot leave its scratch
+    // directory must not have that directory removed, and a job with unknown
+    // cwd state must not report success: any restore failure fails the job
+    // through the shared exit.
+    std::string restore_error;
+    if (!mpi_.is_root() && in_scratch_) {
+      restore_error = restore_cwd("restore");
+    }
+    if (!mpi_.allreduce_all_passed(restore_error.empty(),
+                                   "reduce rank I/O isolation restore status")) {
+      // A genuinely failing rank may still sit in its scratch directory; the
+      // destructor retries that restore locally during unwinding.
+      fail_together("restore", restore_error);
+    }
+
+    // Phase 2 - local delete. Every rank is now provably outside its scratch
+    // directory, so each non-root rank removes its OWN directory behind the
+    // safety boundary in try_delete_scratch. rank 0 never touches another
+    // node's paths.
+    std::string cleanup_error;
+    if (!mpi_.is_root()) {
+      if (rank_io_fault_requested("cleanup", mpi_.world_rank())) {
+        cleanup_error =
+            rank_io_diagnostic(mpi_, "remove scratch directory", scratch_, "injected");
+      } else {
+        try_delete_scratch(&cleanup_error);
+      }
+    }
+
+    // Phase 3 - cleanup summary. The MD results are already complete, so a
+    // cleanup failure is a warning, not a job failure: rank 0 reports each
+    // affected rank and the exact directory is kept for diagnosis.
+    if (!mpi_.allreduce_all_passed(cleanup_error.empty(),
+                                   "reduce rank I/O isolation cleanup status")) {
+      const std::vector<std::string> diagnostics = mpi_.gather_strings(cleanup_error);
+      if (mpi_.is_root()) {
+        for (int rank = 0; rank < mpi_.world_size(); ++rank) {
+          const std::string& entry = diagnostics[static_cast<std::size_t>(rank)];
+          if (!entry.empty()) {
+            std::cout << "DMGMD_RANK_IO_CLEANUP status=warning " << entry << '\n';
+            std::cout.flush();
+          }
+        }
+      }
     }
     active_ = false;
   }
 
  private:
+  // Creates this rank's private scratch directory on the LOCAL node and
+  // enters it. Returns an empty string on success, or a self-describing
+  // diagnostic; nothing here throws, and on failure the rank is never left
+  // inside a directory it did not fully set up.
+  std::string prepare_local_scratch()
+  {
+    std::error_code error;
+    std::filesystem::path temp_root = std::filesystem::temp_directory_path(error);
+    if (error) {
+      return rank_io_diagnostic(mpi_, "resolve temporary directory",
+                                std::filesystem::path("<TMPDIR>"), error.message());
+    }
+    temp_root_ = strip_trailing_separators(std::move(temp_root));
+    if (temp_root_.is_relative()) {
+      temp_root_ = (original_ / temp_root_).lexically_normal();
+    }
+
+    if (rank_io_fault_requested("mkdir", mpi_.world_rank())) {
+      return rank_io_diagnostic(mpi_, "create scratch directory",
+                                temp_root_ / (name_prefix_ + "XXXXXX"), "injected");
+    }
+    // mkdtemp is the atomic-unique, owner-only primitive: it creates the
+    // final directory in one uninterruptible step with mode 0700 (regardless
+    // of umask) and re-randomizes the six trailing X characters until unique.
+    // Remnants of an abnormally ended earlier job can never be reused, and
+    // uniqueness never depends on the broadcast nonce or a timestamp.
+    std::string pattern = (temp_root_ / (name_prefix_ + "XXXXXX")).string();
+    std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
+    mutable_pattern.push_back('\0');
+    if (mkdtemp(mutable_pattern.data()) == nullptr) {
+      return rank_io_diagnostic(mpi_, "create scratch directory", temp_root_,
+                                std::strerror(errno));
+    }
+    scratch_ = std::filesystem::path(mutable_pattern.data());
+
+    // A plain regular neighbor.out: legacy NEP opens it by relative name and
+    // appends, and the whole directory is deleted at teardown. This replaces
+    // the old neighbor.out -> /dev/null symlink, removing that extra per-rank
+    // failure point while keeping multi-rank append impossible.
+    const std::filesystem::path neighbor = scratch_ / "neighbor.out";
+    if (rank_io_fault_requested("file", mpi_.world_rank())) {
+      return rank_io_diagnostic(mpi_, "create scratch neighbor.out", neighbor, "injected");
+    }
+    if (FILE* sink = std::fopen(neighbor.c_str(), "a"); sink == nullptr) {
+      return rank_io_diagnostic(mpi_, "create scratch neighbor.out", neighbor,
+                                std::strerror(errno));
+    } else {
+      std::fclose(sink);
+    }
+
+    if (rank_io_fault_requested("chdir", mpi_.world_rank())) {
+      return rank_io_diagnostic(mpi_, "enter scratch directory", scratch_, "injected");
+    }
+    std::filesystem::current_path(scratch_, error);
+    if (error) {
+      return rank_io_diagnostic(mpi_, "enter scratch directory", scratch_, error.message());
+    }
+    in_scratch_ = true;
+    return std::string();
+  }
+
+  // Best-effort return to the original working directory: empty string on
+  // success (or when this rank never chdir'd), a diagnostic on failure.
+  // Never throws - callers are already handling a failure.
+  std::string restore_cwd(const char* fault_operation = nullptr)
+  {
+    if (!in_scratch_) return std::string();
+    if (fault_operation != nullptr &&
+        rank_io_fault_requested(fault_operation, mpi_.world_rank())) {
+      return rank_io_diagnostic(mpi_, "restore cwd", original_, "injected");
+    }
+    std::error_code error;
+    std::filesystem::current_path(original_, error);
+    if (error) {
+      return rank_io_diagnostic(mpi_, "restore cwd", original_, error.message());
+    }
+    in_scratch_ = false;
+    return std::string();
+  }
+
+  // Deletes this rank's OWN scratch directory behind the safety boundary: the
+  // target must still sit directly inside the temp root recorded at setup,
+  // its basename must be exactly the expected prefix plus mkdtemp's six
+  // random characters, and it must be a real directory (symlink_status does
+  // not follow links, so a swapped-in symlink is rejected). Any mismatch or
+  // removal error keeps the directory and reports; deletion never widens.
+  bool try_delete_scratch(std::string* diagnostic)
+  {
+    if (scratch_.empty()) return true;  // rank 0, or the directory never existed
+    if (in_scratch_) {
+      *diagnostic = rank_io_diagnostic(
+          mpi_, "scratch safety check failed; directory kept", scratch_,
+          "process cwd is still inside scratch");
+      return false;
+    }
+    std::error_code error;
+    const std::string name = scratch_.filename().string();
+    const bool parent_matches = scratch_.parent_path() == temp_root_;
+    const bool name_matches =
+        name.size() == name_prefix_.size() + kScratchRandomSuffixLength &&
+        name.compare(0, name_prefix_.size(), name_prefix_) == 0;
+    const std::filesystem::file_status status =
+        std::filesystem::symlink_status(scratch_, error);
+    const bool target_is_directory =
+        !error && status.type() == std::filesystem::file_type::directory;
+    if (parent_matches && name_matches && target_is_directory) {
+      std::filesystem::remove_all(scratch_, error);
+      if (!error) {
+        scratch_.clear();
+        return true;
+      }
+      *diagnostic =
+          rank_io_diagnostic(mpi_, "remove scratch directory", scratch_, error.message());
+      return false;
+    }
+    const char* reason = !parent_matches ? "parent is not the recorded temp root"
+                        : !name_matches ? "basename does not match this rank's scratch prefix"
+                                        : "target is not a plain directory";
+    *diagnostic = rank_io_diagnostic(mpi_, "scratch safety check failed; directory kept",
+                                     scratch_, reason);
+    return false;
+  }
+
+  // Shared failure exit, reached only after a completed status Allreduce, so
+  // the diagnostic gather and message broadcast below cannot deadlock. All
+  // ranks throw one identical exception; main() logs it and the job ends
+  // through the regular MPI_Abort path with nobody stuck in a collective.
+  [[noreturn]] void fail_together(const char* phase, const std::string& local_error)
+  {
+    const std::vector<std::string> diagnostics = mpi_.gather_strings(local_error);
+    std::string message = std::string("rank I/O isolation ") + phase + " failed";
+    if (mpi_.is_root()) {
+      for (int rank = 0; rank < mpi_.world_size(); ++rank) {
+        const std::string& entry = diagnostics[static_cast<std::size_t>(rank)];
+        if (!entry.empty()) message += "; " + entry;
+      }
+    }
+    throw std::runtime_error(mpi_.broadcast_string(std::move(message)));
+  }
+
   MpiRuntime& mpi_;
-  std::filesystem::path original_;
-  std::filesystem::path root_;
+  std::filesystem::path original_;  // non-root absolute cwd captured during setup
+  std::filesystem::path temp_root_;  // this rank's local temp root, recorded at setup
+  std::filesystem::path scratch_;    // empty on rank 0 (no scratch, no chdir)
+  std::string name_prefix_;          // "dmgmd-rank-io-<nonce>-r<rank>-"
+  bool in_scratch_ = false;
   bool active_ = false;
 };
 

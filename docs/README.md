@@ -35,7 +35,7 @@
 这些内容尚未成为生产合同：
 
 - [域分解与 halo 通信计划](./plans/domain-decomposition.md)
-- [多节点 rank I/O 隔离计划](./plans/multi-node-io.md)
+- [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（IN PROGRESS）
 - [风险与待办登记](./plans/risk-and-backlog.md)
 
 计划获批并实施后，应把最终合同迁入 `standards/`，把实测结果写入 `status/`，再从计划中删除

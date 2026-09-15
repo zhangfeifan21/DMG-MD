@@ -600,6 +600,7 @@ int MpiRuntime::local_size() const noexcept { return impl_->local_size; }
 int MpiRuntime::cuda_device() const noexcept { return impl_->device; }
 bool MpiRuntime::is_root() const noexcept { return impl_->rank == 0; }
 CommunicationBackend MpiRuntime::backend() const noexcept { return impl_->backend; }
+const std::string& MpiRuntime::hostname() const noexcept { return impl_->hostname; }
 const char* MpiRuntime::backend_name() const noexcept
 {
   return backend() == CommunicationBackend::host_staged ? "HostStaged" : "CudaAware";
@@ -635,6 +636,52 @@ void MpiRuntime::broadcast_doubles(double* values, std::size_t count, int root) 
   check_mpi(MPI_Bcast(values, checked_mpi_count(count, "double broadcast"), MPI_DOUBLE,
                       root, MPI_COMM_WORLD),
             "broadcast replicated doubles");
+}
+
+bool MpiRuntime::allreduce_all_passed(bool local_passed, const char* operation) const
+{
+  const int local_value = local_passed ? 1 : 0;
+  int all_passed = 0;
+  check_mpi(MPI_Allreduce(&local_value, &all_passed, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD),
+            operation);
+  return all_passed == 1;
+}
+
+std::vector<std::string> MpiRuntime::gather_strings(const std::string& value) const
+{
+  const int local_length = checked_mpi_count(value.size(), "gather diagnostic length");
+  const bool root = is_root();
+  std::vector<int> lengths(root ? static_cast<std::size_t>(world_size()) : 0);
+  check_mpi(MPI_Gather(&local_length, 1, MPI_INT, root ? lengths.data() : nullptr, 1,
+                       MPI_INT, 0, MPI_COMM_WORLD),
+            "gather diagnostic lengths");
+  std::vector<int> displacements(root ? static_cast<std::size_t>(world_size()) : 0);
+  std::vector<char> buffer;
+  if (root) {
+    int total = 0;
+    for (int rank = 0; rank < world_size(); ++rank) {
+      displacements[static_cast<std::size_t>(rank)] = total;
+      total += lengths[static_cast<std::size_t>(rank)];
+    }
+    buffer.resize(static_cast<std::size_t>(total));
+  }
+  char* receive_buffer = root && !buffer.empty() ? buffer.data() : nullptr;
+  check_mpi(MPI_Gatherv(value.c_str(), local_length, MPI_CHAR, receive_buffer,
+                        root ? lengths.data() : nullptr,
+                        root ? displacements.data() : nullptr, MPI_CHAR, 0,
+                        MPI_COMM_WORLD),
+            "gather diagnostic records");
+  if (!root) return {};
+
+  std::vector<std::string> gathered(static_cast<std::size_t>(world_size()));
+  for (int rank = 0; rank < world_size(); ++rank) {
+    if (lengths[static_cast<std::size_t>(rank)] != 0) {
+      gathered[static_cast<std::size_t>(rank)].assign(
+          buffer.data() + displacements[static_cast<std::size_t>(rank)],
+          static_cast<std::size_t>(lengths[static_cast<std::size_t>(rank)]));
+    }
+  }
+  return gathered;
 }
 
 void MpiRuntime::assert_same_fingerprint(std::uint64_t fingerprint, const char* name) const

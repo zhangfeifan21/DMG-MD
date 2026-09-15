@@ -415,9 +415,9 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
     MSD）；
   - debug 构建启用 `risk-and-backlog.md` §5 不变量断言。
 - **M2b**：与 M2a oracle 的逐原子 force/virial 等价（Q4 验收）+ 同套长程守恒。
-- **M3**：`check_environment.py` 扩展点对点 device 自检；多节点 I/O 按
-  [multi-node-io.md](./multi-node-io.md)；跨节点 restart；强扩展 scaling 基准
-  （在此之后才允许发布性能结论）。
+- **M3**：`check_environment.py` 扩展点对点 device 自检；多节点 I/O 的严格双物理节点验收按
+  [multi-node-io.md](./multi-node-io.md) 执行（IN PROGRESS）；跨节点 restart；
+  强扩展 scaling 基准（在此之后才允许发布性能结论）。
 
 容差层级（R16）：逐字段精确（M0、单 rank 退化）→ 确定性数值容差（分片累加顺序差异，
 需在 M1 量化并记录 reduction 顺序与 rank 数）→ 统计比较（长轨迹混沌分叉）。
@@ -440,7 +440,7 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 | R25 `neighbor.out` 副作用 | rank0 聚合 vs 明确不支持，随 M2 裁决（Q18） | §5.3 |
 | R26 CUDA-aware 同步 | p2p 自检两道门；默认 stream + 阻塞语义（Q40） | §6.1 |
 | R27 容量变化 view 失效 | epoch/versioned view | §8 |
-| R28 多节点临时目录 | M3 按 [multi-node-io.md](./multi-node-io.md) | §10 |
+| R28 多节点临时目录 | 整改与双节点验收进行中（[multi-node-io.md](./multi-node-io.md)） | §10 |
 
 Q4（halo 协议选择）：本文档按已确认决策落地为 M2a 先行、M2b 以 oracle 验证（§4.5）。
 Q5（通信边匹配键）：仅 M2b 需要，键定义见 §7。Q14（skin 语义）：保持 skin=1 Å 与

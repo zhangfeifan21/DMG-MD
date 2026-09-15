@@ -149,7 +149,7 @@ candidate stage 还必须存在结构合法的 `DMGMD_TIMING phase=run/total` �
 | 长 NVE/NVT、回放、跨 rank restart | 已实现 | long-NVE runner |
 | domain decomposition、owned/ghost halo | 未实现 | `docs/plans/domain-decomposition.md` |
 | migration、分区面和周期 ghost fixtures | 未实现 | `docs/plans/domain-decomposition.md` |
-| 多节点本地 scratch/故障注入 | 待审批 | `docs/plans/multi-node-io.md` |
+| 多节点本地 scratch/故障注入 | 自动化已定义；严格双节点验收 IN PROGRESS | `tests/mpi/run_rank_io_isolation.py`、`docs/plans/multi-node-io.md` |
 | 完整 malformed/invalid compatibility corpus | 未完成 | `docs/plans/risk-and-backlog.md` |
 
 未来计划不得提前写入本标准的“当前通过矩阵”。实现并通过验证后，再把生效合同迁入

@@ -1,8 +1,10 @@
 # DMG-MD 当前实现进度
 
-类别：进度与实测备忘。  
-更新日期：2026-09-14。  
-代码基线：`5b1e8ce`；工作区未提交修改不计入已验证结论。
+类别：进度与实测备忘。
+
+更新日期：2026-09-15。
+
+代码基线：`ec23d2c`；工作区未提交修改不计入已验证结论。
 
 ## 当前结论
 
@@ -65,8 +67,8 @@ baseline 的环境、命令、case 和校准证据见 [baseline-results.md](./ba
 
 ## 已知缺口
 
-- 非零 rank 的 legacy `neighbor.out` 当前依赖 rank 0 创建的临时目录；跨节点 node-local
-  `/tmp` 风险仍未整改，见 [多节点 I/O 计划](../plans/multi-node-io.md)；
+- R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双物理节点
+  （互不可见 TMPDIR）验收也尚未执行，见 [multi-node-io.md](../plans/multi-node-io.md)；
 - domain decomposition、ghost/halo、migration 和真正的 NEP 中心分片仍是计划，见
   [域分解计划](../plans/domain-decomposition.md)；
 - malformed potential corpus、若干 cutoff/ZBL 边界和 future command 语义仍待验证，见
