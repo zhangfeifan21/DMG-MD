@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 SUITE_DIR = Path(__file__).resolve().parent
@@ -33,6 +33,30 @@ CHECKPOINT_ENVIRONMENT = (
     "DMGMD_COMM_LOG_INTERVAL",
 )
 DEFAULT_STAGE_RETRIES = 1
+StageEventSink = Callable[[str, Mapping[str, Any]], None]
+_stage_event_sink: Optional[StageEventSink] = None
+
+
+def set_stage_event_sink(sink: Optional[StageEventSink]) -> None:
+    """Install a best-effort observer for human-facing stage progress."""
+    global _stage_event_sink
+    _stage_event_sink = sink
+
+
+def _notify_stage_event(status: str, **fields: Any) -> None:
+    global _stage_event_sink
+    if _stage_event_sink is None:
+        return
+    try:
+        _stage_event_sink(status, fields)
+    except Exception as error:  # The display must never invalidate a numerical test.
+        print(
+            "LONG_NVE_UI status=disabled "
+            f"reason={type(error).__name__}:{error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        _stage_event_sink = None
 
 
 def load_manifest() -> Dict[str, Any]:
@@ -619,12 +643,18 @@ def execute_md(
                 checkpoint = {}
             if outputs_are_complete(checkpoint):
                 print(f"LONG_NVE_STAGE status=reused path={stage_dir}", flush=True)
+                _notify_stage_event("reused", path=stage_dir)
                 return stage_dir
         elif adopt_existing and adopt_legacy_stage():
             print(
                 "LONG_NVE_STAGE status=adopted-existing "
                 f"path={stage_dir} executable_provenance=unverified",
                 flush=True,
+            )
+            _notify_stage_event(
+                "adopted-existing",
+                path=stage_dir,
+                executable_provenance="unverified",
             )
             return stage_dir
 
@@ -635,6 +665,7 @@ def execute_md(
             f"LONG_NVE_STAGE status=archived-incomplete path={stage_dir} archived={archived}",
             flush=True,
         )
+        _notify_stage_event("archived-incomplete", path=stage_dir, archived=archived)
 
     command = [*launcher, str(executable)]
     max_attempts = retries + 1
@@ -656,6 +687,9 @@ def execute_md(
             f"LONG_NVE_STAGE status=running attempt={attempt} "
             f"max_attempts={max_attempts} path={stage_dir}",
             flush=True,
+        )
+        _notify_stage_event(
+            "running", attempt=attempt, max_attempts=max_attempts, path=stage_dir
         )
         started = time.monotonic()
         failure: Optional[str] = None
@@ -744,6 +778,13 @@ def execute_md(
                 f"path={stage_dir}",
                 flush=True,
             )
+            _notify_stage_event(
+                "passed",
+                attempt=attempt,
+                max_attempts=max_attempts,
+                elapsed_seconds=elapsed,
+                path=stage_dir,
+            )
             return stage_dir
 
         failure_record = {
@@ -774,12 +815,28 @@ def execute_md(
                 f"reason={failure} archived={archived} path={stage_dir}",
                 flush=True,
             )
+            _notify_stage_event(
+                "retrying",
+                attempt=attempt,
+                max_attempts=max_attempts,
+                elapsed_seconds=elapsed,
+                reason=failure,
+                archived=archived,
+                path=stage_dir,
+            )
             continue
 
         print(
             f"LONG_NVE_STAGE status=failed attempt={attempt} "
             f"max_attempts={max_attempts} reason={failure} path={stage_dir}",
             flush=True,
+        )
+        _notify_stage_event(
+            "failed",
+            attempt=attempt,
+            max_attempts=max_attempts,
+            reason=failure,
+            path=stage_dir,
         )
         assert failure_exception is not None
         raise failure_exception

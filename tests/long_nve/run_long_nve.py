@@ -22,6 +22,7 @@ sys.path.insert(0, str(SUITE_DIR))
 sys.path.insert(0, str(MPI_DIR))
 
 import long_nve_common as common  # noqa: E402
+import long_nve_ui as terminal_ui  # noqa: E402
 import check_environment as mpi_environment  # noqa: E402
 import run_mpi_differential as mpi_differential  # noqa: E402
 
@@ -96,6 +97,12 @@ def parse_args() -> argparse.Namespace:
         "--print-model-hashes", action="store_true",
         help="print deterministic model hashes and exit without using a GPU",
     )
+    parser.add_argument(
+        "--ui", choices=("auto", "dashboard", "plain"), default="auto",
+        help="terminal output mode (default: auto)",
+    )
+    parser.add_argument("--ui-fd", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--ui-log", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -574,13 +581,25 @@ def main() -> int:
     }
     work_root, resumed = initialize_work_root(args, run_contract)
     resume_stages = resumed
-    expected_configs = {
+    expected_config_order = [
         (case_name, seed, backend, rank_count)
         for case_name in case_names
         for seed in seeds
         for backend in backends
         for rank_count in ranks
-    }
+    ]
+    expected_configs = set(expected_config_order)
+    restart_transitions = [(min(ranks), max(ranks))]
+    if min(ranks) != max(ranks):
+        restart_transitions.append((max(ranks), min(ranks)))
+    expected_restart_order = [
+        (case_name, backend, source_ranks, destination_ranks)
+        for case_name in case_names
+        if "restart" in sections
+        and manifest["cases"][case_name].get("coverage", "physics") == "physics"
+        for backend in backends
+        for source_ranks, destination_ranks in restart_transitions
+    ]
     completed_configs = {
         key
         for key in expected_configs
@@ -589,8 +608,27 @@ def main() -> int:
             CONFIG_COMPLETE_NAME
         ).is_file()
     }
+    try:
+        dashboard = terminal_ui.open_dashboard(
+            args.ui,
+            args.ui_fd,
+            args.profile,
+            case_names,
+            seeds,
+            ranks,
+            backends,
+            expected_config_order,
+            expected_restart_order,
+            log_path=args.ui_log.resolve() if args.ui_log else None,
+            report_path=args.report.resolve() if args.report else None,
+        )
+    except OSError as error:
+        raise baseline.BaselineError(f"cannot open dashboard terminal: {error}") from error
+    if dashboard is not None:
+        common.set_stage_event_sink(dashboard.stage_event)
     print(
         f"LONG_NVE_PLAN profile={args.profile} total_configs={len(expected_configs)} "
+        f"total_restarts={len(expected_restart_order)} "
         f"completed_configs={len(completed_configs)} "
         f"pending_configs={len(expected_configs) - len(completed_configs)} "
         f"cases={','.join(case_names)} seeds={','.join(str(value) for value in seeds)} "
@@ -598,6 +636,8 @@ def main() -> int:
         f"sections={','.join(sections)} retries={args.retries} work_root={work_root}",
         flush=True,
     )
+    if dashboard is not None:
+        dashboard.set_plan(work_root, completed_configs)
     succeeded = False
     report: Dict[str, Any] = {
         "schema_version": 1,
@@ -722,14 +762,17 @@ def main() -> int:
                         config = f"{backend}-r{rank_count}"
                         config_root = seed_root / config
                         config_key = (case_name, seed, backend, rank_count)
+                        revalidating = config_key in completed_configs
                         print(
                             "LONG_NVE_CONFIG status="
-                            f"{'revalidating' if config_key in completed_configs else 'running'} "
+                            f"{'revalidating' if revalidating else 'running'} "
                             f"completed={len(completed_configs)} total={len(expected_configs)} "
                             f"pending={len(expected_configs) - len(completed_configs)} "
                             f"case={case_name} seed={seed} backend={backend} ranks={rank_count}",
                             flush=True,
                         )
+                        if dashboard is not None:
+                            dashboard.config_started(config_key, revalidating)
                         env = candidate_environment(
                             devices, rank_count, backend,
                             int(profile["communication_log_interval"]),
@@ -889,8 +932,14 @@ def main() -> int:
                             f"case={case_name} seed={seed} backend={backend} ranks={rank_count}",
                             flush=True,
                         )
+                        if dashboard is not None:
+                            dashboard.config_passed(config_key)
 
             if "long" in sections and physics_case:
+                if dashboard is not None:
+                    dashboard.set_phase(
+                        "acceptance analysis", f"{case_name}: NVE noninferiority"
+                    )
                 ordered_reference = [reference_metrics_by_seed[seed] for seed in seeds]
                 acceptance = manifest["acceptance"]
                 for config, values_by_seed in candidate_metrics_by_config.items():
@@ -903,6 +952,10 @@ def main() -> int:
                     case_report["noninferiority"][config] = comparison
 
             if "nvt" in sections and physics_case:
+                if dashboard is not None:
+                    dashboard.set_phase(
+                        "acceptance analysis", f"{case_name}: NVT equivalence"
+                    )
                 ordered_reference = [reference_nvt_metrics_by_seed[seed] for seed in seeds]
                 for config, values_by_seed in candidate_nvt_metrics_by_config.items():
                     ordered_actual = [values_by_seed[seed] for seed in seeds]
@@ -922,6 +975,18 @@ def main() -> int:
                     transitions.append((max(ranks), min(ranks)))
                 for backend in backends:
                     for source_ranks, destination_ranks in transitions:
+                        restart_key = (
+                            case_name, backend, source_ranks, destination_ranks
+                        )
+                        print(
+                            "LONG_NVE_RESTART status=running "
+                            f"case={case_name} backend={backend} "
+                            f"source_ranks={source_ranks} "
+                            f"destination_ranks={destination_ranks}",
+                            flush=True,
+                        )
+                        if dashboard is not None:
+                            dashboard.restart_started(restart_key)
                         transition_root = (
                             work_root / case_name / "restart" /
                             f"seed-{restart_seed}-{backend}-r{source_ranks}-to-r{destination_ranks}"
@@ -936,7 +1001,18 @@ def main() -> int:
                         result["backend"] = backend
                         result["seed"] = restart_seed
                         case_report["restart"].append(result)
+                        print(
+                            "LONG_NVE_RESTART status=passed "
+                            f"case={case_name} backend={backend} "
+                            f"source_ranks={source_ranks} "
+                            f"destination_ranks={destination_ranks}",
+                            flush=True,
+                        )
+                        if dashboard is not None:
+                            dashboard.restart_passed(restart_key)
 
+        if dashboard is not None:
+            dashboard.set_phase("finalizing", "writing final report")
         report["field_differences"] = collector.stats
         report["checkpoint_provenance"] = checkpoint_provenance_summary(work_root)
         report["completed_configs"] = len(completed_configs)
@@ -944,6 +1020,9 @@ def main() -> int:
         report_path = args.report.resolve() if args.report else work_root / "report.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(report_path, report)
+        if dashboard is not None:
+            dashboard.finish()
+            dashboard.close()
         print(
             f"PASS long-NVE profile={args.profile} cases={case_names} seeds={seeds} "
             f"ranks={ranks} backends={backends}"
@@ -952,7 +1031,16 @@ def main() -> int:
             print(f"Wrote {report_path}")
         succeeded = True
         return 0
+    except BaseException as error:
+        if dashboard is not None:
+            summary = " ".join(str(error).splitlines()) or type(error).__name__
+            dashboard.fail(summary)
+            dashboard.close(show_failure_summary=True)
+        raise
     finally:
+        common.set_stage_event_sink(None)
+        if dashboard is not None:
+            dashboard.close()
         if succeeded and not args.keep_work and not resumed:
             shutil.rmtree(work_root)
         else:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import long_nve_common as common
 import run_long_nve as runner
+import long_nve_ui as terminal_ui
 
 
 class LongNveTests(unittest.TestCase):
@@ -31,6 +33,113 @@ class LongNveTests(unittest.TestCase):
         self.assertEqual(runner.nonnegative_integer("2"), 2)
         with self.assertRaises(argparse.ArgumentTypeError):
             runner.nonnegative_integer("-1")
+
+    def test_dashboard_tracks_resumed_configs_stages_and_restarts(self) -> None:
+        configs = [
+            ("carbon_crystal", 0, "HostStaged", 1),
+            ("carbon_crystal", 0, "HostStaged", 2),
+            ("carbon_crystal", 0, "CudaAware", 1),
+            ("carbon_crystal", 0, "CudaAware", 2),
+        ]
+        restarts = [("carbon_crystal", "HostStaged", 1, 2)]
+        stream = io.StringIO()
+        dashboard = terminal_ui.LongNveDashboard(
+            "nightly",
+            ["carbon_crystal"],
+            [0],
+            [1, 2],
+            ["HostStaged", "CudaAware"],
+            configs,
+            restarts,
+            stream,
+            None,
+            alternate_screen=False,
+            color=False,
+            start_thread=False,
+        )
+        work_root = Path("/tmp/long-nve-ui-test")
+        dashboard.set_plan(work_root, configs[:2])
+        dashboard.config_started(configs[2], revalidating=False)
+        dashboard.stage_event(
+            "running",
+            {
+                "path": work_root / "carbon_crystal/seed-0/CudaAware-r1/long",
+                "attempt": 1,
+                "max_attempts": 2,
+            },
+        )
+        rendered = "\n".join(dashboard.render_lines(120, 40))
+        self.assertIn("Overall", rendered)
+        self.assertIn("2/5", rendered)
+        self.assertIn("carbon_crystal / seed-0 / CudaAware / r1", rendered)
+        self.assertIn("carbon_crystal/seed-0/CudaAware-r1/long", rendered)
+        self.assertIn("H1  H2  C1  C2", rendered)
+        self.assertIn("✓   ✓   ▶", rendered)
+
+        dashboard.config_passed(configs[2])
+        dashboard.restart_started(restarts[0])
+        dashboard.restart_passed(restarts[0])
+        dashboard.finish()
+        rendered = "\n".join(dashboard.render_lines(120, 40))
+        self.assertIn("suite=PASSED", rendered)
+        self.assertIn("Restarts 1/1", rendered)
+        dashboard.close()
+
+    def test_stage_event_observer_is_best_effort_and_receives_reuse(self) -> None:
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "fake-md.py"
+            executable.write_text(
+                f"#!{sys.executable}\nfrom pathlib import Path\n"
+                "Path('result.out').write_text('complete\\n')\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            stage = root / "stage"
+            common.set_stage_event_sink(
+                lambda status, fields: events.append((status, dict(fields)))
+            )
+            try:
+                arguments = (
+                    executable,
+                    (),
+                    "model\n",
+                    "run\n",
+                    "potential\n",
+                    stage,
+                    os.environ,
+                    10,
+                    ("result.out",),
+                )
+                common.execute_md(*arguments, resume=True)
+                common.execute_md(*arguments, resume=True)
+            finally:
+                common.set_stage_event_sink(None)
+        self.assertEqual([status for status, _ in events], ["running", "passed", "reused"])
+        self.assertEqual(events[-1][1]["path"], stage)
+
+    def test_dashboard_uses_and_restores_the_alternate_screen(self) -> None:
+        stream = io.StringIO()
+        dashboard = terminal_ui.LongNveDashboard(
+            "smoke",
+            ["carbon_crystal"],
+            [0],
+            [1],
+            ["HostStaged"],
+            [("carbon_crystal", 0, "HostStaged", 1)],
+            [],
+            stream,
+            None,
+            alternate_screen=True,
+            color=False,
+            start_thread=False,
+        )
+        dashboard.close()
+        output = stream.getvalue()
+        self.assertTrue(output.startswith("\x1b[?1049h\x1b[?25l"))
+        self.assertIn("\x1b[2J\x1b[H", output)
+        self.assertTrue(output.endswith("\x1b[?25h\x1b[?1049l"))
 
     def test_all_generated_potentials_match_locked_hashes(self) -> None:
         for case in self.manifest["cases"].values():

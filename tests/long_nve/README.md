@@ -63,11 +63,34 @@ python3 tests/long_nve/run_long_nve.py \
 完整 8 卡、5 初态、100000-step release：
 
 ```text
-python3 tests/long_nve/run_long_nve.py \
-  --candidate ./build/dmg-md \
-  --devices 0,1,2,3,4,5,6,7 --profile release \
-  --report /tmp/dmgmd-long-nve-release.json
+scripts/run_long_nve_release.sh
 ```
+
+该 Bash wrapper 面向 tmux 长任务：自动 source `../env/md-mpi.sh`、启用 pipeline 失败传播、默认
+设置 8 卡/release/一次重试、保留 work、追加 `run.log`，并用结果目录锁避免同一任务被并发启动。
+连接到交互式终端时，wrapper 默认启用全屏 Dashboard，显示 configuration/restart 总进度、按
+case/seed/backend/rank 展开的 checklist、当前 stage、attempt 和耗时；结构化 `LONG_NVE_*` 事件仍只
+写入纯文本 `run.log`，不会混入颜色或清屏控制符。`--ui plain` 可恢复逐行终端输出，`--ui dashboard`
+可显式要求全屏模式；默认的 `--ui auto` 在非交互环境自动回退到 plain。
+不带参数时在仓库根目录创建带时间戳的新结果目录；中断后只需把结果目录传回脚本，脚本会从
+唯一的 run checkpoint 自动识别 work root：
+
+```text
+scripts/run_long_nve_release.sh dmgmd-release-20260914-120000
+```
+
+若结果目录下存在多个 work root，使用 `--work-root PATH` 明确选择。`--dry-run` 可查看最终命令，
+完整参数见 `scripts/run_long_nve_release.sh --help`。wrapper 不自动构建 candidate，确保一次 release
+期间 checkpoint 锁定的二进制不发生变化。
+
+nightly 使用同一套 wrapper 逻辑，默认按 manifest 的最大 4 ranks 选择 GPU `0,1,2,3`：
+
+```text
+scripts/run_long_nve_nightly.sh
+```
+
+中断后的续跑同样只需传回结果目录，例如
+`scripts/run_long_nve_nightly.sh dmgmd-nightly-20260914-120000`。
 
 CudaAware 三初态扩展矩阵：
 
