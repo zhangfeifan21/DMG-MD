@@ -1,10 +1,10 @@
 # 域分解与 halo 通信协议（设计稿）
 
-类别：实施中计划。状态：IN PROGRESS——M0 已于 2026-09-15 实施并验收，M1 及之后待审批、
-未实施。
+类别：实施中计划。状态：IN PROGRESS——M0 与 M1 已于 2026-09-15 实施并验收，M2 及之后
+待审批、未实施。
 
 本文档规定 DMG-MD 从 replicated-data 原型演进为 owned/ghost 域分解
-runtime 的数据面协议，并定义 M0 快速优化。M0 已按维护者指令实施，其协议与字节合同并入
+runtime 的数据面协议。M0 与 M1 已按维护者指令实施，其协议与字节合同并入
 [replicated-mpi.md](../standards/replicated-mpi.md)，实测记录见
 [status/current.md](../status/current.md)；后续里程碑实现前仍须按 AGENTS.md 由维护者确认
 方向。
@@ -40,35 +40,38 @@ force（`run.cu:273-283`）；两个半步都由 `Ensemble::velocity_verlet`
 单方向 slab、16 GPU 上限 `nep_multigpu.cuh:159`）被 kernel-inventory §7 与 AGENTS.md 明确
 列为不可复用。DMG-MD 已另行解决积分去中心化（§1.2）。
 
-### 1.2 DMG-MD 现行协议与开销
+### 1.2 DMG-MD 现行 M1 协议与开销
 
-（下表为 M0 实施前的证据快照；M0 后每步只剩一次 position Allgatherv，现行合同见
-[replicated-mpi.md](../standards/replicated-mpi.md)。）
+M1 已把积分、thermo 与输出权威从 M0 的连续 `OwnedRange` 改为空间 slab 派生的
+global-ID/index-list 所有权；原子跨 slab 时只做逻辑所有权移交。但数据面仍是
+**replicated-full**：每个 rank 保留 N 个槽位，每步仍在完整 N 个中心上执行 ordinary NEP，
+当前没有 ghost、halo 或点对点邻居通信。精确时序和字节合同以
+[replicated-mpi.md](../standards/replicated-mpi.md) 为准。
 
-DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank（`src/runtime.cu:910-1048`），
-力不汇总回任何单一 GPU。但数据面仍是复制态，每步（`docs/standards/replicated-mpi.md`）：
+无 adaptive timestep、输出和所有权变化的 P>1 普通步为：
 
-| 步骤 | 位置 | 通信 |
+| 步骤 | 权威域 | 通信 |
 | --- | --- | --- |
-| VV first half（仅 owned） | `runtime.cu:972-982` | — |
-| **position Allgatherv** | `runtime.cu:983-984` | 输入 `24N`、输出 `24NP` |
-| 全体系 NEP（`N1=0, N2=N`，`runtime.cu:482-483`） | `runtime.cu:985` | — |
-| VV second half（仅 owned） | `runtime.cu:986-991` | — |
-| thermo 8-double Allreduce | `runtime.cu:992-993` | `64P` / `64P` |
-| Berendsen 缩放（仅 owned） | `runtime.cu:995-1008` | — |
-| **velocity Allgatherv** | `runtime.cu:1009-1010` | 输入 `24N`、输出 `24NP` |
-| 输出步 Gatherv 到 rank 0 | `runtime.cu:1012-1023` | 输出步 `152N` |
+| VV first half、position/unwrapped 更新 | current owned index list | — |
+| position 复制 | current ownership | indexed Allgatherv：输入 `24N`、输出 `24NP` |
+| ordinary NEP | replicated-full，`N1=0, N2=N` | — |
+| next owner map 一致性门 | 固定尺寸 hash | Allreduce：输入/输出各 `16P` |
+| VV second half、thermo、控温 | next owned index list | thermo Allreduce：输入/输出各 `64P` |
 
-两个结构性开销：
+owner map 发生变化时，在切换 epoch 前另以旧 ownership Allgather 最新 velocity；启用
+unwrapped 时连同 unwrapped 一起同步。`correct_velocity` 触发步另有 velocity Allgatherv +
+Bcast；输出步按 owned index list Gatherv 并在 rank 0 scatter 回 replicated slot 顺序。
 
-1. **每 rank 对全体系 N 个原子做完整 NEP**（`nep_N1_N2_shard_complete=false`，
-   `runtime.cu:476-484`）——多卡不减少每卡计算量，只复制计算；
-2. **每步两个 O(N) Allgatherv**——多节点时穿越网络 `P-1` 次，随 P 线性放大。
+因此 M1 的两个结构性开销仍然存在：
 
-优化分两层：M0 删除无消费者的 velocity Allgatherv（§2）；M1/M2 用空间 slab 所有权 +
-点对点 halo 交换替换复制态（§3-§8），使每 rank 的 NEP 计算量降为 `N/P + halo`，
-通信降为仅相邻 rank 的边界带交换。这正是多节点扩展的前提：slab 邻居可映射到同节点，
-网络流量从全员集合通信收缩为节点内点对点。
+1. **每 rank 对全体系 N 个原子做完整 NEP**（`nep_kernel_centers=replicated-full`）——多卡
+   不减少每卡计算量；
+2. **每步一个 O(N) position Allgatherv**，迁移/修速/输出步还有额外 O(N) collective——
+   多节点流量仍随 P 放大。
+
+M0 仅删除无消费者的逐步 velocity Allgatherv（§2）；M1 只建立空间所有权与正确的逻辑
+迁移协议（§3）。从 M2 起才以 owned+ghost 本地布局和点对点 halo 交换替换 replicated-full
+数据面，使每 rank 的 NEP 工作量趋向 `N/P + halo`、通信收缩到相邻 slab 边界带（§4–§8）。
 
 ## 2. M0：删除每步 velocity Allgatherv
 
@@ -126,21 +129,29 @@ DMG-MD 已把积分、thermo 与输出权威按 `OwnedRange` 分布到各 rank�
 
 ## 3. 所有权模型：空间 slab 分解
 
-### 3.1 从下标分块到空间 slab
+### 3.1 从下标分块到空间 slab（M1 已实施）
 
-现行 `balanced_owned_range`（`include/dmgmd/partition.hpp:20-35`）按全局下标均衡切块，
-与空间无关，这是复制态阶段刻意简化的产物（见
-`docs/standards/replicated-mpi.md`）。域分解阶段改为：
+M0 的 `balanced_owned_range` 按全局下标均衡切块，已在 M1 中随
+`include/dmgmd/partition.hpp` 一起退役。M1 实际落地的所有权表示（现行合同见
+[replicated-mpi.md](../standards/replicated-mpi.md)，实现为
+`include/dmgmd/spatial_ownership.hpp`）：
 
-- 沿一个 partition 轴把 box 切成 P 个连续 slab，每个 rank 拥有一个 slab；
-- slab 边界对齐 `rc/2` cell 网格（与 cell list 一致：`src/gpumd_compat/neighbor.cu:298`
-  `rc_cell_list = 0.5 * rc`；`NEP_MULTIGPU` 同用 `rc/2`，`nep_multigpu.cu:1424-1427`）；
-- 守卫：每 rank 沿轴 bins ≥ 10（即 ≥ 5rc），不满足则明确报错，沿用
-  `nep_multigpu.cu:1451-1455` 的判据语义——该判据同时保证 ghost 带不超过相邻 slab 的
-  owned 深度，避免三 rank 链式依赖；
-- partition 轴选择：默认取 box 最长方向（`nep_multigpu.cu:1438-1446` 的语义）；GPUMD
-  `potential` 第三参数（x/y/z）当前被 DMG-MD parser 拒绝（`src/run_parser.cpp:163-168`），
-  是否恢复该语法以覆盖分区方向，作为 M1 的输入兼容决策单独确认。
+- 沿 partition 轴把 box 切成 P 个等宽 fractional half-open slab，每个 rank 拥有一个
+  slab；坐标到 owner 的映射是独立、可 CPU 单测的纯函数（内部边界属右侧 slab，`s=0`
+  属第一个 slab，精确 `s=1` 归最后一个 slab，周期越界与 `wrap_positions` 的
+  `<0/+1`、`>1/-1` 单次调整一致）；
+- 所有权是 **global_id 上的逻辑归属**：`owner_by_slot[N]` 单一事实源 +
+  owned index list（按 global_id 升序）+ 派生 mask + `slot_of_global_id` 显式置换；
+  不创建 owned+ghost 本地数组、不压缩 local_count、不重排 per-atom 数组（M2 内容）；
+- partition 轴选择：box 最长边，tie 规则与 `nep_multigpu.cu:1438-1446` 的级联一致
+  （y 胜 x/y、y/z 平手，x 胜 x/z 平手，立方盒选 y）；GPUMD `potential` 第三参数
+  （x/y/z）仍被 DMG-MD parser 拒绝（`src/run_parser.cpp`），M1 不恢复该语法；
+- slab 边界对齐 `rc/2` cell 网格（与 cell list 一致：`src/gpumd_compat/neighbor.cu`
+  `rc_cell_list = 0.5 * rc`）与"每 rank 沿轴 bins ≥ 10（≥ 5rc）"守卫是 **M2a 的
+  前置条件**：M1 没有 halo，不需要该守卫保证依赖闭包，且 committed 24 Å baseline
+  在 rc=6–7 Å、4-rank 下无法满足 5rc/rank；small-box ordinary NEP 在 M1 仍走
+  replicated-full 保持兼容。M2a 引入 halo 前必须补齐 cell 对齐、large-box 判据与
+  `nep_multigpu.cu:1451-1455` 语义的 5rc/rank 守卫。
 
 ### 3.2 数据面计数与身份
 
@@ -412,9 +423,10 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 
 - **M0**：现有 `tests/mpi/run_mpi_differential.py` 1/2/4-rank × HostStaged/CudaAware
   矩阵不改容差直接通过；轨迹/输出与现行实现逐字节一致；通信记录断言随协议修订。
-- **M1**（空间所有权 + 迁移机制，数据仍复制、仍 Allgather）：golden 差分（初始
-  per-atom energy/force/virial、短 NVE 轨迹、thermo）在既有容差内；迁移 fixture
-  （原子跨 slab 边界、PBC 端点 wrap）；跨 rank 数 restart。
+- **M1**（已实施，2026-09-15）：golden 差分（初始 per-atom energy/force/virial、短
+  NVE 轨迹、thermo）在既有容差内通过；专属迁移矩阵 `tests/mpi/run_mpi_migration.py`
+  （跨 slab 边界、一步跨多 slab、PBC 端点 wrap、暂时空 slab、多段 run、
+  correct_velocity、跨 rank 数 restart）通过；P=1 与 M0 逐字节一致。
 - **M2a**（本地布局 + halo + 中心分片）：
   - **单 rank 退化门**：P=1 时 ghost=0、所有中心区间退化为 `0..N`，输出与现行单 rank
     逐字节一致；
@@ -462,7 +474,9 @@ M1 量化。
 ```text
 M0  删除每步 velocity Allgatherv（correct_velocity 触发步保留恢复复制）【已实施 2026-09-15】
     门：differential 矩阵逐字节一致                        ← 独立，可先行
-M1  空间 slab 所有权 + 迁移机制（数据仍复制、仍 Allgather、NEP 仍全量）
+M1  空间 slab 所有权 + 迁移机制（数据仍复制、仍 indexed Allgather、NEP 仍全量）
+    【已实施 2026-09-15；所有权为 global_id + index list/mask，indexed collective、
+     双 epoch 迁移时序；rc/2 cell 对齐、large-box、5rc/rank 守卫明确留给 M2a】
     门：golden 差分 + 迁移 fixture + 跨 rank restart
 M2a 本地 owned/ghost 布局 + p2p 深位置 halo + NEP 中心/descriptor 域分片
     门：单 rank 逐字节退化 + 边界 fixture + 长程守恒

@@ -17,28 +17,34 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前阶段：replicated-data MPI prototype
+## 当前阶段：M1 空间 slab 所有权（数据仍复制）
 
-当前已批准的实现切口是 Open MPI+UCX 的 replicated-data 原型：
+当前已批准并实施的切口是 M1：一 MPI rank 对应一张 GPU；数据面仍是 replicated-full
+（每 rank 持有全部 N 个槽位，`ghost_count == 0`，ordinary NEP 仍对全部中心计算），
+但积分、thermo 与输出的权威已从连续下标区间改为**空间 slab 所有权**：
 
-- 一 MPI rank 对应一张 GPU；每个 rank 暂时保留完整坐标和类型；
-- 中心原子按连续全局下标分片，积分、thermo 归约和输出只承认 owned range；
-- 每步允许 Open MPI collective，默认走 HostStaged，CudaAware 必须先通过 Open MPI capability
-  query 和运行时数值自检；
+- P=1 完全退化为 M0 路径（全部原子归 rank 0，无迁移通信，输出逐字节一致）；
+- P>1 仅支持正交、三方向全周期 box，沿最长边（参考实现的确定性 tie 规则）切 P 个
+  等宽 fractional half-open slab；triclinic 或非周期方向必须明确报 unsupported；
+- 所有权是 **global_id 上的逻辑归属**（owner map + owned index list + mask，
+  `include/dmgmd/spatial_ownership.hpp`），不是数组槽位的物理迁移；原子跨 slab 时
+  由旧 owner 将最新 velocity/unwrapped 经 indexed Allgatherv 交给新 owner；
+- position 仍每步 indexed Allgatherv 恢复制态；默认 HostStaged，CudaAware 必须先通过
+  Open MPI capability query 和运行时数值自检；
 - 所有用户可见文件只由 rank 0 写；
-- 不实现 ghost、halo 或原子迁移，也不进行大规模源码移动或架构重写；
+- 仍不实现 ghost、halo、点对点通信或 NEP 中心分片（M2 内容），也不发布性能结论；
 - 不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
 - 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
 
-本阶段的实现、所有权、通信量和验证契约位于
+本阶段的实现、所有权、迁移时序、通信量和验证契约位于
 `docs/standards/replicated-mpi.md`。所有文档从 `docs/README.md` 进入：
 
 - `docs/standards/`：当前已经生效的产品、架构和测试合同；
 - `docs/status/`：带日期、revision、环境和命令的进度或实测备忘；
 - `docs/plans/`：尚未实施或待审批的方案、风险和待办。
 
-域分解与 halo 通信仍是 `docs/plans/domain-decomposition.md` 中的待实施计划，不得描述为当前
-runtime 能力。
+ghost/halo、本地数组压缩与 NEP 中心分片仍是 `docs/plans/domain-decomposition.md`
+中的待实施计划（M2 起），不得描述为当前 runtime 能力。
 
 ## GPUMD 复现边界（强制）
 

@@ -9,9 +9,9 @@ target_compile_definitions(dmgmd_model_parser_tests PRIVATE
 )
 add_test(NAME dmgmd.model_parser COMMAND $<TARGET_FILE:dmgmd_model_parser_tests>)
 
-add_executable(dmgmd_partition_tests partition_tests.cpp)
-target_include_directories(dmgmd_partition_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
-add_test(NAME dmgmd.partition COMMAND $<TARGET_FILE:dmgmd_partition_tests>)
+add_executable(dmgmd_spatial_ownership_tests spatial_ownership_tests.cpp)
+target_include_directories(dmgmd_spatial_ownership_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+add_test(NAME dmgmd.spatial_ownership COMMAND $<TARGET_FILE:dmgmd_spatial_ownership_tests>)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(

@@ -267,7 +267,7 @@ DMG-MD 为保持可见格式兼容，可以继续输出相同列；但内部必�
 | compat core | `src/gpumd_compat/` | tokenizer、Box、GPU_Vector、neighbor、Potential、NEP/NEP-ZBL loader 与 kernels |
 | input | `include/dmgmd/model.hpp`、`include/dmgmd/run_ir.hpp`、`src/model_parser.cpp`、`src/run_parser.cpp` | model/run 兼容解析、typed IR 和错误位置 |
 | runtime | `src/runtime.cu`、`include/dmgmd/runtime.hpp` | device atoms、积分、thermo、输出与 replicated NEP adapter |
-| MPI | `src/mpi_runtime.cu`、`include/dmgmd/mpi_runtime.hpp`、`include/dmgmd/partition.hpp` | lifecycle、device binding、collectives、owned range 和诊断 |
+| MPI | `src/mpi_runtime.cu`、`include/dmgmd/mpi_runtime.hpp`、`include/dmgmd/spatial_ownership.hpp` | lifecycle、device binding、collectives、M1 空间所有权和诊断 |
 | entry | `src/dmgmd_main.cpp` | parse/validate 后启动 runtime，协调错误退出 |
 
 构建必须显式列出这些文件，不得通过 glob 把 GPUMD 的其他模块带入。当前产品范围排除 PIMD、

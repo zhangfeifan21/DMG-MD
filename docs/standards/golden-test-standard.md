@@ -28,7 +28,7 @@
 | --- | --- |
 | `dmgmd.run_parser` | `run.in` typed IR、支持和拒绝路径、参数校验 |
 | `dmgmd.model_parser` | model schema、类型、质量、盒和输入错误 |
-| `dmgmd.partition` | balanced owned range 的边界与覆盖 |
+| `dmgmd.spatial_ownership` | M1 slab 纯逻辑：s=0/s=1/内部边界及两侧、周期首尾迁移、一步跨多 slab、空 owned list 与 N<P、cube/最长轴 tie（含负向 lattice edge）、owner 唯一覆盖、index 排序、mask/list 一致、malformed global_id，以及非 canonical displacement/local send count/非 permutation scatter plan 拒绝（取代 M0 的 balanced owned range 测试） |
 | `dmgmd.long_nve_analysis` | fixture/potential 生成、哈希、统计量、checkpoint、重试和失败分类 |
 
 CTest 不会自动启动 baseline GPU、MPI differential 或长程 GPU 矩阵。
@@ -53,13 +53,30 @@ reference 模式必须校验 reference repository、commit、executable hash、�
 
 - Open MPI+UCX/CUDA 环境预检先于 numerical case；
 - 每 rank 唯一 GPU UUID、后端 capability 与主动数值自检；
-- owned center ranges 无遗漏、无重叠；
+- M1 空间 ownership：coverage proof 无遗漏、无重叠，per-rank owned counts 覆盖
+  global_count（个别 rank 可为 0）；
 - rank 0 输出与 committed golden 一致；
 - `DMGMD_COMM` 的采样步、collective 次数和分后端字节字段合法；
 - 短 NVE excursion/drift 与 reference 的差异不超过由 energy 容差导出的门槛；
 - 不同 rank/backend 的输出直接互比。
 
-该矩阵验证 replicated-data correctness，不是 domain decomposition 或性能测试。
+该矩阵验证 replicated-data + M1 空间所有权的 correctness，不是 halo 域分解或性能测试。
+
+### 2.3a M1 迁移矩阵
+
+入口为 `tests/mpi/run_mpi_migration.py`，fixture（显式初速度，不依赖随机初速度）在
+同一环境门槛后以 1/2/4 rank × HostStaged/CudaAware 运行，覆盖：跨内部边界、周期端
+回绕、一步跨多 slab、暂时空 slab、N<P、correct_velocity 触发步、多段 run、
+velocity/force/potential/virial/unwrapped 输出、dump_restart 后跨 rank 数恢复。
+判定包括：每 epoch 的 `owned_sum==N` 与 transitions 记账；用逐步 double 精度
+wrapped position 重算期望 owner 并要求日志迁移完全一致；P=1 永不迁移；各 fixture
+必须实际产生其声明的内部/周期/多 slab/空 slab/N<P 场景；每步 collective 数量以及
+MPI、HostStaged D2H/H2D、CudaAware output-download 字节逐字段精确匹配协议公式；跨
+rank/backend 输出对 1-rank 参考的 committed 容差比较（容差不放宽）；作业目录只有
+rank 0 输出。同一 runner 还含 unsupported-box 门：triclinic 与非周期方向输入在
+P=2 上必须被所有 rank 以完全相同、可诊断的错误拒绝且不产生 MD 输出，同时同一输入
+在 P=1 仍被接受（M0 兼容路径不选择分区轴）。机器可读参数以脚本内 fixture 常量为
+第一事实源。
 
 ### 2.4 长程 NVE/NVT suite
 
@@ -86,7 +103,7 @@ reference 模式必须校验 reference repository、commit、executable hash、�
 - header、Properties schema、列顺序和 token 数；
 - parser IR 中的命令类别和离散参数；
 - potential 版本、type/symbol 顺序、参数数量和输入哈希；
-- owned range 覆盖、rank 0 唯一输出等结构不变量。
+- ownership 覆盖（无遗漏/无重叠/owned counts 覆盖）、rank 0 唯一输出等结构不变量。
 
 reference 在锁定环境中还要求与 committed golden byte-exact。不能由此推导 candidate、跨
 GPU 架构或跨 MPI reduction tree 必须 byte-exact。
@@ -147,8 +164,9 @@ candidate stage 还必须存在结构合法的 `DMGMD_TIMING phase=run/total` �
 | DMG-MD 单 rank differential | 已实现 | baseline runner |
 | replicated-data MPI 1/2/4 rank | 已实现 | MPI runner |
 | 长 NVE/NVT、回放、跨 rank restart | 已实现 | long-NVE runner |
-| domain decomposition、owned/ghost halo | 未实现 | `docs/plans/domain-decomposition.md` |
-| migration、分区面和周期 ghost fixtures | 未实现 | `docs/plans/domain-decomposition.md` |
+| domain decomposition、owned/ghost halo | 未实现（M2 计划） | `docs/plans/domain-decomposition.md` |
+| M1 空间所有权逻辑迁移 fixtures | 已实现（`run_mpi_migration.py`） | MPI migration runner |
+| 分区面精确边界、周期 ghost（M2 边界 fixture） | 未实现 | `docs/plans/domain-decomposition.md` |
 | 多节点本地 scratch/故障注入 | 自动化已定义；严格双节点验收 IN PROGRESS | `tests/mpi/run_rank_io_isolation.py`、`docs/plans/multi-node-io.md` |
 | 完整 malformed/invalid compatibility corpus | 未完成 | `docs/plans/risk-and-backlog.md` |
 

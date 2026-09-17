@@ -549,33 +549,255 @@ struct HostSnapshot {
   std::vector<double> unwrapped;
 };
 
+// Persistent M1 spatial ownership state plus its device mirrors and the
+// indexed communication plan. The ownership epoch survives across run
+// segments (never resets to a balanced range). The per-step migration
+// protocol is steps 6-7 of docs/standards/replicated-mpi.md:
+//   * recompute the owner map from the wrapped replicated positions;
+//   * verify every rank derived the identical map (fixed-size Allreduce,
+//     before ANY collective whose counts depend on the new epoch);
+//   * if the map changed, migrate the authoritative dynamic state (velocity,
+//     and unwrapped when enabled) with the OLD ownership, so the new owner
+//     receives the latest half-step values instead of M0's stale replicas;
+//   * only then adopt the new map (epoch++, plan rebuild, rank 0 log).
+// Position is already replicated by the step-4 Allgatherv; type/mass/group/
+// global_id are static replicated data that M1 never migrates.
+class RuntimeOwnership {
+ public:
+  RuntimeOwnership(
+      const HostAtoms& identity,
+      const Box& box,
+      MpiRuntime& mpi)
+      : global_id_(identity.global_id),
+        host_position_(identity.position),
+        rank_(mpi.world_rank()),
+        world_size_(mpi.world_size())
+  {
+    const std::size_t global_count = identity.counts.global_count;
+    if (world_size_ == 1) {
+      // P=1 fully degenerates to the M0 path: rank 0 owns every slot, the
+      // map can never change, and no migration communication is added.
+      partition_axis_ = -1;
+      adopt(SpatialOwnership::trivial(global_count, global_id_, world_size_));
+      return;
+    }
+    if (!box.is_orthogonal) {
+      throw std::runtime_error(
+          "M1 spatial slab ownership supports only orthogonal boxes; a "
+          "triclinic lattice must be reported before any decomposition");
+    }
+    if (box.pbc_x != 1 || box.pbc_y != 1 || box.pbc_z != 1) {
+      throw std::runtime_error(
+          "M1 spatial slab ownership requires periodicity in all three "
+          "directions; a non-periodic direction is unsupported");
+    }
+    partition_axis_ = longest_box_axis({box.cpu_h[0], box.cpu_h[1], box.cpu_h[2],
+                                        box.cpu_h[3], box.cpu_h[4], box.cpu_h[5],
+                                        box.cpu_h[6], box.cpu_h[7], box.cpu_h[8]});
+    std::copy(box.cpu_h + 9, box.cpu_h + 18, inverse_box_.begin());
+    // Initial map from the input positions. slab_owner_of_fractional applies
+    // the wrap_positions <0/>1 adjustment, so unwrapped input coordinates
+    // map to the same owner as their wrapped form.
+    adopt(SpatialOwnership(compute_owner_map(), global_id_, rank_, world_size_));
+  }
+
+  [[nodiscard]] const SpatialOwnership& current() const noexcept { return *current_; }
+  [[nodiscard]] const IndexedOwnershipPlan& plan() const noexcept { return plan_; }
+  [[nodiscard]] int partition_axis() const noexcept { return partition_axis_; }
+
+  // Steps 6-7 of the per-step protocol. `step` is the 1-based global step for
+  // the ownership epoch log record.
+  void recompute_and_commit(
+      DeviceAtoms& atoms,
+      MpiRuntime& mpi,
+      CommunicationVolume& communication,
+      std::uint64_t step)
+  {
+    if (partition_axis_ < 0) {
+      // P=1: the map is constant, so there is nothing to recompute, verify
+      // or migrate. This keeps the single-rank path byte-identical to M0,
+      // including its communication records.
+      return;
+    }
+    atoms.position.copy_to_host(host_position_.data());
+    bool locally_valid = true;
+    std::optional<SpatialOwnership> next;
+    try {
+      next.emplace(compute_owner_map(), global_id_, rank_, world_size_);
+    } catch (const std::exception& error) {
+      // The failure is derived from replicated state, so every rank fails
+      // identically; the flag still routes it through the collective
+      // handshake below in case a local bug ever makes it asymmetric. The
+      // specific reason is preserved on stderr before that handshake.
+      locally_valid = false;
+      mpi.report_error(
+          "ownership",
+          std::string("spatial ownership recomputation failed: ") + error.what());
+    }
+    // Cross-rank consistency gate BEFORE any collective whose counts depend
+    // on the new epoch. Throws identically on every rank.
+    mpi.assert_same_ownership_map(
+        next ? next->map_hash() : 0, locally_valid, communication);
+    if (next->same_partition(*current_)) {
+      return;  // Epoch unchanged: reuse the pack/unpack plan verbatim.
+    }
+    // The owner map changed: hand the latest half-step dynamic state of the
+    // old owners to every rank while the OLD plan is still valid.
+    const std::size_t stride = atoms.counts.local_count();
+    mpi.allgather_indexed_device_soa(
+        atoms.velocity.data(), 3, stride, plan_, communication);
+    if (atoms.has_unwrapped()) {
+      mpi.allgather_indexed_device_soa(
+          atoms.unwrapped.data(), 3, stride, plan_, communication);
+    }
+    log_epoch_change(step, *next);
+    adopt(std::move(*next));
+  }
+
+ private:
+  [[nodiscard]] std::vector<int> compute_owner_map() const
+  {
+    // During construction the ownership set does not exist yet; the global
+    // count then comes from the static identity.
+    const std::size_t global_count = current_.has_value()
+                                         ? current_->global_count()
+                                         : global_id_.size();
+    const std::size_t stride = host_position_.size() / 3;
+    if (stride != global_count) {
+      throw std::logic_error("replicated position stride does not match global_count");
+    }
+    std::vector<int> owners(global_count);
+    for (std::size_t slot = 0; slot < global_count; ++slot) {
+      const double s = fractional_along_axis(
+          inverse_box_, partition_axis_, host_position_[slot],
+          host_position_[stride + slot], host_position_[2 * stride + slot]);
+      owners[slot] = slab_owner_of_fractional(s, world_size_);
+    }
+    return owners;
+  }
+
+  // Rebuilds all derived state (device mirrors + plan) from the new map and
+  // advances the epoch. Callers have already synced the dynamic state under
+  // the old ownership, so the switch is atomic from the step's perspective.
+  void adopt(SpatialOwnership&& next)
+  {
+    current_ = std::move(next);
+    ++epoch_;
+    const std::size_t global_count = current_->global_count();
+
+    // Gathered stream layout: rank r's owned slots in global_id order,
+    // concatenated in rank order. Identical on every rank because the owner
+    // map and global_id permutation are replicated.
+    plan_.host_scatter_slots.clear();
+    plan_.host_scatter_slots.reserve(global_count);
+    const auto& slot_of_id = current_->slot_of_global_id();
+    const auto& owners = current_->owner_by_slot();
+    std::vector<std::vector<int>> per_rank(static_cast<std::size_t>(world_size_));
+    for (std::uint64_t id = 0; id < global_count; ++id) {
+      const std::size_t slot = slot_of_id[static_cast<std::size_t>(id)];
+      per_rank[static_cast<std::size_t>(owners[slot])].push_back(
+          static_cast<int>(slot));
+    }
+    plan_.atom_counts.clear();
+    plan_.atom_displacements.clear();
+    int displacement = 0;
+    for (int source = 0; source < world_size_; ++source) {
+      auto& section = per_rank[static_cast<std::size_t>(source)];
+      plan_.atom_counts.push_back(static_cast<int>(section.size()));
+      plan_.atom_displacements.push_back(displacement);
+      displacement += static_cast<int>(section.size());
+      plan_.host_scatter_slots.insert(
+          plan_.host_scatter_slots.end(), section.begin(), section.end());
+    }
+    plan_.global_count = global_count;
+    plan_.owned_count = current_->owned_count();
+    plan_.epoch = epoch_;
+
+    const std::vector<int> owned_list(
+        current_->owned_indices().begin(), current_->owned_indices().end());
+    device_owned_indices_.resize(std::max<std::size_t>(owned_list.size(), 1));
+    if (!owned_list.empty()) {
+      device_owned_indices_.copy_from_host(owned_list.data(), owned_list.size());
+    }
+    device_scatter_slots_.resize(std::max<std::size_t>(global_count, 1));
+    device_scatter_slots_.copy_from_host(
+        plan_.host_scatter_slots.data(), plan_.host_scatter_slots.size());
+    plan_.device_owned_indices = device_owned_indices_.data();
+    plan_.device_scatter_slots = device_scatter_slots_.data();
+  }
+
+  // Rank 0 log record for every ownership epoch change, listing up to 64
+  // expected owner transitions (global_id:old->new) for migration fixtures.
+  void log_epoch_change(std::uint64_t step, const SpatialOwnership& next) const
+  {
+    if (rank_ != 0) return;
+    const auto& old_owners = current_->owner_by_slot();
+    const auto& new_owners = next.owner_by_slot();
+    const auto& global_id = current_->global_id();
+    std::size_t changed = 0;
+    std::string transitions;
+    constexpr std::size_t kMaxLoggedTransitions = 64;
+    bool truncated = false;
+    for (std::size_t slot = 0; slot < old_owners.size(); ++slot) {
+      if (old_owners[slot] == new_owners[slot]) continue;
+      ++changed;
+      if (changed <= kMaxLoggedTransitions) {
+        if (!transitions.empty()) transitions += ',';
+        transitions += std::to_string(global_id[slot]) + ':' +
+                       std::to_string(old_owners[slot]) + "->" +
+                       std::to_string(new_owners[slot]);
+      } else {
+        truncated = true;
+      }
+    }
+    std::cout << "DMGMD_OWNERSHIP_EPOCH step=" << step << " epoch=" << epoch_ + 1
+              << " changed_atoms=" << changed << " owned_sum=" << next.global_count()
+              << " transitions=\"" << transitions << "\""
+              << (truncated ? " truncated=true" : " truncated=false") << '\n';
+    std::cout.flush();
+  }
+
+  std::vector<std::uint64_t> global_id_;      // static identity, by slot
+  std::vector<double> host_position_;         // scratch for map recomputes
+  std::array<double, 9> inverse_box_{};
+  int partition_axis_ = -1;                   // -1: P=1 degenerate map
+  int rank_ = 0;
+  int world_size_ = 1;
+  std::uint64_t epoch_ = 0;
+  std::optional<SpatialOwnership> current_;
+  GPU_Vector<int> device_owned_indices_;  // this rank's owned slots
+  GPU_Vector<int> device_scatter_slots_;  // gathered atom index -> slot
+  IndexedOwnershipPlan plan_;
+};
+
 HostSnapshot gather_owned_snapshot(
     DeviceAtoms& atoms,
-    OwnedRange owned,
+    const IndexedOwnershipPlan& plan,
     MpiRuntime& mpi,
     CommunicationVolume& communication)
 {
   // Replicated device arrays are inputs; the snapshot is reconstructed only
-  // from uniquely owned slices, preserving global atom order on rank 0.
+  // from uniquely owned slots, preserving global atom order on rank 0 through
+  // the plan's scatter map.
   const std::size_t local = atoms.counts.local_count();
   HostSnapshot snapshot;
   if (mpi.is_root()) {
     snapshot.global_id.resize(local);
     atoms.global_id.copy_to_host(snapshot.global_id.data());
   }
-  snapshot.position = mpi.gather_owned_device_soa_to_root(
-      atoms.position.data(), 3, local, owned, communication);
-  snapshot.velocity = mpi.gather_owned_device_soa_to_root(
-      atoms.velocity.data(), 3, local, owned, communication);
-  snapshot.force = mpi.gather_owned_device_soa_to_root(
-      atoms.force.data(), 3, local, owned, communication);
-  snapshot.potential = mpi.gather_owned_device_soa_to_root(
-      atoms.potential.data(), 1, local, owned, communication);
-  snapshot.virial = mpi.gather_owned_device_soa_to_root(
-      atoms.virial.data(), 9, local, owned, communication);
+  snapshot.position = mpi.gather_indexed_device_soa_to_root(
+      atoms.position.data(), 3, local, plan, communication);
+  snapshot.velocity = mpi.gather_indexed_device_soa_to_root(
+      atoms.velocity.data(), 3, local, plan, communication);
+  snapshot.force = mpi.gather_indexed_device_soa_to_root(
+      atoms.force.data(), 3, local, plan, communication);
+  snapshot.potential = mpi.gather_indexed_device_soa_to_root(
+      atoms.potential.data(), 1, local, plan, communication);
+  snapshot.virial = mpi.gather_indexed_device_soa_to_root(
+      atoms.virial.data(), 9, local, plan, communication);
   if (atoms.has_unwrapped()) {
-    snapshot.unwrapped = mpi.gather_owned_device_soa_to_root(
-        atoms.unwrapped.data(), 3, local, owned, communication);
+    snapshot.unwrapped = mpi.gather_indexed_device_soa_to_root(
+        atoms.unwrapped.data(), 3, local, plan, communication);
   }
   return snapshot;
 }
@@ -636,10 +858,14 @@ __global__ void clear_owned_properties(
   }
 }
 
+// M1 kernels iterate an owned slot index list instead of a contiguous
+// [begin,end) range: spatial slab ownership is an arbitrary subset of the
+// replicated slots. The per-atom arithmetic is unchanged, so a P=1 run whose
+// index list is [0,N) reproduces the M0 results bit-for-bit.
 __global__ void velocity_verlet(
     bool first_half,
-    int begin,
-    int end,
+    const int* owned_indices,
+    int owned_count,
     int stride,
     double time_step,
     const double* mass,
@@ -647,10 +873,11 @@ __global__ void velocity_verlet(
     double* velocity,
     const double* force)
 {
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x + begin;
-  if (atom >= end) {
+  const int item = blockIdx.x * blockDim.x + threadIdx.x;
+  if (item >= owned_count) {
     return;
   }
+  const int atom = owned_indices[item];
   const double half = time_step * 0.5;
   const double inverse_mass = 1.0 / mass[atom];
   double vx = velocity[atom] + force[atom] * inverse_mass * half;
@@ -667,17 +894,18 @@ __global__ void velocity_verlet(
 }
 
 __global__ void update_unwrapped(
-    int begin,
-    int end,
+    const int* owned_indices,
+    int owned_count,
     int stride,
     const double* position,
     const double* previous,
     double* unwrapped)
 {
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x + begin;
-  if (atom >= end) {
+  const int item = blockIdx.x * blockDim.x + threadIdx.x;
+  if (item >= owned_count) {
     return;
   }
+  const int atom = owned_indices[item];
   for (int axis = 0; axis < 3; ++axis) {
     const int index = axis * stride + atom;
     unwrapped[index] += position[index] - previous[index];
@@ -685,8 +913,8 @@ __global__ void update_unwrapped(
 }
 
 __global__ void find_owned_thermo_sums(
-    int begin,
-    int end,
+    const int* owned_indices,
+    int owned_count,
     int stride,
     const double* mass,
     const double* potential,
@@ -696,15 +924,15 @@ __global__ void find_owned_thermo_sums(
 {
   const int tid = threadIdx.x;
   const int quantity = blockIdx.x;
-  const int owned_count = end - begin;
   const int patches = owned_count == 0 ? 0 : (owned_count - 1) / kThermoThreads + 1;
   __shared__ double values[kThermoThreads];
   double sum = 0.0;
   for (int patch = 0; patch < patches; ++patch) {
-    const int atom = begin + tid + patch * kThermoThreads;
-    if (atom >= end) {
+    const int item = tid + patch * kThermoThreads;
+    if (item >= owned_count) {
       continue;
     }
+    const int atom = owned_indices[item];
     const double vx = velocity[atom];
     const double vy = velocity[stride + atom];
     const double vz = velocity[2 * stride + atom];
@@ -752,16 +980,17 @@ __global__ void normalize_global_thermo(
 }
 
 __global__ void scale_owned_velocity(
-    int begin,
-    int end,
+    const int* owned_indices,
+    int owned_count,
     int stride,
     double factor,
     double* velocity)
 {
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x + begin;
-  if (atom >= end) {
+  const int item = blockIdx.x * blockDim.x + threadIdx.x;
+  if (item >= owned_count) {
     return;
   }
+  const int atom = owned_indices[item];
   velocity[atom] *= factor;
   velocity[stride + atom] *= factor;
   velocity[2 * stride + atom] *= factor;
@@ -774,17 +1003,17 @@ struct ThermoState {
 ThermoState compute_thermo(
     DeviceAtoms& atoms,
     const Box& box,
-    OwnedRange owned,
+    const RuntimeOwnership& ownership,
     GPU_Vector<double>& device_thermo,
     MpiRuntime& mpi,
     CommunicationVolume& communication)
 {
-  const int begin = checked_int(owned.begin, "owned_begin");
-  const int end = checked_int(owned.end, "owned_end");
+  const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
   const int stride = checked_int(atoms.counts.local_count(), "local_count");
   find_owned_thermo_sums<<<8, kThermoThreads>>>(
-      begin, end, stride, atoms.mass.data(), atoms.potential.data(),
-      atoms.velocity.data(), atoms.virial.data(), device_thermo.data());
+      ownership.plan().device_owned_indices, owned_count, stride, atoms.mass.data(),
+      atoms.potential.data(), atoms.velocity.data(), atoms.virial.data(),
+      device_thermo.data());
   check_cuda(cudaGetLastError(), "launch owned thermo reduction");
   mpi.allreduce_sum_device(device_thermo.data(), 8, communication);
   normalize_global_thermo<<<1, 8>>>(
@@ -806,7 +1035,7 @@ class NepForce {
     // directed partials belonging to neighboring centers. Merely assigning a
     // rank-local N1/N2 leaves those arrays incomplete. Until phase-level
     // intermediate exchange exists, every rank evaluates full NEP scratch and
-    // the runtime grants authority only to its OwnedRange outputs.
+    // the runtime grants authority only to its M1 spatial-ownership outputs.
     nep_.N1 = 0;
     nep_.N2 = checked_int(counts.local_count(), "local_count");
   }
@@ -1174,7 +1403,7 @@ using Measurement = std::variant<DumpThermoCommand, DumpXyzCommand, DumpRestartC
 
 double adaptive_time_step(
     DeviceAtoms& atoms,
-    OwnedRange owned,
+    const RuntimeOwnership& ownership,
     double initial_time_step,
     const std::optional<double>& maximum_distance,
     MpiRuntime& mpi,
@@ -1185,10 +1414,10 @@ double adaptive_time_step(
   atoms.velocity.copy_to_host(velocity.data());
   const std::size_t stride = atoms.counts.local_count();
   double maximum_squared = 0.0;
-  for (std::size_t atom = owned.begin; atom < owned.end; ++atom) {
-    const double vx = velocity[atom];
-    const double vy = velocity[stride + atom];
-    const double vz = velocity[2 * stride + atom];
+  for (std::size_t slot : ownership.current().owned_indices()) {
+    const double vx = velocity[slot];
+    const double vy = velocity[stride + slot];
+    const double vz = velocity[2 * stride + slot];
     maximum_squared = std::max(maximum_squared, vx * vx + vy * vy + vz * vz);
   }
   maximum_squared = mpi.allreduce_max_host(maximum_squared, communication);
@@ -1235,6 +1464,29 @@ void correct_device_velocity(
       device.velocity.data(), device.velocity.size(), communication);
 }
 
+void launch_velocity_verlet(
+    DeviceAtoms& atoms,
+    const RuntimeOwnership& ownership,
+    bool first_half,
+    double time_step)
+{
+  const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
+  if (owned_count == 0) return;  // An empty spatial slab integrates nothing.
+  const int stride = checked_int(atoms.counts.local_count(), "local_count");
+  velocity_verlet<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
+      first_half, ownership.plan().device_owned_indices, owned_count, stride,
+      time_step, atoms.mass.data(), atoms.position.data(), atoms.velocity.data(),
+      atoms.force.data());
+  if (first_half && atoms.has_unwrapped()) {
+    update_unwrapped<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
+        ownership.plan().device_owned_indices, owned_count, stride,
+        atoms.position.data(), atoms.previous_position.data(),
+        atoms.unwrapped.data());
+  }
+  check_cuda(cudaGetLastError(), first_half ? "velocity-Verlet first half"
+                                            : "velocity-Verlet second half");
+}
+
 void run_segment(
     int steps,
     double base_time_step,
@@ -1248,16 +1500,17 @@ void run_segment(
     HostAtoms& identity,
     DeviceAtoms& atoms,
     NepForce& force,
-    OwnedRange owned_range,
+    RuntimeOwnership& ownership,
     MpiRuntime& mpi)
 {
-  // Per-step protocol (docs/standards/replicated-mpi.md): integrate owned positions,
-  // allgather replicated coordinates, evaluate full NEP scratch, integrate
-  // owned velocities, then reduce owned thermo. Replicated velocity is no
-  // longer refreshed every step (M0): no consumer reads non-owned velocity, so
-  // it is restored by an Allgatherv only on correct_velocity trigger steps,
-  // right before the root reads the full array. Output gathers are conditional
-  // and every collective contributes to the log.
+  // Per-step protocol (docs/standards/replicated-mpi.md, M1): integrate the
+  // currently owned slots, allgather replicated coordinates, evaluate full
+  // NEP scratch, recompute spatial ownership and migrate the dynamic state
+  // under the old ownership, then integrate/thermo/output under the new
+  // ownership. Replicated velocity is not refreshed every step (M0): the only
+  // remaining consumers of non-owned velocity are correct_velocity (restored
+  // here on trigger steps) and ownership migration itself (which syncs the
+  // authoritative half-step velocity before a new owner takes over).
   int thermo_count = 0;
   int restart_count = 0;
   for (const Measurement& measurement : measurements) {
@@ -1285,50 +1538,41 @@ void run_segment(
 
   GPU_Vector<double> device_thermo(8);
   force.compute(box, atoms);
-  const int owned_begin = checked_int(owned_range.begin, "owned_begin");
-  const int owned_end = checked_int(owned_range.end, "owned_end");
-  const int owned_count = checked_int(owned_range.size(), "owned_count");
-  const int stride = checked_int(atoms.counts.local_count(), "local_count");
   for (int step = 0; step < steps; ++step) {
     CommunicationVolume communication;
+    // 1. correct_velocity trigger: restore the replicated velocity under the
+    // CURRENT ownership so the root's CPU correction reads fresh values.
     if (velocity_correction && step % velocity_correction->interval == 0) {
-      // M0 exception: correct_device_velocity reads the full replicated
-      // velocity on the root rank, and non-owned slots may be stale since the
-      // per-step velocity allgather was removed. Restore the replicated state
-      // here; the corrected broadcast_device below re-replicates the full
-      // array, so later steps in this segment need no further sync.
-      mpi.allgather_owned_device_soa(
-          atoms.velocity.data(), 3, atoms.counts.local_count(), owned_range, communication);
+      mpi.allgather_indexed_device_soa(
+          atoms.velocity.data(), 3, atoms.counts.local_count(),
+          ownership.plan(), communication);
       correct_device_velocity(atoms, identity, *velocity_correction, mpi, communication);
     }
+    // 2. Adaptive timestep scans only the currently owned slots.
     const double time_step = adaptive_time_step(
-        atoms, owned_range, base_time_step, maximum_distance, mpi, communication);
+        atoms, ownership, base_time_step, maximum_distance, mpi, communication);
     global_time += time_step;
     if (atoms.has_unwrapped()) {
       atoms.previous_position.copy_from_device(atoms.position.data());
     }
-    if (owned_count != 0) {
-      velocity_verlet<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-          true, owned_begin, owned_end, stride, time_step, atoms.mass.data(),
-          atoms.position.data(), atoms.velocity.data(), atoms.force.data());
-      if (atoms.has_unwrapped()) {
-        update_unwrapped<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-            owned_begin, owned_end, stride, atoms.position.data(),
-            atoms.previous_position.data(), atoms.unwrapped.data());
-      }
-    }
-    check_cuda(cudaGetLastError(), "velocity-Verlet first half");
-    mpi.allgather_owned_device_soa(
-        atoms.position.data(), 3, atoms.counts.local_count(), owned_range, communication);
+    // 3. VV first half + position/unwrapped update: current owned slots.
+    launch_velocity_verlet(atoms, ownership, true, time_step);
+    // 4. Indexed position Allgatherv restores the replicated state.
+    mpi.allgather_indexed_device_soa(
+        atoms.position.data(), 3, atoms.counts.local_count(),
+        ownership.plan(), communication);
+    // 5. Full replicated NEP (wrap + clear + compute), unchanged from M0.
     force.compute(box, atoms);
-    if (owned_count != 0) {
-      velocity_verlet<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-          false, owned_begin, owned_end, stride, time_step, atoms.mass.data(),
-          atoms.position.data(), atoms.velocity.data(), atoms.force.data());
-    }
-    check_cuda(cudaGetLastError(), "velocity-Verlet second half");
+    // 6-7. Recompute the spatial owner map from the wrapped positions,
+    // verify it matches on every rank, migrate velocity/unwrapped under the
+    // OLD ownership, and only then adopt the new ownership (epoch++).
+    ownership.recompute_and_commit(atoms, mpi, communication, global_step + 1);
+    // 8. VV second half, thermo, Berendsen and output gather run under the
+    // NEW ownership: an atom that crossed a slab boundary finishes its step
+    // with its new owner, exactly once.
+    launch_velocity_verlet(atoms, ownership, false, time_step);
     const ThermoState thermo = compute_thermo(
-        atoms, box, owned_range, device_thermo, mpi, communication);
+        atoms, box, ownership, device_thermo, mpi, communication);
 
     if (ensemble.kind == EnsembleKind::nvt_ber) {
       const double fraction = static_cast<double>(step) / static_cast<double>(steps);
@@ -1337,9 +1581,12 @@ void run_segment(
       const double coupling = 1.0 / ensemble.temperature_coupling;
       if (coupling > 1.0e-5) {
         const double factor = std::sqrt(1.0 + coupling * (target / thermo.values[0] - 1.0));
+        const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
         if (owned_count != 0) {
+          const int stride = checked_int(atoms.counts.local_count(), "local_count");
           scale_owned_velocity<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-              owned_begin, owned_end, stride, factor, atoms.velocity.data());
+              ownership.plan().device_owned_indices, owned_count, stride, factor,
+              atoms.velocity.data());
         }
         check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
       }
@@ -1354,7 +1601,7 @@ void run_segment(
     }
     std::optional<HostSnapshot> snapshot;
     if (need_snapshot) {
-      snapshot = gather_owned_snapshot(atoms, owned_range, mpi, communication);
+      snapshot = gather_owned_snapshot(atoms, ownership.plan(), mpi, communication);
     }
 
     for (const Measurement& measurement : measurements) {
@@ -1391,28 +1638,29 @@ void run_replicated(
     MpiRuntime& mpi)
 {
   const auto total_started = std::chrono::steady_clock::now();
-  // The full Model is replicated input. `owned` below is the only authority
-  // for integration, thermodynamics and output; this phase has no ghosts or
-  // atom migration. Keep this boundary aligned with docs/standards/replicated-mpi.md.
+  // The full Model is replicated input. The M1 spatial ownership set below is
+  // the only authority for integration, thermodynamics and output; data stays
+  // fully replicated (no ghost slots, no local compaction) and NEP stays
+  // replicated-full. Ownership migrates logically between epochs; atoms are
+  // never inserted or removed from the replicated slots.
+  // Keep this boundary aligned with docs/standards/replicated-mpi.md.
   if (model.atoms.counts.ghost_count != 0 ||
       model.atoms.counts.owned_count != model.atoms.counts.global_count) {
     throw std::logic_error(
         "replicated initialization requires a complete input model and no ghosts");
   }
-  if (model.atoms.counts.global_count < static_cast<std::size_t>(mpi.world_size())) {
-    throw std::logic_error(
-        "replicated prototype requires at least one owned center atom per MPI rank");
-  }
-
   const std::filesystem::path absolute_potential =
       std::filesystem::absolute(potential_filename);
   mpi.assert_same_fingerprint(file_fingerprint("run.in"), "run.in");
   mpi.assert_same_fingerprint(file_fingerprint("model.xyz"), "model.xyz");
   mpi.assert_same_fingerprint(file_fingerprint(absolute_potential), "potential file");
   mpi.initialize_device();
-  const OwnedRange owned = balanced_owned_range(
-      model.atoms.counts.global_count, mpi.world_rank(), mpi.world_size());
-  mpi.verify_and_log_center_partition(model.atoms.counts.global_count, owned);
+  Box box = make_box(model.box);
+  // P=1 degenerates to the constant rank-0 map (M0 path, byte-identical);
+  // P>1 requires an orthogonal fully-periodic box and partitions along the
+  // longest edge. The ownership epoch persists across every run segment.
+  RuntimeOwnership ownership(model.atoms, box, mpi);
+  mpi.verify_and_log_center_partition(ownership.current(), ownership.partition_axis());
 
   if (!model.atoms.has_input_velocity) {
     if (mpi.is_root()) {
@@ -1423,7 +1671,6 @@ void run_replicated(
     mpi.broadcast_doubles(model.atoms.velocity.data(), model.atoms.velocity.size());
   }
 
-  Box box = make_box(model.box);
   DeviceAtoms atoms(model.atoms);
   RankIoIsolation rank_io(mpi);
   auto force = std::make_unique<NepForce>(absolute_potential.string(), atoms.counts);
@@ -1476,7 +1723,7 @@ void run_replicated(
         const auto segment_started = std::chrono::steady_clock::now();
         run_segment(run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
                     measurements, global_time, global_step, box, model.atoms, atoms, *force,
-                    owned, mpi);
+                    ownership, mpi);
         check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
         const double segment_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - segment_started).count();

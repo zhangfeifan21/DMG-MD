@@ -133,21 +133,25 @@ def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> N
             )
 
     global_count = int(fields["global_count"])
-    range_records = [
-        line for line in stdout.splitlines() if line.startswith("DMGMD_CENTER_RANGE ")
+    # M1 spatial ownership: one owned-count record per rank (the M0 contiguous
+    # begin/end ranges no longer exist). The partition must cover every atom
+    # exactly once, but individual ranks may own zero atoms.
+    ownership = [
+        line for line in stdout.splitlines() if line.startswith("DMGMD_CENTER_OWNERSHIP ")
     ]
-    if len(range_records) != ranks:
-        raise baseline.BaselineError(f"{stage_dir}: center range record count is incomplete")
-    previous_end = 0
-    for rank, line in enumerate(range_records):
+    if len(ownership) != ranks:
+        raise baseline.BaselineError(f"{stage_dir}: center ownership record count is incomplete")
+    owned_total = 0
+    for rank, line in enumerate(ownership):
         item = key_values(line)
-        begin = int(item["begin"])
-        end = int(item["end"])
-        if int(item["rank"]) != rank or begin != previous_end or int(item["count"]) != end - begin:
-            raise baseline.BaselineError(f"{stage_dir}: malformed center range record: {line}")
-        previous_end = end
-    if previous_end != global_count:
-        raise baseline.BaselineError(f"{stage_dir}: center ranges do not cover global_count")
+        owned_count = int(item.get("owned_count", -1))
+        if int(item.get("rank", -1)) != rank or owned_count < 0:
+            raise baseline.BaselineError(f"{stage_dir}: malformed center ownership record: {line}")
+        owned_total += owned_count
+    if owned_total != global_count:
+        raise baseline.BaselineError(
+            f"{stage_dir}: center ownership counts cover {owned_total}, expected {global_count}"
+        )
 
     accounting = [
         line for line in stdout.splitlines() if line.startswith("DMGMD_COMM accounting=")

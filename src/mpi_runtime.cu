@@ -162,8 +162,11 @@ class PinnedBuffer {
   std::size_t capacity_ = 0;
 };
 
-__global__ void pack_owned_soa(
-    int begin,
+// M1 indexed pack: item = atom-major AoS position of one owned slot's
+// component. The owned index list is sorted by global_id and identical in
+// plan order on every rank, so the gathered stream is deterministic.
+__global__ void pack_indexed_soa(
+    const int* owned_indices,
     int owned_count,
     int stride,
     int components,
@@ -175,11 +178,16 @@ __global__ void pack_owned_soa(
   if (item >= count) return;
   const int atom = item / components;
   const int component = item - atom * components;
-  packed[item] = soa[component * stride + begin + atom];
+  packed[item] = soa[component * stride + owned_indices[atom]];
 }
 
-__global__ void unpack_global_soa(
+// M1 indexed unpack: item = atom-major AoS position of one gathered atom's
+// component; scatter_slots[item's atom] restores the replicated slot so the
+// SoA is rebuilt in slot order rather than rank concatenation order.
+__global__ void unpack_indexed_soa(
+    const int* scatter_slots,
     int global_count,
+    int stride,
     int components,
     const double* packed,
     double* soa)
@@ -189,7 +197,7 @@ __global__ void unpack_global_soa(
   if (item >= count) return;
   const int atom = item / components;
   const int component = item - atom * components;
-  soa[component * global_count + atom] = packed[item];
+  soa[component * stride + scatter_slots[atom]] = packed[item];
 }
 
 std::string cuda_uuid_string(const cudaUUID_t& uuid)
@@ -544,8 +552,28 @@ class MpiRuntime::Impl {
     }
   }
 
-  void counts_and_displacements(
-      std::size_t global_count,
+  void validate_indexed_plan(
+      const IndexedOwnershipPlan& plan,
+      int components,
+      std::size_t stride) const
+  {
+    if (components <= 0) {
+      throw std::invalid_argument("invalid indexed ownership gather shape");
+    }
+    validate_indexed_ownership_plan_host(plan, rank, size, stride);
+    // Zero-count (empty slab) plans may legitimately carry null device
+    // mirrors; every rank with atoms must provide both.
+    if ((plan.owned_count != 0 && plan.device_owned_indices == nullptr) ||
+        (plan.global_count != 0 && plan.device_scatter_slots == nullptr)) {
+      throw std::invalid_argument("indexed ownership plan lacks device mirrors");
+    }
+  }
+
+  // Per-call MPI counts/displacements in elements (doubles). Derived from the
+  // atom-granular plan so the same plan serves position (3), potential (1)
+  // and virial (9) gathers of one ownership epoch.
+  void indexed_counts_and_displacements(
+      const IndexedOwnershipPlan& plan,
       int components,
       std::vector<int>& counts,
       std::vector<int>& displacements) const
@@ -553,11 +581,14 @@ class MpiRuntime::Impl {
     counts.resize(static_cast<std::size_t>(size));
     displacements.resize(static_cast<std::size_t>(size));
     for (int source = 0; source < size; ++source) {
-      const OwnedRange range = balanced_owned_range(global_count, source, size);
       counts[source] = checked_mpi_count(
-          range.size() * static_cast<std::size_t>(components), "MPI shard element count");
+          static_cast<std::size_t>(plan.atom_counts[source]) *
+              static_cast<std::size_t>(components),
+          "indexed MPI element count");
       displacements[source] = checked_mpi_count(
-          range.begin * static_cast<std::size_t>(components), "MPI shard displacement");
+          static_cast<std::size_t>(plan.atom_displacements[source]) *
+              static_cast<std::size_t>(components),
+          "indexed MPI element displacement");
     }
   }
 
@@ -702,17 +733,27 @@ void MpiRuntime::assert_same_fingerprint(std::uint64_t fingerprint, const char* 
 }
 
 void MpiRuntime::verify_and_log_center_partition(
-    std::size_t global_count,
-    OwnedRange owned) const
+    const SpatialOwnership& ownership,
+    int partition_axis) const
 {
-  if (owned.end > global_count || owned.begin > owned.end) {
-    throw std::logic_error("owned center range is outside replicated input");
+  const std::size_t global_count = ownership.global_count();
+  if (partition_axis < -1 || partition_axis > 2) {
+    throw std::logic_error("partition axis is outside x/y/z");
   }
-  // This collective is deliberately explicit proof, not an inference from
-  // balanced_owned_range(): every global center must have exactly one owner.
+  // A mask coverage sum alone cannot prove complete-map agreement for P>=3:
+  // non-owner ranks could disagree with each other while exactly one rank's
+  // local mask still selects the slot. Gate the initial variable-count plan
+  // with the same fixed-size map-hash handshake used by every later epoch.
+  assert_same_ownership_map(ownership.map_hash(), true);
+
+  // This second collective explicitly proves that every replicated slot is
+  // authoritative on exactly one rank; it is not inferred from the slab
+  // formula or from count totals.
   std::vector<int> local(global_count, 0);
-  std::fill(local.begin() + static_cast<std::ptrdiff_t>(owned.begin),
-            local.begin() + static_cast<std::ptrdiff_t>(owned.end), 1);
+  const std::vector<char>& mask = ownership.owned_mask();
+  for (std::size_t slot = 0; slot < global_count; ++slot) {
+    local[slot] = mask[slot];
+  }
   std::vector<int> coverage(global_count, 0);
   check_mpi(MPI_Allreduce(local.data(), coverage.data(),
                           checked_mpi_count(global_count, "center coverage"), MPI_INT,
@@ -729,47 +770,99 @@ void MpiRuntime::verify_and_log_center_partition(
   }
   if (is_root()) {
     std::cout << "DMGMD_CENTER_PARTITION global_count=" << global_count
-              << " ranks=" << world_size() << " missing=" << missing
+              << " ranks=" << world_size();
+    if (partition_axis >= 0) {
+      static const char* axis_names[3] = {"x", "y", "z"};
+      std::cout << " partition=spatial-slab axis=" << axis_names[partition_axis]
+                << " slab_rule=equal-width-fractional";
+    }
+    std::cout << " missing=" << missing
               << " overlapping=" << overlapping
               << " owned_output_coverage=complete"
               << " nep_kernel_centers=replicated-full"
               << " nep_N1_N2_shard_complete=false"
               << " reason=remote-Fp-and-reverse-partial-dependencies\n";
+    const std::vector<std::size_t>& counts = ownership.owned_counts_by_rank();
     for (int source = 0; source < world_size(); ++source) {
-      const OwnedRange range = balanced_owned_range(global_count, source, world_size());
-      std::cout << "DMGMD_CENTER_RANGE rank=" << source << " begin=" << range.begin
-                << " end=" << range.end << " count=" << range.size() << '\n';
+      std::cout << "DMGMD_CENTER_OWNERSHIP rank=" << source
+                << " owned_count=" << counts[static_cast<std::size_t>(source)] << '\n';
     }
     std::cout.flush();
   }
 }
 
-void MpiRuntime::allgather_owned_device_soa(
+void MpiRuntime::assert_same_ownership_map(
+    std::uint64_t map_hash,
+    bool locally_valid,
+    CommunicationVolume& volume) const
+{
+  if (world_size() == 1) return;
+  // One fixed-size Allreduce, so it is safe to call even when local map
+  // construction already failed or the maps disagree: every rank enters with
+  // the same shape and leaves through the same branch. Valid hashes are
+  // 63-bit (SpatialOwnership::map_hash), so the all-ones sentinel for an
+  // invalid local map can never collide with a real hash.
+  constexpr std::uint64_t kInvalidMapSentinel = UINT64_MAX;
+  const std::uint64_t value = locally_valid ? map_hash : kInvalidMapSentinel;
+  const unsigned long long local[2] = {static_cast<unsigned long long>(value),
+                                       ~static_cast<unsigned long long>(value)};
+  unsigned long long maximum[2] = {0, 0};
+  check_mpi(MPI_Allreduce(local, maximum, 2, MPI_UNSIGNED_LONG_LONG, MPI_MAX,
+                          MPI_COMM_WORLD),
+            "reduce spatial ownership map hash");
+  ++volume.collective_calls;
+  volume.mpi_input_bytes_global += 2 * sizeof(unsigned long long) *
+                                   static_cast<std::uint64_t>(world_size());
+  volume.mpi_output_bytes_global += 2 * sizeof(unsigned long long) *
+                                    static_cast<std::uint64_t>(world_size());
+  // max{h} == ~max{~h} holds iff every rank contributed the same value. With
+  // the sentinel in play this also fails whenever any rank was locally
+  // invalid while at least one other rank stayed valid; if every rank was
+  // invalid the local flag below still fails the check symmetrically.
+  const bool consistent = maximum[0] == ~maximum[1];
+  if (!locally_valid || !consistent) {
+    throw std::runtime_error(
+        "spatial ownership map is invalid on a rank or inconsistent between ranks");
+  }
+}
+
+void MpiRuntime::assert_same_ownership_map(
+    std::uint64_t map_hash,
+    bool locally_valid) const
+{
+  CommunicationVolume ignored;
+  assert_same_ownership_map(map_hash, locally_valid, ignored);
+}
+
+void MpiRuntime::allgather_indexed_device_soa(
     double* device_values,
     int components,
     std::size_t stride,
-    OwnedRange owned,
-    CommunicationVolume& volume)
+    const IndexedOwnershipPlan& plan,
+    CommunicationVolume& volume) const
 {
-  if (components <= 0 || stride == 0 || owned.end > stride) {
-    throw std::invalid_argument("invalid owned SoA allgather shape");
-  }
-  const std::size_t send_elements = owned.size() * static_cast<std::size_t>(components);
-  const std::size_t receive_elements = stride * static_cast<std::size_t>(components);
+  impl_->validate_indexed_plan(plan, components, stride);
+  const std::size_t send_elements =
+      plan.owned_count * static_cast<std::size_t>(components);
+  const std::size_t receive_elements =
+      plan.global_count * static_cast<std::size_t>(components);
+  // Kernel launch sizes are derived from these element counts, so they must
+  // both fit the MPI/kernel int range before any launch.
+  static_cast<void>(checked_mpi_count(send_elements, "indexed pack items"));
+  static_cast<void>(checked_mpi_count(receive_elements, "indexed unpack items"));
   impl_->device_send.reserve(std::max<std::size_t>(send_elements, 1));
   impl_->device_receive.reserve(std::max<std::size_t>(receive_elements, 1));
   if (send_elements != 0) {
-    pack_owned_soa<<<(send_elements + kThreads - 1) / kThreads, kThreads>>>(
-        checked_mpi_count(owned.begin, "owned begin"),
-        checked_mpi_count(owned.size(), "owned count"),
-        checked_mpi_count(stride, "SoA stride"), components,
-        device_values, impl_->device_send.data());
-    check_cuda(cudaGetLastError(), "pack owned replicated field");
+    pack_indexed_soa<<<(send_elements + kThreads - 1) / kThreads, kThreads>>>(
+        plan.device_owned_indices, checked_mpi_count(plan.owned_count, "owned count"),
+        checked_mpi_count(stride, "SoA stride"), components, device_values,
+        impl_->device_send.data());
+    check_cuda(cudaGetLastError(), "pack indexed owned field");
   }
 
   std::vector<int> counts;
   std::vector<int> displacements;
-  impl_->counts_and_displacements(stride, components, counts, displacements);
+  impl_->indexed_counts_and_displacements(plan, components, counts, displacements);
   // HostStaged follows device -> pinned send -> MPI -> pinned receive ->
   // device. CudaAware changes only transport, never layout or ownership.
   if (backend() == CommunicationBackend::host_staged) {
@@ -778,7 +871,7 @@ void MpiRuntime::allgather_owned_device_soa(
     if (send_elements != 0) {
       check_cuda(cudaMemcpy(impl_->host_send.data(), impl_->device_send.data(),
                             checked_bytes(send_elements), cudaMemcpyDeviceToHost),
-                 "stage owned field from CUDA device to pinned host");
+                 "stage indexed owned field from CUDA device to pinned host");
     }
     check_mpi(MPI_Allgatherv(
                   impl_->host_send.data(), checked_mpi_count(send_elements, "allgather send"),
@@ -787,7 +880,7 @@ void MpiRuntime::allgather_owned_device_soa(
               "HostStaged MPI_Allgatherv");
     check_cuda(cudaMemcpy(impl_->device_receive.data(), impl_->host_receive.data(),
                           checked_bytes(receive_elements), cudaMemcpyHostToDevice),
-               "stage replicated field from pinned host to CUDA device");
+               "stage indexed replicated field from pinned host to CUDA device");
     volume.device_to_host_bytes_global += checked_bytes(receive_elements);
     volume.host_to_device_bytes_global +=
         checked_bytes(receive_elements) * static_cast<std::uint64_t>(world_size());
@@ -800,10 +893,11 @@ void MpiRuntime::allgather_owned_device_soa(
               "CudaAware MPI_Allgatherv");
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware allgather output");
   }
-  unpack_global_soa<<<(receive_elements + kThreads - 1) / kThreads, kThreads>>>(
+  unpack_indexed_soa<<<(receive_elements + kThreads - 1) / kThreads, kThreads>>>(
+      plan.device_scatter_slots, checked_mpi_count(plan.global_count, "global count"),
       checked_mpi_count(stride, "SoA stride"), components,
       impl_->device_receive.data(), device_values);
-  check_cuda(cudaGetLastError(), "unpack replicated field");
+  check_cuda(cudaGetLastError(), "unpack indexed replicated field");
 
   ++volume.collective_calls;
   volume.mpi_input_bytes_global += checked_bytes(receive_elements);
@@ -811,34 +905,35 @@ void MpiRuntime::allgather_owned_device_soa(
       checked_bytes(receive_elements) * static_cast<std::uint64_t>(world_size());
 }
 
-std::vector<double> MpiRuntime::gather_owned_device_soa_to_root(
+std::vector<double> MpiRuntime::gather_indexed_device_soa_to_root(
     const double* device_values,
     int components,
     std::size_t stride,
-    OwnedRange owned,
-    CommunicationVolume& volume)
+    const IndexedOwnershipPlan& plan,
+    CommunicationVolume& volume) const
 {
-  if (components <= 0 || stride == 0 || owned.end > stride) {
-    throw std::invalid_argument("invalid owned SoA gather shape");
-  }
-  const std::size_t send_elements = owned.size() * static_cast<std::size_t>(components);
-  const std::size_t receive_elements = stride * static_cast<std::size_t>(components);
+  impl_->validate_indexed_plan(plan, components, stride);
+  const std::size_t send_elements =
+      plan.owned_count * static_cast<std::size_t>(components);
+  const std::size_t receive_elements =
+      plan.global_count * static_cast<std::size_t>(components);
+  static_cast<void>(checked_mpi_count(send_elements, "indexed pack items"));
+  static_cast<void>(checked_mpi_count(receive_elements, "indexed gather items"));
   impl_->device_send.reserve(std::max<std::size_t>(send_elements, 1));
   if (is_root() && backend() == CommunicationBackend::cuda_aware) {
     impl_->device_receive.reserve(std::max<std::size_t>(receive_elements, 1));
   }
   if (send_elements != 0) {
-    pack_owned_soa<<<(send_elements + kThreads - 1) / kThreads, kThreads>>>(
-        checked_mpi_count(owned.begin, "owned begin"),
-        checked_mpi_count(owned.size(), "owned count"),
-        checked_mpi_count(stride, "SoA stride"), components,
-        device_values, impl_->device_send.data());
-    check_cuda(cudaGetLastError(), "pack owned output field");
+    pack_indexed_soa<<<(send_elements + kThreads - 1) / kThreads, kThreads>>>(
+        plan.device_owned_indices, checked_mpi_count(plan.owned_count, "owned count"),
+        checked_mpi_count(stride, "SoA stride"), components, device_values,
+        impl_->device_send.data());
+    check_cuda(cudaGetLastError(), "pack indexed output field");
   }
 
   std::vector<int> counts;
   std::vector<int> displacements;
-  impl_->counts_and_displacements(stride, components, counts, displacements);
+  impl_->indexed_counts_and_displacements(plan, components, counts, displacements);
   std::vector<double> packed(is_root() ? receive_elements : 0);
   if (backend() == CommunicationBackend::host_staged) {
     impl_->host_send.reserve(std::max<std::size_t>(send_elements, 1));
@@ -846,7 +941,7 @@ std::vector<double> MpiRuntime::gather_owned_device_soa_to_root(
     if (send_elements != 0) {
       check_cuda(cudaMemcpy(impl_->host_send.data(), impl_->device_send.data(),
                             checked_bytes(send_elements), cudaMemcpyDeviceToHost),
-                 "stage owned output from CUDA device to pinned host");
+                 "stage indexed output from CUDA device to pinned host");
     }
     check_mpi(MPI_Gatherv(
                   impl_->host_send.data(), checked_mpi_count(send_elements, "gather send"),
@@ -868,17 +963,24 @@ std::vector<double> MpiRuntime::gather_owned_device_soa_to_root(
     if (is_root()) {
       check_cuda(cudaMemcpy(packed.data(), impl_->device_receive.data(),
                             checked_bytes(receive_elements), cudaMemcpyDeviceToHost),
-                 "download gathered owned output");
+                 "download gathered indexed output");
       volume.output_download_bytes += checked_bytes(receive_elements);
     }
   }
 
-  std::vector<double> soa(is_root() ? receive_elements : 0);
+  // Scatter the rank-concatenated stream back into replicated slot order on
+  // the root so downstream formatters address slots exactly as the host
+  // identity model does. The scatter map is validated against the stride by
+  // validate_indexed_plan.
+  std::vector<double> soa(is_root() ? stride * static_cast<std::size_t>(components) : 0);
   if (is_root()) {
-    for (std::size_t atom = 0; atom < stride; ++atom) {
+    for (std::size_t atom = 0; atom < plan.global_count; ++atom) {
+      const std::size_t slot =
+          static_cast<std::size_t>(plan.host_scatter_slots[atom]);
       for (int component = 0; component < components; ++component) {
-        soa[static_cast<std::size_t>(component) * stride + atom] =
-            packed[atom * static_cast<std::size_t>(components) + component];
+        soa[static_cast<std::size_t>(component) * stride + slot] =
+            packed[atom * static_cast<std::size_t>(components) +
+                   static_cast<std::size_t>(component)];
       }
     }
   }

@@ -2,9 +2,9 @@
 
 类别：现行标准。
 
-更新日期：2026-09-03。
+更新日期：2026-09-15。
 
-本文档描述当前 single-rank 与 replicated-data MPI `dmg-md` 的数据面，并以现有代码为
+本文档描述当前 single-rank 与 M1 空间所有权 MPI `dmg-md` 的数据面，并以现有代码为
 权威来源。
 
 ## 1. 数据域约定
@@ -41,8 +41,11 @@ ghost_count  = 0
 global_id    = [0, 1, ..., N - 1]
 ```
 
-这些值在 replicated prototype 中也保持相等。实际 MPI 所有权由独立的 `OwnedRange` 表示，
-不得把 reader 的 `owned_count=N` 误当成每 rank 都拥有 N 份物理输出。
+这些值在 M1 replicated runtime 中也保持相等：`local_count() == N` 仍是所有 SoA per-atom
+数组的唯一 stride。实际 MPI 权威所有权由独立的 `SpatialOwnership`
+（`include/dmgmd/spatial_ownership.hpp`）表示——P>1 时是沿最长边的等宽 fractional slab
+给出的**槽位子集**，P=1 时是 rank 0 的平凡全集映射；不得把 reader 的 `owned_count=N`
+误当成每 rank 都拥有 N 份物理输出，也不得把它误当成空间 owned 数量。
 
 ## 2. Host 模型
 
@@ -135,27 +138,29 @@ GPUMD 的 `GPU_Vector` 管理设备内存：
 | --- | --- | ---: | --- |
 | `global_id` | `unsigned long long` | `local` | 全部 local；输出恢复稳定顺序 |
 | `type` | `int` | `local` | NEP 可寻址域 |
-| `mass` | `double` | `local` | replicated input；积分/thermo 按 MPI owned range 读 |
+| `mass` | `double` | `local` | replicated input；积分/thermo 按 MPI 空间 owned 槽位读 |
 | `charge` | `float` | `local` | replicated input；rank 0 formatter 使用 |
-| `position` | `double` | `3 * local` | replicated input；积分只写 MPI owned range |
-| `velocity` | `double` | `3 * local` | replicated buffer；非 owned 槽位不每步同步（M0），仅 correct_velocity 触发步恢复复制态；积分/控温只写 MPI owned range |
-| `force` | `double` | `3 * local` | NEP 写全量 scratch；仅 MPI owned range authoritative |
-| `potential` | `double` | `local` | NEP 写全量 scratch；thermo/dump 只认 MPI owned range |
-| `virial` | `double` | `9 * local` | NEP 写全量 scratch；thermo/dump 只认 MPI owned range |
+| `position` | `double` | `3 * local` | replicated input；积分只写 MPI 空间 owned 槽位 |
+| `velocity` | `double` | `3 * local` | replicated buffer；非 owned 槽位不每步同步（M0），correct_velocity 触发步与 ownership 迁移步恢复复制态；积分/控温只写 MPI 空间 owned 槽位 |
+| `force` | `double` | `3 * local` | NEP 写全量 scratch；仅 MPI 空间 owned 槽位 authoritative |
+| `potential` | `double` | `local` | NEP 写全量 scratch；thermo/dump 只认 MPI 空间 owned 槽位 |
+| `virial` | `double` | `9 * local` | NEP 写全量 scratch；thermo/dump 只认 MPI 空间 owned 槽位 |
 | `unwrapped` | `double` | 按需 `3 * local` | `dump_xyz position_unwrapped` 时启用 |
 | `previous_position` | `double` | 按需 `3 * local` | 更新 unwrapped position 时使用 |
 
 `species` 和 group labels 当前保留在 host identity 模型中；普通 NEP force 不需要它们驻留
-GPU。创建输出快照时，各 rank 只打包 MPI owned range，`MPI_Gatherv` 在 rank 0 恢复全局 SoA。
+GPU。创建输出快照时，各 rank 只打包自己的 owned 槽位（indexed pack），`MPI_Gatherv` 在
+rank 0 按 global_id/slot scatter plan 恢复全局 SoA。
 
 ## 6. Kernel 所有权边界
 
-当前 runtime kernel 明确接收 MPI owned `begin/end` 和 replicated stride：
+当前 runtime kernel 明确接收 MPI 空间 owned 槽位索引列表（`device_owned_indices`，
+按 global_id 升序）和 replicated stride：
 
-- velocity-Verlet、速度缩放和 unwrapped position 更新只 launch/写入 owned atoms；
-- thermo reduction 只遍历 owned atoms；
-- force 前清零全量 NEP scratch，但后续积分/reduction/gather 只承认 owned range；
-- position PBC wrap 使用 local 可寻址域；
+- velocity-Verlet、速度缩放和 unwrapped position 更新只 launch/写入 owned 槽位；
+- thermo reduction 只遍历 owned 槽位；
+- force 前清零全量 NEP scratch，但后续积分/reduction/gather 只承认 owned 槽位；
+- position PBC wrap 仍是 full-N（wrap 结果同时是 M1 ownership 重算的确定性输入）；
 - XYZ/restart 只收集 owned records，再按 `global_id` 排序且只由 rank 0 写。
 
 因此 ghost 即使将来出现在 local 数组尾部，也不会自动被积分、计入 thermo 或直接输出。
@@ -178,9 +183,11 @@ global_count == local_count
 ghost_count == 0
 ```
 
-MPI owned range 与 `AtomCounts::owned_count` 不混用：后者描述 reader 得到的完整 replicated
-input，前者决定积分、local thermo sum 和输出 gather。NEP scratch 保持全中心，是因为直接按
-owned 设置 `N1/N2` 会缺失分片外 `Fp` 和 reverse partial。详见 `replicated-mpi.md`。
+MPI 空间所有权（`SpatialOwnership`）与 `AtomCounts::owned_count` 不混用：后者描述 reader
+得到的完整 replicated input（M1 中仍是 N，即 SoA stride），前者决定积分、local thermo sum
+和输出 gather 的槽位集合；每 rank 的空间 owned 数量记录在 `SpatialOwnership` 内，空集合
+（空 slab）合法，且 M1 明确支持 `N<P`。NEP scratch 保持全中心，是因为直接按 owned 设置 `N1/N2` 会缺失分片外
+`Fp` 和 reverse partial。详见 `replicated-mpi.md`。
 
 ## 8. 初始化与输出合同
 
@@ -192,9 +199,10 @@ ghost_count == 0
 ```
 
 每 rank device input 都使用 `global_count` 寻址。实际 per-atom 输出只来自该 rank 的 MPI
-owned range，并在 rank 0 按 `global_id` 恢复顺序；thermo 只对 owned range 求 local sum后做
-全局归约。
+空间 owned 槽位，并在 rank 0 按 `global_id` 恢复顺序；thermo 只对 owned 槽位求 local sum
+后做全局归约。
 
 single-rank 实现以及 Open MPI+UCX 环境下的 HostStaged/CudaAware 1/2/4-rank prototype 均已
-在沙箱外 GPU 上通过四组锁定 GPUMD golden。验证状态与命令见
+在沙箱外 GPU 上通过四组锁定 GPUMD golden；M1 空间所有权的 P=1 路径与 M0 逐字节一致，
+P>1 由 differential 与迁移矩阵验证。验证状态与命令见
 [current.md](../status/current.md)。

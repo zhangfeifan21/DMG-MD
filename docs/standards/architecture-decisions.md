@@ -24,8 +24,9 @@ GPLv3，复制进本仓库后的发布/分发策略仍须遵守其许可证。
 ## D-002：全局元数据与本地寻址从 single-rank 起分离
 
 决定：Atom 同时保存 `global_count`、`owned_count`、`ghost_count` 和 stable `global_id`；
-`local_count=owned+ghost` 是所有 SoA 的 stride。replicated prototype 的 reader 模型仍为
-owned=global、ghost=0，另用 `OwnedRange` 表示真正的 rank-local 积分/thermo/output 权限。
+`local_count=owned+ghost` 是所有 SoA 的 stride。replicated runtime 的 reader 模型仍为
+owned=global、ghost=0；真正的 rank-local 积分/thermo/output 权限由独立的
+`SpatialOwnership`（M0 为连续 `OwnedRange`，M1 起为空间 slab 的槽位子集）表示。
 
 原因：不能把当前数值相等编码成“数组长度就是全局 N”。将来引入 ghost 时，现有 VV 和
 thermo kernel 无需改变所有权边界；NEP adapter 则必须被有证据的 distributed orchestration
@@ -42,7 +43,7 @@ thermo kernel 无需改变所有权边界；NEP adapter 则必须被有证据的
 ## D-004：replicated NEP adapter 对 ghost fail closed
 
 决定：runtime 入口拒绝 `ghost_count != 0`。GPUMD Potential 中心域保持 `[0,global_count)`；
-MPI authoritative output 由独立 `OwnedRange` 限定。
+MPI authoritative output 由独立的所有权对象限定（M1 的 `SpatialOwnership`）。
 
 原因：GPUMD large-box 的 `Fp` 和 directed partial 有两层依赖，small-box 又使用 Newton
 atomic scatter。尚未实现 exchange 协议前，简单设置 `N1/N2` 或拼接 ghost 会产生漏力、
@@ -87,9 +88,9 @@ HostStaged；CudaAware 必须同时通过 Open MPI capability query 和覆盖
 
 ## D-009：replicated-full NEP scratch，owned output 唯一
 
-决定：replicated prototype 分片积分、thermo 和输出所有权，但每 rank 暂时执行完整 ordinary
-NEP scratch。不能直接把 `NEP::N1/N2` 设为 owned range。
+决定：replicated runtime 分片积分、thermo 和输出所有权（M1 起为空间 slab 槽位集合），
+但每 rank 暂时执行完整 ordinary NEP scratch。不能直接把 `NEP::N1/N2` 设为 owned 集合。
 
 原因：锁定 NEP force 读取远端中心 `Fp` 和反向 directed partial；没有 phase-level exchange
-时，直接中心分片不完整。启动 coverage collective 证明 owned ranges 恰好覆盖一次，并明确
+时，直接中心分片不完整。启动 coverage collective 证明 owned 槽位恰好覆盖一次，并明确
 记录 NEP kernel 仍为 replicated-full。见 [replicated-mpi.md](./replicated-mpi.md)。

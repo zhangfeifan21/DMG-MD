@@ -4,15 +4,17 @@
 
 更新日期：2026-09-15。
 
-代码基线：`f1480c9` 加上工作区未提交的 M0 修改；未提交修改不计入历史已验证结论。
+代码基线：`490277f`（M0）加上工作区未提交的 M1 修改；未提交修改不计入历史已验证结论，
+提交后须以最终 revision 补记 M1 验证记录。
 
 ## 当前结论
 
-`dmg-md` 已完成 single-rank 路径和一 MPI rank 一 GPU 的 replicated-data MPI prototype。
-当前每个 rank 仍保存完整坐标和类型，并执行完整 ordinary NEP scratch；积分、thermo、输出记录
-和 rank 0 I/O 按 balanced owned range 唯一归属。
+`dmg-md` 已完成 single-rank 路径和一 MPI rank 一 GPU 的 replicated-data MPI runtime。
+当前每个 rank 仍保存完整坐标和类型，并执行完整 ordinary NEP scratch；积分、thermo、输出
+记录和 rank 0 I/O 按空间 slab 所有权唯一归属（M1，工作区未提交）：P=1 为平凡映射，
+P>1 沿最长边等宽 fractional slab，原子跨 slab 时做 global_id 上的逻辑所有权迁移。
 
-尚未实现空间域分解、ghost/halo、原子迁移或 phase-level NEP 中心并行。因此当前多 GPU
+尚未实现 ghost/halo、本地数组压缩或 phase-level NEP 中心并行（M2 起）。因此当前多 GPU
 结果是正确性原型，不是可发布的 scaling 结果。
 
 ## 已实现能力
@@ -26,9 +28,10 @@
 - 支持 NEP4、NEP5、对应 ZBL/typewise/flexible 分支，以及 NVE、`nvt_ber`、
   `correct_velocity`、thermo/XYZ/restart 和多段 run；
 - `model.xyz` 和 `run.in` 先完成兼容解析与 fail-fast 校验，再初始化 GPU；
-- position 每步 Allgatherv，owned thermo Allreduce，velocity 不再每步复制（M0：
-  仅 correct_velocity 触发步在修正前恢复复制态），输出由 rank 0 按 global ID
-  恢复稳定顺序；
+- position 每步 indexed Allgatherv（M1：按 owned index list 打包、按 global_id/slot
+  scatter plan 还原），ownership map hash 每步 Allreduce 校验（P>1），迁移步用旧
+  ownership 恢复最新 velocity/unwrapped，owned thermo Allreduce，velocity 不再每步复制
+  （M0），输出由 rank 0 按 global ID 恢复稳定顺序；
 - runtime 输出 `DMGMD_COMM`、center coverage、MPI/GPU 环境记录和
   `DMGMD_TIMING phase=run/total`；
 - long-NVE runner 支持 stage 哈希 checkpoint、失败分类、干净重试、保留失败尝试和断点续跑。
@@ -70,8 +73,9 @@ baseline 的环境、命令、case 和校准证据见 [baseline-results.md](./ba
 
 - R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双物理节点
   （互不可见 TMPDIR）验收也尚未执行，见 [multi-node-io.md](../plans/multi-node-io.md)；
-- domain decomposition 的 M1/M2/M3（空间 slab 所有权、ghost/halo、migration 和真正的
-  NEP 中心分片）仍是计划，见
+- M1（空间 slab 所有权 + global_id 逻辑迁移）已在工作区实施并通过迁移矩阵、
+  differential 与 long-NVE smoke（无提交 revision，验证记录待提交后补记）；
+  M2/M3（ghost/halo、本地布局、NEP 中心分片、点对点通信）仍是计划，见
   [域分解计划](../plans/domain-decomposition.md)；M0 已实施（见下）；
 - malformed potential corpus、若干 cutoff/ZBL 边界和 future command 语义仍待验证，见
   [风险与待办](../plans/risk-and-backlog.md)；
