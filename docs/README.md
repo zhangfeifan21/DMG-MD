@@ -34,7 +34,7 @@
 
 这些内容尚未成为生产合同：
 
-- [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1 已实施，M2 起待审批）
+- [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1 已实施，M2a 已批准待实现）
 - [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（IN PROGRESS）
 - [风险与待办登记](./plans/risk-and-backlog.md)
 

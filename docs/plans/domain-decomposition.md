@@ -1,13 +1,13 @@
 # 域分解与 halo 通信协议（设计稿）
 
-类别：实施中计划。状态：IN PROGRESS——M0 与 M1 已于 2026-09-15 实施并验收，M2 及之后
-待审批、未实施。
+类别：实施中计划。状态：IN PROGRESS——M0 与 M1 已于 2026-09-15 实施并验收；维护者已于
+2026-09-17 批准 M2a 进入实现，当前代码尚未实现 M2a。M2b 及之后仍待后续审批。
 
 本文档规定 DMG-MD 从 replicated-data 原型演进为 owned/ghost 域分解
 runtime 的数据面协议。M0 与 M1 已按维护者指令实施，其协议与字节合同并入
 [replicated-mpi.md](../standards/replicated-mpi.md)，实测记录见
-[status/current.md](../status/current.md)；后续里程碑实现前仍须按 AGENTS.md 由维护者确认
-方向。
+[status/current.md](../status/current.md)。本文从 §3 起给出 M2a 的已批准交付合同；在代码和
+验收门全部落地前，[replicated-mpi.md](../standards/replicated-mpi.md) 仍是现行运行时合同。
 
 前置阅读：[replicated-mpi.md](../standards/replicated-mpi.md)（现行协议）、
 [risk-and-backlog.md](./risk-and-backlog.md)（风险与待办登记）、
@@ -146,12 +146,13 @@ M0 的 `balanced_owned_range` 按全局下标均衡切块，已在 M1 中随
 - partition 轴选择：box 最长边，tie 规则与 `nep_multigpu.cu:1438-1446` 的级联一致
   （y 胜 x/y、y/z 平手，x 胜 x/z 平手，立方盒选 y）；GPUMD `potential` 第三参数
   （x/y/z）仍被 DMG-MD parser 拒绝（`src/run_parser.cpp`），M1 不恢复该语法；
-- slab 边界对齐 `rc/2` cell 网格（与 cell list 一致：`src/gpumd_compat/neighbor.cu`
-  `rc_cell_list = 0.5 * rc`）与"每 rank 沿轴 bins ≥ 10（≥ 5rc）"守卫是 **M2a 的
-  前置条件**：M1 没有 halo，不需要该守卫保证依赖闭包，且 committed 24 Å baseline
-  在 rc=6–7 Å、4-rank 下无法满足 5rc/rank；small-box ordinary NEP 在 M1 仍走
-  replicated-full 保持兼容。M2a 引入 halo 前必须补齐 cell 对齐、large-box 判据与
-  `nep_multigpu.cu:1451-1455` 语义的 5rc/rank 守卫。
+- M2a **保持 M1 的等宽 fractional slab 边界**，不为了仿照 `NEP_MULTIGPU` 而改成
+  `rc/2` cell 对齐。参考实现的 10-bin/5rc 约束来自其窗口分发编排，并不是当前
+  `gpumd_compat::Neighbor` 的接口合同；后者的 Verlet 构建半径是 `rc + skin`，cell-list
+  尺度也由该半径决定。M2a 应按 §4 实际推导出的坐标 halo 深度 `d_coord` 做物理宽度
+  守卫：`slab_width >= d_coord` 才能只与直接左右邻居交换。除此之外还必须通过现行
+  `NEP::compute` 的 large-box 判据。任一判据不满足时不得改变已有输入的可运行性，而是
+  明确记录原因并回退到 M1 replicated-full 路径。
 
 ### 3.2 数据面计数与身份
 
@@ -168,15 +169,22 @@ M0 的 `balanced_owned_range` 按全局下标均衡切块，已在 M1 中随
 - NEP 中间量 `Fp / sum_fxyz / f12x,y,z / NN / NL`（`src/gpumd_compat/nep.cu:398-410`
   一带分配）全部改为 `local_count` stride。
 
-`run_replicated` 的 "no ghosts" 守卫（`runtime.cu:1061-1065`）在 M2 退役，由本节不变量
-替代；单 rank（P=1）必须退化为 `owned = N、ghost = 0`，输出与现行单 rank 路径逐字节一致
-（§10 验收门）。
+现有 M1 `run_replicated` 不删除，作为 P=1 和不满足 M2a eligibility 的兼容路径保留；新增
+local-domain 路径才以本节不变量替代其中的 "no ghosts" 守卫。P=1 必须始终走现有路径，
+退化为 `owned = N、ghost = 0`，输出与现行单 rank 路径逐字节一致（§10 验收门）。
 
 ### 3.3 box 范围（第一切口）
 
-按 Q6 已确认决策：第一切口只支持**正交全周期大盒**。triclinic / 非周期方向输入 parse 后
-明确报 `unsupported`，不得静默投影（`risk-and-backlog.md` §4 列出的全部倾斜盒用例移入后续
-里程碑）。非周期方向在 3D 分解（§12）前不参与切分。
+M2a local-domain 路径只支持**正交全周期大盒**。启动时由 runtime dispatcher 在读取 box 和
+potential 元数据后判断：P=1 固定走现有路径；P>1 且 box/半径/slab 宽度满足 M2a 判据时走
+local-domain；其余当前 M1 已支持的输入继续走 replicated-full，并输出机器可读 fallback
+原因。不得把原本能运行的小盒改成报错。triclinic / 非周期输入在 P>1 下继续保持现行明确
+`unsupported` 行为，不得静默投影；拓展其支持范围不属于 M2a。
+
+每次启动由 rank 0 输出一条稳定可解析记录，例如
+`DMGMD_DOMAIN mode=m2a|m1-fallback axis=... d_dep=... d_coord=... reason=...`；M2a 还应输出
+各 rank 的 owned/dependency-ghost/coordinate-only-ghost/local_count，供验收断言实际命中
+local-domain，而不是只看到数值 PASS。
 
 ### 3.4 本地排序稳定性
 
@@ -202,16 +210,17 @@ NEP large-box 力计算对位置的依赖是两跳的：
    `nep.cu:814`/launch `nep.cu:1133`），它们需要 **n2 的邻居** 的位置，即距 owned
    2rc 内的第三原子。
 
-结论：owned 原子的力需要 **owned ± 2rc 内全部原子的坐标**，仅交换 rc 深度坐标 halo 会
+结论：owned 原子的力需要覆盖"力邻居 cutoff + 该邻居自身 descriptor/partial cutoff"的
+两跳坐标闭包；统一 cutoff 的无 skin 简化才是 **owned ± 2rc**。仅交换一跳坐标 halo 会
 产生"看似连续、系统性错误"的边界力（`risk-and-backlog.md` R1 失败模式）。
 
 ### 4.2 三层窗口定义
 
 `NEP_MULTIGPU` 的窗口布局（`gpumd-reference/src/force/nep_multigpu.cuh:42-55`、分区计算
-`nep_multigpu.cu:1476-1544`，`docs/standards/kernel-inventory.md` §7 的映射表）给出三层域的数值语义，
-本项目按 MPI 概念重新表述（cell 宽 `rc/2`，2 cells = 1 rc）：
+`nep_multigpu.cu:1476-1544`，`docs/standards/kernel-inventory.md` §7 的映射表）给出三层域的
+数值语义。本项目只复用其依赖关系证据，不复用 cell 对齐或分发编排：
 
-| 域 | 窗口（不含 skin） | NEP 工作内容 | MPI 概念 |
+| 域 | 窗口（不含 skin，统一 cutoff 简写） | NEP 工作内容 | MPI 概念 |
 | --- | --- | --- | --- |
 | 力域 `[N1,N2)` | owned | radial force（`nep_multigpu.cu:1658`）、many-body（`:1707`）、ZBL（`:1731`） | owned atoms |
 | descriptor 域 `[N4,N5)` | owned ± rc | 邻居表（`:1603`）、descriptor/Fp（`:1631`）、angular partial（`:1683`） | dependency centers |
@@ -224,31 +233,38 @@ NEP large-box 力计算对位置的依赖是两跳的：
 （`src/gpumd_compat/neighbor.cu:407-414`），构建半径 `rc + skin`
 （`neighbor.cu:454`）。因此：
 
-- **坐标 ghost 深度 = 2rc_max + skin**：descriptor 域中心（owned ± (rc_max + skin)）
-  的构建半径内候选原子最远落在 owned ± (2rc_max + skin)，保证整个重建间隔内
-  rc 邻域可寻址；
-- **descriptor 域 = owned ± (rc_max + skin)**：ghost 成员在每次重建时重估；
+- 定义 `R_force(i,j)` 为现行 large-box kernel 中 owned 中心 i 的某项力实际会消费邻居 j
+  的最大距离，`R_dep(j,k)` 为 descriptor/partial 中心 j 实际会消费候选 k 的最大距离；
+  两者必须忠实包含 typewise 过滤和 ZBL 当前所复用的邻居表语义；
+- **dependency/descriptor 域深度**
+  `d_dep = max(i,j) R_force(i,j) + skin`；
+- **坐标 ghost 深度**
+  `d_coord = max(i,j,k)[R_force(i,j) + R_dep(j,k)] + 2*skin`。两次 skin 分别属于
+  i-j 和 j-k 两张缓存邻居边；若成员只在重建时重估，写成 `+ skin` 会遗漏在重建间隔内
+  新进入第二跳 cutoff 的候选；
 - ghost **位置每步刷新**（每原子 24 B），type/mass/group 随成员变化交换；
 - 重建判据是全局 OR：任一 rank 的 owned 原子超阈值 ⇒ 全体重建（R11）；迁移
   完成后强制重建并作废全部 NEP 中间量（`risk-and-backlog.md` §5 不变量 7）。
 
-### 4.4 有效半径的确定（R12，M2 前置任务）
+### 4.4 有效半径的确定（R12，M2a 实现要求）
 
-`rc_max` 不能直接取 `paramb.rc`：radial pair cutoff 是 typewise 平均
-（`nep.cu:748` `rc = (rc_radial[t1] + rc_radial[t2]) * 0.5f`），ZBL outer cutoff 可能大于
-angular cutoff（Q11），typewise 截断的两跳组合上界由 i-j-k 类型三元组决定（Q12）。
-M2 动工前必须在 potential loader 后枚举类型对/三元组，计算几何上界并写入启动日志；
-`Ra > Rr` 等非法组合按 Q10 的 loader 决策处理。
+不能只从一个名义 `rc_max` 猜 halo：radial pair cutoff 是 typewise 平均
+（`nep.cu:748` `rc = (rc_radial[t1] + rc_radial[t2]) * 0.5f`）；当前 large-box filter 先以
+radial cutoff `continue`，再填 angular list，ZBL 也消费该 angular list。M2a 必须在 potential
+加载后枚举实际类型对/三元组，按**现有 kernel 的有效消费路径**计算 §4.3 的 `R_force`、
+`R_dep`、`d_dep`、`d_coord` 并写入启动日志。M2a 不借机改变 `Ra > Rr` 或 ZBL 被现有列表
+截断的数值语义；这些语义的产品裁决仍属于 B2。若无法证明某分支的有效上界，就 fail closed
+到 M1，而不是低估 halo。
 
 ### 4.5 双 oracle 策略（Q4 已确认）
 
 按 Q4 维护者决策："先实现保守两跳 oracle，再以其验证 `Fp` + partial staged protocol"：
 
-- **M2a 保守两跳深位置 halo**（本文档主线）：交换 owned ± (2rc_max + skin) 的坐标，
+- **M2a 保守两跳深位置 halo**（本文档主线）：交换 owned ± `d_coord` 的坐标，
   各 rank 对 descriptor 域做冗余计算（含 halo 中心的 descriptor/partial），力域只算
   owned。**不需要任何中间量通信**，many-body 反向边查找全在本机（局部整数下标有效，
   无跨 rank 边匹配问题，Q5 的边键仅在 M2b 出现）。
-- **M2b 分阶段交换**（后续可选）：坐标 halo 只到 rc_max + skin，另交换 halo 中心的
+- **M2b 分阶段交换**（后续可选）：坐标 halo 只到 `d_dep`，另交换 halo 中心的
   `Fp`/`sum_fxyz`/directed partial。通信字节数未必更少（`Fp` 每原子
   `(n_max_radial+1) + (n_max_angular+1)(L_max+1)` 个 float，可能大于深层坐标带），
   但消除 halo 冗余 descriptor 计算。**只有与 M2a 逐原子 force/virial 等价后才可作为
@@ -274,9 +290,16 @@ descriptor（`nep.cu:1086`）、radial force（`nep.cu:1112`）、angular partia
 4. 单 rank 且 `ND = N1..N2 = 0..N` 时，所有 launch 配置与现行逐位一致（§10 退化验收门）。
 
 `NepForce` 构造器中强制复制态的 `N1 = 0; N2 = N`（`runtime.cu:482-483`）在 M2 改为
-`N1 = 0; N2 = owned_count; ND1 = 0; ND2 = owned + rc_ghost`，其注释引用的完整性证明由
+`N1 = 0; N2 = owned_count; ND1 = 0; ND2 = owned + dependency_ghost_count`，其注释引用的完整性证明由
 本协议替换：descriptor 域覆盖 `[N4,N5)` 后，`Fp(n2)` 与反向 partial 全部本机可得，
 `nep_N1_N2_shard_complete` 的启动记录随之改写。
+
+M2a 不得靠每次 local_count 改变时重新解析 potential。参数加载与按原子数分配 workspace
+必须可分离（或等价地支持 deferred workspace）：potential 只解析一次并导出上述 domain
+半径/large-box eligibility；确定模式后才按 `local_count` 分配/重建 workspace 并显式作废
+neighbor cache；domain compute 接收 force/dependency 中心域。eligible M2a 路径不得为了判定
+模式而在 GPU 上先持久分配一份 global-N atom/NEP scratch。现有 `compute` 和 P=1 launch 路径
+保持不变。所有空中心域（含空 rank）必须在 launch 前安全短路，不能生成零/负 grid。
 
 ### 5.2 邻居构建器的域分离（R8）
 
@@ -286,6 +309,10 @@ descriptor（`nep.cu:1086`）、radial force（`nep.cu:1112`）、angular partia
 local 槽位 owned+ghost）。ELL 容量按 `neighbor.cu:478-483` 的 `(rc+skin)^3/rc^3` 放大
 逻辑对 local 体系重算（Q13 的越界行为保持"安全报错"）。
 
+domain 路径的每个邻居行按候选 `global_id`（相同 ID 时再按 image）确定性排序，但 NL 中仍
+保存 local index。many-body 的反向边二分查找必须用同一 global-ID/image 比较键，不能继续
+假设 local index 顺序；legacy P=1/M1 路径的 local-index 排序不改，以保护逐字节退化门。
+
 ### 5.3 输出清理与 `neighbor.out` 副作用
 
 `clear_owned_properties`（`runtime.cu:290-309`，launch `runtime.cu:492-493`）保持清
@@ -293,18 +320,20 @@ local 槽位 owned+ghost）。ELL 容量按 `neighbor.cu:478-483` 的 `(rc+skin)
 （`runtime.cu:224-253`），不触发 R6 的 ghost 所有权问题。
 
 `compute_large_box` 每 1000 次调用 append `neighbor.out` 的隐式 D2H 副作用
-（`nep.cu:1063-1078`，R25/Q18）：非 root rank 已由 `RankIoIsolation` 重定向到
-`/dev/null`（`runtime.cu:80-137`）。分片后每 rank 只记录自身域的计数，M2 实现时从
-"rank 0 聚合"与"明确不支持该输出"二选一，随实现提交一并裁决。
+（`nep.cu:1063-1078`，R25/Q18）：M2a 保留单文件/单记录语义。各 rank 只计算本地
+dependency 中心的最大邻居数，经 `MPI_MAX` 聚合后仅 rank 0 使用既有格式写一条记录；
+非 root 不得 append。fallback/P=1 继续走现有行为。
 
 ## 6. 每步协议（M2 目标时序）
 
 替换 `docs/standards/replicated-mpi.md` 的复制态协议。slab 分解下每方向的通信对象 ≤ 2 个相邻
 rank（PBC 下首尾互为邻居；P=1 时全部为空操作）：
 
-1. **（correct_velocity 触发步）** velocity 全量 Allgatherv → root CPU 修正 →
-   `broadcast_device`（维持 M0 例外语义，跨段频率通常 ≥ 100 步，成本可接受；
-   owned 归约化改造按 R24 另行立项）；
+1. **（correct_velocity 触发步）** 按 `(global_id, owned position, owned velocity)` gather
+   到 root，root 按 global ID 恢复全局顺序并复用现有 CPU 修正（静态 mass/group 元数据可
+   保留一份 host 全局副本），再按 current owner scatter 回各 rank 的 owned local 槽位。
+   不得把全局 `3N` 数据写入 `local_count` device array，也不得复用要求全局 stride 的 M1
+   indexed Allgatherv；
 2. 自适应时间步：owned max|v| host Allreduce（`runtime.cu:847-871`，不变）；
 3. VV first half，仅 owned（+ unwrapped 跟踪 `runtime.cu:969-981`，不变）；
 4. owned 位置 wrap 进全局 box（`wrap_positions` kernel `runtime.cu:255-288` 改为仅对
@@ -321,7 +350,13 @@ rank（PBC 下首尾互为邻居；P=1 时全部为空操作）：
    PE/virial scratch 不参与）；
 10. Berendsen 缩放，仅 owned（不变）；
 11. **无每步 velocity 集合通信**（M0 已删）；
-12. 输出步：Gatherv owned 切片到 rank 0，rank 0 按 global ID 排序输出（不变）。
+12. 输出步：使用新的 local-owned-prefix gather，同时携带 global ID；rank 0 按 global ID
+    恢复 N 条记录后复用现有 formatter。M1 的 indexed gather/scatter 依赖 replicated global
+    slot/stride，不能直接用于 M2a。
+
+进入第一个 `run` 前的初始力同样必须先完成 owned local 初始化、halo topology/position 交换和
+NEP workspace 建立；多段 run 延续同一 domain state，不得在段间重新膨胀为 replicated device
+arrays。
 
 happens-before 链（kernel-inventory §8）：迁移完成 → halo 到达 → [重建 OR 判定] →
 descriptor 完成 → radial/partial/many-body → VV second half → thermo Allreduce →
@@ -339,7 +374,12 @@ stream/graph 前重新审计 event 协议）。
   Bcast 四类）扩展点对点 Send/Recv 自检，通过才允许启用，否则回退 HostStaged——
   沿用两道门机制；
 - `DMGMD_COMM` 每步记录（`mpi_runtime.cu:927-941`）增加 p2p send/recv 字节字段，
-  differential 测试可断言新记账。
+  并区分 halo payload、migration payload 与 topology/count control；字段定义为全 rank
+  聚合值或明确标记 local 值，不得沿用含糊口径，测试逐字段核算；
+- P=2 的 left/right peer 是同一个 rank，必须用独立方向 tag/buffer 防止错配；P=1 为
+  no-op；所有零 count（含空 rank）必须合法；
+- 本节的 p2p device-buffer 自检属于 **M2a 启用门**，同步扩展
+  `tests/mpi/check_environment.py`，不延后到 M3。
 
 ### 6.2 多节点 rank 布局
 
@@ -352,23 +392,24 @@ slab 邻居应映射到同节点：rank 顺序按 slab 空间顺序排列，`MPI
 
 | 阶段 | 规则 |
 | --- | --- |
-| 创建/成员重估 | 每次邻居表重建时，由 cell 位置落入坐标 ghost 带（owned ± (2rc_max + skin)）判定；来源为相邻 rank 的 owned 原子（PBC 下含首尾 wrap image） |
+| 创建/成员重估 | 每次邻居表重建时，由位置落入坐标 ghost 带（owned ± `d_coord`）判定；来源为相邻 rank 的 owned 原子（PBC 下含首尾 wrap image） |
 | 每步刷新 | 仅位置（24 B/原子）；type/mass/group_labels 随成员变化交换一次 |
 | 禁止事项 | 不得被积分（VV 只 launch owned 区间）、不得计入 thermo（`find_owned_thermo_sums` 只扫 owned）、不得直接输出（Gatherv 只取 owned）、force/PE/virial 输出无权威（AGENTS.md 不可破坏约束） |
 | 身份 | ghost 槽位携带 `(global_id, image_shift)`；M2b 的通信边键为 `(center_gid, neighbor_gid, image)`（Q5） |
 | 作废 | 迁移或重建导致成员变化时，ghost 槽位的全部 NEP 中间量（邻居行、Fp、partial）作废重算 |
 
-槽位布局：local 数组前 `[0, owned)` 为 owned，`[owned, local_count)` 为 ghost，按来源
-rank 分组排序以保证 pack/unpack 连续（复用 `pack_owned_soa/unpack_global_soa` 的
-SoA 打包思路，`mpi_runtime.cu:163-191`）。
+槽位布局：local 数组前 `[0, owned)` 为 owned；随后是 dependency ghost；最后是仅坐标可
+寻址的 ghost。各段按 `(source face, source rank, global_id, image)` 确定性排序以保证
+pack/unpack 连续（复用 `pack_owned_soa/unpack_global_soa` 的 SoA 打包思路，
+`mpi_runtime.cu:163-191`）。成员关系在重建步交换并缓存；普通步只按缓存计划刷新位置。
 
 每 force 步在 debug 构建断言 `risk-and-backlog.md` §5 的全部不变量（owner 唯一性、ghost 不进
 thermo、local index < local_count、行容量不越界等）。
 
 ## 8. 迁移协议
 
-- **触发**：owned 原子的 cell 跨出本 rank slab 边界（§6 步骤 5 检查；Verlet 重建间隔内
-  位移 ≤ skin/2，边界附近原子的检查粒度与之匹配）；负载再均衡暂不在第一切口；
+- **触发**：VV first half + wrap 后逐个 owned 原子重新计算目标 owner；负载再均衡暂不在
+  第一切口；不得假设一步最多跨一个 slab；
 - **载荷**：`global_id`、type、mass、group_labels、wrap 后 position、velocity、
   unwrapped（如启用）——即 `HostAtoms`/`DeviceAtoms` 的全部持久 per-atom 字段
   （`model.hpp:32-52`、`runtime.cu:154-212`）；
@@ -376,6 +417,10 @@ thermo、local index < local_count、行容量不越界等）。
   （`output_order`，`runtime.cu:817` 一带），跨 rank 数 restart 的既有能力
   （`dump_restart` 写全局顺序，`runtime.cu:810-843`）保持；
 - **PBC**：跨周期端迁移到 wrap 邻居 slab；unwrapped 坐标的 image 簿记随载荷传递；
+- **路由**：迁移不是 halo，只与左右邻居交换不够。先做 all-rank count handshake，再把每个
+  原子直接发送到其最终 owner（`Alltoallv` 或等价的 count + p2p）；一步跨多 slab、空 rank
+  和零 count 都必须完成且不死锁。迁移 payload 在 first half 后携带 half-step velocity；旧
+  force/PE/virial 不迁移，因为 halo 完成后会重新计算；
 - **作废**：迁移完成后强制邻居表重建，旧邻居表/边映射/descriptor/partial 全部作废
   （R11、`risk-and-backlog.md` §5.7）；`GPU_Vector` 容量变化引发的 view 悬空按 R27 用
   epoch/versioned view 防；
@@ -385,7 +430,8 @@ thermo、local index < local_count、行容量不越界等）。
 ## 9. 通信量核算
 
 记 `P` = rank 数，`N` = 全局原子数，`ρ` = 数密度，slab 轴长 `L`，横截面积 `A = V/L`，
-`d = 2rc_max + skin`（坐标 ghost 深度），`s = rc_max + skin`（descriptor 域深度）。
+`d = d_coord`（坐标 ghost 深度），`s = d_dep`（dependency/descriptor 域深度）。统一 cutoff
+时保守简式为 `d = 2rc_max + 2*skin`、`s = rc_max + skin`；实现使用 §4.3 的 typewise 上界。
 
 | 方案 | 每 rank 每步接收 | 通信模式 | 每 rank NEP 计算量 |
 | --- | --- | --- | --- |
@@ -395,17 +441,18 @@ thermo、local index < local_count、行容量不越界等）。
 
 thermo Allreduce（`64P`）、自适应时间步（`8P`）与输出步 Gatherv（`152N`）各方案不变。
 
-数值例（正交全周期，`200×200×200 Å`，`ρ = 0.05 Å⁻³` ⇒ `N = 400,000`；`rc_max = 5 Å`，
-`skin = 1 Å` ⇒ `d = 11 Å`，`s = 6 Å`；P = 4，`L/P = 50 Å ≥ 5rc` 守卫满足）：
+数值例（正交全周期，`200×200×200 Å`，`ρ = 0.05 Å⁻³` ⇒ `N = 400,000`；统一
+`rc_max = 5 Å`，`skin = 1 Å` ⇒ 保守 `d = 12 Å`，`s = 6 Å`；P = 4，
+`L/P = 50 Å >= d`，且全局 box 满足 large-box 判据）：
 
 - 现行/M0：每 rank 每步接收 position `24 × 400,000 = 9.6 MB`（M0 后不再有同量
   velocity 全量）；
-- M2a：每 rank 每步接收 `24 × 0.05 × (200×200) × 11 ≈ 0.53 MB`，且只与相邻 slab 通信；
+- M2a：每 rank 每步接收 `24 × 0.05 × (200×200) × 12 ≈ 0.58 MB`，且只与相邻 slab 通信；
 - M2a descriptor 相位冗余开销：`ρAs·2 / (N/P) = 2s/(L/P) = 12/50 ≈ 24%`（力相位无冗余）。
 
 结论：M2a 的通信收益来自三点——字节数下降约一个量级（上例 ~18×）、模式从全员集合
 通信变为邻居点对点（多节点下可完全留在节点内，§6.2）、NEP 计算量从 N 降为
-`N/P + 24%` 冗余。单轴 slab 的已知局限：`L/P` 受 `≥ 5rc` 守卫限制，高 P 强扩展时
+`N/P + 24%` 冗余。单轴 slab 的已知局限：`L/P` 受 `>= d_coord` 守卫限制，高 P 强扩展时
 冗余比 `2s/(L/P)` 上升，3D 分解（§12）是后续正解，与 `NEP_MULTIGPU` 的单轴局限
 （kernel-inventory §7 "不能映射" 清单）一致。
 
@@ -430,14 +477,25 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 - **M2a**（本地布局 + halo + 中心分片）：
   - **单 rank 退化门**：P=1 时 ghost=0、所有中心区间退化为 `0..N`，输出与现行单 rank
     逐字节一致；
-  - **边界 fixture**：2-rank，原子贴 slab 边界（s=0、s=1、恰在边界）、跨一个周期的
-    构型（`risk-and-backlog.md` §4 用例子集，正交全周期内）；
-  - per-atom energy/force/virial 对 GPUMD golden；短轨迹 + `tests/long_nve/`
-    `run_long_nve.py` 的守恒统计（4096/12288/5000 原子、100,000 步、漂移斜率、RDF、
-    MSD）；
+  - **fallback 门**：既有 24 Å/small-box differential 与 migration fixtures 继续通过，且
+    明确断言日志为 M1 fallback；不得把它们误当成 M2a 覆盖；
+  - **CPU/domain-layout 单测**：eligibility、M1 等宽边界、typewise 两跳半径、P=2 同 peer
+    双方向、空 rank/零 count、确定性槽位布局和 malformed exchange plan；
+  - **新增 `tests/mpi/run_mpi_domain.py`**：使用满足 large-box 与 `slab_width >= d_coord`
+    的专用大盒，覆盖 2/4 rank × HostStaged/CudaAware；以同一输入 P=1 为数值 oracle；
+  - **边界 fixture**：`s=0`、`s=1`、恰在 slab 边界、周期首尾；并加入三原子链，令 owned
+    i 的力依赖 ghost j 的 descriptor/partial，而 j 又依赖位于一跳 halo 外的 k，以直接
+    证明两跳闭包；
+  - **迁移 fixture**：普通跨界、一步跨多 slab 的 direct routing、周期端点、暂时空 slab、
+    correct_velocity、输出/restart 跨 rank 数；
+  - per-atom energy/force/virial 与 P=1/committed golden 在既有容差内；owned global ID
+    全局恰好一次，ghost 不进积分/thermo/输出，local index/ELL 容量合法；普通 M2a 步不得
+    出现 position Allgatherv，p2p/control 字节按精确模型断言；
+  - 既有 `tests/long_nve/run_long_nve.py` 的小盒 profile 允许走 fallback，不能单独作为 M2a
+    验收；至少增加一个真正命中 M2a 的大盒 smoke/profile 后，再执行长程守恒 nightly；
   - debug 构建启用 `risk-and-backlog.md` §5 不变量断言。
 - **M2b**：与 M2a oracle 的逐原子 force/virial 等价（Q4 验收）+ 同套长程守恒。
-- **M3**：`check_environment.py` 扩展点对点 device 自检；多节点 I/O 的严格双物理节点验收按
+- **M3**：多节点 I/O 的严格双物理节点验收按
   [multi-node-io.md](./multi-node-io.md) 执行（IN PROGRESS）；跨节点 restart；
   强扩展 scaling 基准（在此之后才允许发布性能结论）。
 
@@ -448,7 +506,7 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 
 | 项 | 处置 | 章节 |
 | --- | --- | --- |
-| R1 两跳依赖 | 坐标 halo = 2rc_max + skin；M2a 不交换中间量即闭环 | §4 |
+| R1 两跳依赖 | 坐标 halo = `max(R_force + R_dep) + 2*skin`；M2a 不交换中间量即闭环 | §4 |
 | R2 计数/stride 混用 | `AtomCounts` 已类型化；local_count 为唯一 stride；kernel 参数化 | §3.2、§5.1 |
 | R3 迁移身份 | global_id 稳定；输出按 global ID 排序；载荷清单固定 | §8 |
 | R4 归约/温控/RNG rank 依赖 | thermo 仍是 owned 求和 + 全局 Allreduce；Berendsen 用归约后全局温度；RNG 改造不在本切口 | §6 |
@@ -457,9 +515,9 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 | R7 邻居表互反/排序 | 深位置 halo 保证行完整；行排序键改 global ID（Q15） | §3.4 |
 | R8 候选域=中心域假设 | 邻居构建器接口分离 center/candidate 域 | §5.2 |
 | R11 重建全局 OR / 迁移作废 | 全 rank OR；迁移后强制重建 | §4.3、§8 |
-| R12 typewise/ZBL 截断半径 | M2 前置任务：loader 后枚举类型对/三元组求上界（Q11/Q12） | §4.4 |
+| R12 typewise/ZBL 截断半径 | loader 后按现有 kernel 消费路径枚举类型对/三元组求上界；不改变数值语义 | §4.4 |
 | R16 MPI 归约非结合 | 容差三层级，M1 量化 | §10 |
-| R25 `neighbor.out` 副作用 | rank0 聚合 vs 明确不支持，随 M2 裁决（Q18） | §5.3 |
+| R25 `neighbor.out` 副作用 | 各 rank local max 经 MPI_MAX 聚合，仅 rank0 保持单记录格式 | §5.3 |
 | R26 CUDA-aware 同步 | p2p 自检两道门；默认 stream + 阻塞语义（Q40） | §6.1 |
 | R27 容量变化 view 失效 | epoch/versioned view | §8 |
 | R28 多节点临时目录 | 整改与双节点验收进行中（[multi-node-io.md](./multi-node-io.md)） | §10 |
@@ -476,14 +534,15 @@ M0  删除每步 velocity Allgatherv（correct_velocity 触发步保留恢复复
     门：differential 矩阵逐字节一致                        ← 独立，可先行
 M1  空间 slab 所有权 + 迁移机制（数据仍复制、仍 indexed Allgather、NEP 仍全量）
     【已实施 2026-09-15；所有权为 global_id + index list/mask，indexed collective、
-     双 epoch 迁移时序；rc/2 cell 对齐、large-box、5rc/rank 守卫明确留给 M2a】
+     双 epoch 迁移时序；M2a 保持等宽 fractional slab，并另做 large-box/d_coord eligibility】
     门：golden 差分 + 迁移 fixture + 跨 rank restart
 M2a 本地 owned/ghost 布局 + p2p 深位置 halo + NEP 中心/descriptor 域分片
-    门：单 rank 逐字节退化 + 边界 fixture + 长程守恒
+    【已批准进入实现，尚未落地】
+    门：单 rank逐字节退化 + fallback兼容 + 专属大盒边界/两跳/迁移矩阵 + 长程守恒
 M2b （可选）Fp/partial 分阶段交换，替代深位置 halo
     门：与 M2a 逐原子等价（Q4）
-M3  多节点硬化：点对点后端自检、rank-slab 节点布局、多节点 I/O、scaling 基准
-    门：check_environment 扩展 + 跨节点 restart + 性能结论解禁
+M3  多节点硬化：rank-slab 节点布局、多节点 I/O、scaling 基准
+    门：跨节点 restart + 性能结论解禁
 后续 3D 分解、triclinic/非周期、small-box、更多 ensemble
 ```
 

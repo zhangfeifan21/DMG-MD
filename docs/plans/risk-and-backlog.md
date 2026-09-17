@@ -23,7 +23,7 @@
 
 失败模式：只交换 `rc` 坐标 halo 时，分区边界 owned atom的邻居 descriptor或反向 partial缺失；力可能看似连续但系统性错误。把 `rc+skin` 当完整答案也不成立。
 
-控制：首原型同时实现/比较两种 oracle：保守两跳 position halo重算，和一跳 position + `Fp` + reverse-partial 分阶段交换。只有逐原子 force/virial等价后才选择生产协议。
+控制：M2a 先实现保守两跳 position halo 作为生产路径和后续 oracle；坐标成员在邻居重建间隔内缓存时，深度按 `max(R_force + R_dep) + 2*skin` 的实际 typewise kernel 消费路径计算。M2b 再实现一跳 position + `Fp` + reverse-partial 分阶段交换，只有与 M2a 逐原子 force/virial 等价后才可替换。
 
 ### R2 — 全局 `N`、local stride 和 owned/ghost 权限混用（P0）
 
@@ -81,7 +81,7 @@
 
 | ID | 等级 | 风险 | 代码证据 | 失败症状 | 验证/缓解 |
 | --- | --- | --- | --- | --- | --- |
-| R1 | P0 | NEP多层halo | `nep.cu:727-728`; `potential.cu:209-252` | 边界力错但内部原子正确 | 两跳/分阶段双实现对比；分区边界三原子构型 |
+| R1 | P0 | NEP多层halo | `nep.cu:727-728`; `potential.cu:209-252` | 边界力错但内部原子正确 | M2a 两跳 oracle；分区边界三原子构型；M2b 后续对比 |
 | R2 | P0 | global/local N和SoA stride混用 | `atom.cuh`; ELL地址 `slot*N+n` | 越界、分量串线、ghost被积分 | typed views；canary；owned/ghost单元测试 |
 | R3 | P0 | 无stable global ID | `read_xyz.cu`, `group.cu` | 输出重排、迁移后group错 | input row ID；跨rank迁移/输出排序测试 |
 | R4 | P0/P1 | thermo/thermostat/RNG rank依赖 | `ensemble.cu`, `ensemble_ber.cu`, `velocity.cu` | NVT各rank温度不同、rank数改变初速 | global reduction；counter RNG；rank-count tests |
@@ -105,8 +105,8 @@
 | R22 | P1 | 单rank错误导致collective死锁 | GPUMD普遍 `exit(1)` | 其他rank永久等待 | error object + allrank status + `MPI_Abort` only after message |
 | R23 | P1 | 默认随机初速不可重现 | `velocity.cu` libc rand/array index | 分区改变初始轨迹 | counter-based global-ID RNG；与GPUMD baseline定义容差 |
 | R24 | P1 | `correct_velocity`需要全局COM/惯量 | `velocity.cu:77-308` | 每rank各自去动量，物理改变 | 多阶段global reductions；PBC下角动量定义做golden |
-| R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | rank0 aggregate或明确不支持；不能所有rankappend |
-| R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + 四类数值自检；同步；HostStaged fallback |
+| R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | M2a 各rank local max经MPI_MAX聚合，仅rank0写单记录；fallback保持现行语义 |
+| R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + collective及p2p数值自检；同步；HostStaged fallback |
 | R27 | P2 | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | epoch/versioned views；迁移后统一capacity growth和重建 |
 | R28 | P0（整改与验证进行中） | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `src/runtime.cu` `RankIoIsolation`（整改前 `runtime.cu:80-129`） | 非零rank无法chdir，异常路径可能collective hang | 目标合同：每 rank 本机 `mkdtemp` scratch（0700）+ 两阶段错误归约共享出口 + 三阶段 finish；严格关闭条件为 [multi-node-io.md](./multi-node-io.md) 的双物理节点验收，现行合同见 [replicated-mpi.md](../standards/replicated-mpi.md) |
 
@@ -168,7 +168,6 @@ halo selection = physical cutoff relative to triclinic rank faces
 | B1 | NEP3 是否纳入产品范围 | pinned reference negative test，并明确支持矩阵 |
 | B2 | `Ra > Rr`、ZBL outer cutoff 大于 angular cutoff 的实际语义 | 合成 potential 对 reference/candidate 的静态与边界测试 |
 | B3 | large/small neighbor capacity overflow 的安全行为 | 高密度 fixture、sanitizer 和明确错误合同 |
-| B4 | 每 1000 次隐式 `neighbor.out` 是否长期保持兼容 | 产品决策；若保留则定义 rank-0 语义，若删除则记录兼容差异 |
 | B5 | malformed NEP 文件中宽松解析与安全拒绝的边界 | 建立 malformed corpus，锁定错误类别和关键 message |
 | B6 | 负 `time_step`、`run 0`、缺失 ensemble 等边界行为 | reference negative corpus 与 parser/runtime 自动测试 |
 | B7 | 多 potential、`potential FILE x|y|z` 的产品语义 | 明确 unsupported 或实现相加/方向语义，并加入 golden |

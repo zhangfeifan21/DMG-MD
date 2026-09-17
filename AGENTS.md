@@ -17,9 +17,9 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前阶段：M1 空间 slab 所有权（数据仍复制）
+## 当前代码基线：M1；下一实施切口：M2a
 
-当前已批准并实施的切口是 M1：一 MPI rank 对应一张 GPU；数据面仍是 replicated-full
+当前已实施的代码基线是 M1：一 MPI rank 对应一张 GPU；数据面仍是 replicated-full
 （每 rank 持有全部 N 个槽位，`ghost_count == 0`，ordinary NEP 仍对全部中心计算），
 但积分、thermo 与输出的权威已从连续下标区间改为**空间 slab 所有权**：
 
@@ -43,8 +43,9 @@
 - `docs/status/`：带日期、revision、环境和命令的进度或实测备忘；
 - `docs/plans/`：尚未实施或待审批的方案、风险和待办。
 
-ghost/halo、本地数组压缩与 NEP 中心分片仍是 `docs/plans/domain-decomposition.md`
-中的待实施计划（M2 起），不得描述为当前 runtime 能力。
+ghost/halo、本地数组压缩与 NEP 中心分片仍不是当前 runtime 能力。维护者已批准
+`docs/plans/domain-decomposition.md` 中的 M2a 进入实现；在其代码和验收门完成前仍必须描述为
+待实施，M2b 及之后仍待后续审批。
 
 ## GPUMD 复现边界（强制）
 

@@ -2,19 +2,19 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-09-15。
+更新日期：2026-09-17。
 
-代码基线：`490277f`（M0）加上工作区未提交的 M1 修改；未提交修改不计入历史已验证结论，
-提交后须以最终 revision 补记 M1 验证记录。
+代码基线：`10903db`（M0 + M1，`local indexed atoms implemented`）。本页的 M1 描述以该
+revision 为准；M2a 已获准进入实现，但此基线尚未包含 M2a 代码。
 
 ## 当前结论
 
 `dmg-md` 已完成 single-rank 路径和一 MPI rank 一 GPU 的 replicated-data MPI runtime。
 当前每个 rank 仍保存完整坐标和类型，并执行完整 ordinary NEP scratch；积分、thermo、输出
-记录和 rank 0 I/O 按空间 slab 所有权唯一归属（M1，工作区未提交）：P=1 为平凡映射，
+记录和 rank 0 I/O 按空间 slab 所有权唯一归属（M1）：P=1 为平凡映射，
 P>1 沿最长边等宽 fractional slab，原子跨 slab 时做 global_id 上的逻辑所有权迁移。
 
-尚未实现 ghost/halo、本地数组压缩或 phase-level NEP 中心并行（M2 起）。因此当前多 GPU
+尚未实现 ghost/halo、本地数组压缩或 phase-level NEP 中心并行（M2a 内容）。因此当前多 GPU
 结果是正确性原型，不是可发布的 scaling 结果。
 
 ## 已实现能力
@@ -73,9 +73,9 @@ baseline 的环境、命令、case 和校准证据见 [baseline-results.md](./ba
 
 - R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双物理节点
   （互不可见 TMPDIR）验收也尚未执行，见 [multi-node-io.md](../plans/multi-node-io.md)；
-- M1（空间 slab 所有权 + global_id 逻辑迁移）已在工作区实施并通过迁移矩阵、
-  differential 与 long-NVE smoke（无提交 revision，验证记录待提交后补记）；
-  M2/M3（ghost/halo、本地布局、NEP 中心分片、点对点通信）仍是计划，见
+- M1（空间 slab 所有权 + global_id 逻辑迁移）已提交为 `10903db`；此前记录的迁移矩阵、
+  differential 与 long-NVE smoke 不等于尚未执行的完整 nightly/release；
+  M2a（ghost/halo、本地布局、NEP 中心分片、点对点通信）已批准但尚未实现，M2b/M3 仍是计划，见
   [域分解计划](../plans/domain-decomposition.md)；M0 已实施（见下）；
 - malformed potential corpus、若干 cutoff/ZBL 边界和 future command 语义仍待验证，见
   [风险与待办](../plans/risk-and-backlog.md)；
