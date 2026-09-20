@@ -1,13 +1,28 @@
 # DMG-MD
 
 DMG-MD 是面向多节点、多 GPU 经典分子动力学的 runtime。当前仓库包含与锁定 GPUMD
-reference 兼容的单 rank 路径，以及一 MPI rank 一张 GPU 的 replicated-data prototype。
+reference 兼容的单 rank 路径，以及一 MPI rank 一张 GPU 的 replicated-data MPI runtime
+（M1）和 M2a local-domain 路径。
 
 当前版本直接读取 GPUMD 格式的 `model.xyz`、NEP/NEP-ZBL potential 和 `run.in`。GPUMD
 的最小数值核心已在 `src/gpumd_compat/` 中复现（tokenizer、Box、GPU_Vector、邻居构建、
 NEP loader 及 CUDA kernels，复制自锁定 commit `9d23496e`），构建与运行均不依赖
-`../gpumd-reference`。MPI 原型在每个 rank 保留完整坐标/类型，只分片积分、thermo 和
-authoritative per-atom output；空间域分解、ghost、halo、原子迁移尚未实现。
+`../gpumd-reference`。M1 replicated-full 路径在每个 rank 保留完整坐标/类型，只分片积分、
+thermo 和 authoritative per-atom output；满足 M2a eligibility 的大盒输入则使用 rank-local
+owned/ghost 布局、保守两跳位置 halo、点对点 halo/迁移通信和 NEP 中心/依赖域分片。不满足
+eligibility 的输入自动回退 M1，small-box 输入继续可运行。M2b 的 Fp/partial 分阶段交换
+和 M3 多节点硬化尚未实施。
+
+## 当前进度
+
+M2a 已于 2026-09-18 完成专属验收矩阵，并手动通过 nightly 正确性验证：
+
+- `tests/mpi/run_mpi_domain.py`：9 cases × 2/4 rank × HostStaged/CudaAware，共 36 组全通过；
+- `scripts/run_long_nve_nightly.sh`：7 cases、seed 0、1/2/4 rank、双通信后端，共 42 个配置全通过；
+  其中 M2a 的 2/4-rank 配置 28/28 命中 `mode=m2a` 并通过；
+- 100000-step release 矩阵尚未执行，因此当前不发布多卡性能或 scaling 结论。
+
+详细环境、命令和结果证据见 [当前进度与验证结果](docs/status/current.md)。
 
 ## 当前支持范围
 
@@ -114,6 +129,14 @@ python3 tests/mpi/run_mpi_differential.py \
   --candidate ./build/dmg-md --devices 0,1,2,3
 ```
 
+M2a local-domain 专属矩阵使用满足 large-box 与 slab-width 条件的 fixture，覆盖两跳
+coordinate halo、迁移、周期边界、空 rank、restart、NEP5、typewise cutoff 和 ZBL 分支：
+
+```bash
+python3 tests/mpi/run_mpi_domain.py \
+  --candidate ./build/dmg-md --devices 0,1,2,3
+```
+
 100/10000/100000-step 长程正确性 suite 独立运行，不把长轨迹混入短程 committed golden，也
 不采集性能数据。除 NVE 外，它还比较确定性 NVT 的温度统计、时间平均 RDF 和 MSD；
 nightly/release 默认覆盖 HostStaged 与 CudaAware，并包含 NEP5、typewise cutoff、flexible ZBL
@@ -125,8 +148,14 @@ python3 tests/long_nve/run_long_nve.py \
   --report /tmp/dmgmd-long-nve-smoke.json
 ```
 
-完整方法、4096/12288/5000 原子 fixture、五初态 release 矩阵、NVT统计、双向构型回放和跨
-rank restart 见 [长程正确性测试说明](tests/long_nve/README.md)。
+nightly 使用 4 张 GPU，覆盖 10000-step NVE/NVT、构型回放和跨 rank restart：
+
+```bash
+scripts/run_long_nve_nightly.sh
+```
+
+完整方法、smoke/nightly/release profile 几何、五初态 release 矩阵、NVT 统计、双向构型回放和
+跨 rank restart 见 [长程正确性测试说明](tests/long_nve/README.md)。
 
 实现协议、中心分片完整性结论和逐步通信量公式见
 [replicated-mpi.md](docs/standards/replicated-mpi.md)。
