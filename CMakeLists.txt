@@ -146,6 +146,7 @@ target_include_directories(dmgmd_input PUBLIC
 target_link_libraries(dmgmd_input PUBLIC gpumd_compat)
 
 add_library(dmgmd_runtime STATIC
+  src/domain_runtime.cu
   src/mpi_runtime.cu
   src/runtime.cu
 )

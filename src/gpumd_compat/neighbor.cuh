@@ -151,10 +151,55 @@ static __global__ void gpu_sort_neighbor_list(const int N, const int* NN, int* N
   }
 }
 
+// M2a domain row sort: same rank-by-counting scheme, but the ordering key is
+// the candidate's global ID (docs/plans/domain-decomposition.md section 5.2),
+// so the row order is independent of the local slot numbering and the many-body
+// reverse-edge binary search in gpu_find_force_many_body_domain can use the
+// same key. Slot indices stored in NL stay local.
+static __global__ void gpu_sort_neighbor_list_domain(
+  const int N,
+  const int* NN,
+  int* NL,
+  const unsigned long long* g_global_id)
+{
+  int bid = blockIdx.x;
+  int tid = threadIdx.x;
+  int neighbor_number = NN[bid];
+  int atom_index = 0;
+  extern __shared__ int atom_index_copy[];
+
+  if (tid < neighbor_number) {
+    atom_index = NL[static_cast<size_t>(N) * tid + bid];
+    atom_index_copy[tid] = atom_index;
+  }
+  int count = 0;
+  __syncthreads();
+
+  if (tid < neighbor_number) {
+    const unsigned long long gid = g_global_id[atom_index];
+    for (int j = 0; j < neighbor_number; ++j) {
+      const int other = atom_index_copy[j];
+      if (gid > g_global_id[other] || (gid == g_global_id[other] && atom_index > other)) {
+        count++;
+      }
+    }
+  }
+
+  if (tid < neighbor_number) {
+    NL[static_cast<size_t>(N) * count + bid] = atom_index;
+  }
+}
+
 
 // Verlet-list manager with a fixed skin of 1 Angstrom: rebuilds the global
 // full neighbor list only when any atom moved more than skin/2 relative to
 // the reference positions x0/y0/z0 (reference neighbor.cuh:194).
+//
+// DMG-MD domain additions (M2a): find_neighbor_domain separates the center
+// range (dependency centers whose rows are written) from the candidate domain
+// (all local slots, owned + ghosts) and sorts rows by global ID so the
+// many-body reverse-edge search stays well defined under a rank-local layout.
+// The legacy find_neighbor/find_neighbor_global entry points are unchanged.
 
 class Neighbor
 {
@@ -167,13 +212,53 @@ public:
     const GPU_Vector<int>& type, 
     const GPU_Vector<double>& position_per_atom);
 
+  // M2a domain interface ------------------------------------------------
+  // True when the next domain build must run: first use, a logical-stride
+  // change, or any local slot (owned or refreshed ghost) moved more than
+  // skin/2 from the reference positions captured at the last build.
+  // num_atoms is the logical stride and may be zero even if device capacity
+  // is padded to one element.
+  bool needs_rebuild_domain(
+    Box& box,
+    const GPU_Vector<double>& position_per_atom,
+    const int num_atoms);
+
+  // Builds the full Verlet rows for centers [center_begin, center_end) with
+  // candidates taken from all num_candidates local slots, then sorts every
+  // written row by the candidate's global ID. force_rebuild bypasses the
+  // displacement check; the caller drives the global rebuild OR through its
+  // own collective. Rows outside the center range are never read.
+  void find_neighbor_domain(
+    const double rc,
+    Box& box,
+    const GPU_Vector<int>& type,
+    const GPU_Vector<double>& position_per_atom,
+    const GPU_Vector<unsigned long long>& global_id,
+    const int center_begin,
+    const int center_end,
+    const int num_candidates,
+    const bool force_rebuild);
+
+  // Drops the rebuild reference positions so the next domain build is forced
+  // even when the local stride is unchanged. Must be called whenever the
+  // meaning of a local slot changes (migration, ghost membership rebuild,
+  // NEP workspace reallocation).
+  void invalidate_rebuild_reference();
+
 private:
   double skin = 1.0;              // skin distance
+  size_t row_capacity_ = 0;       // M2a: ELL entries per row from initialize()
   GPU_Vector<int> cell_count;     // for cell list
   GPU_Vector<int> cell_count_sum; // for cell list
   GPU_Vector<int> cell_contents;  // for cell list
   GPU_Vector<double> x0, y0, z0;  // for checking atom distance
-  int check_atom_distance(Box& box, const double* x, const double* y, const double* z);
+  GPU_Vector<int> domain_overflow_; // M2a: Verlet row-capacity guard flag
+  int check_atom_distance(
+    Box& box,
+    const double* x,
+    const double* y,
+    const double* z,
+    const int num_atoms);
 };
 
 }  // namespace gpumd_compat

@@ -22,13 +22,14 @@
 
 ### 2.1 CPU/CTest
 
-`ctest --test-dir build --output-on-failure` 当前注册四项：
+`ctest --test-dir build --output-on-failure` 当前注册五项：
 
 | test | 当前覆盖 |
 | --- | --- |
 | `dmgmd.run_parser` | `run.in` typed IR、支持和拒绝路径、参数校验 |
 | `dmgmd.model_parser` | model schema、类型、质量、盒和输入错误 |
 | `dmgmd.spatial_ownership` | M1 slab 纯逻辑：s=0/s=1/内部边界及两侧、周期首尾迁移、一步跨多 slab、空 owned list 与 N<P、cube/最长轴 tie（含负向 lattice edge）、owner 唯一覆盖、index 排序、mask/list 一致、malformed global_id，以及非 canonical displacement/local send count/非 permutation scatter plan 拒绝（取代 M0 的 balanced owned range 测试） |
+| `dmgmd.domain_layout` | M2a 纯逻辑：typewise 半径、eligibility/fallback reason、ghost 分类边界（恰在 d_dep/d_coord）、P=2 同 peer 去重、空 rank/N<P、确定性槽位序、malformed exchange/migration plan 拒绝、一步跨多 slab 路由、membership 记录布局 |
 | `dmgmd.long_nve_analysis` | fixture/potential 生成、哈希、统计量、checkpoint、重试和失败分类 |
 
 CTest 不会自动启动 baseline GPU、MPI differential 或长程 GPU 矩阵。
@@ -78,12 +79,25 @@ P=2 上必须被所有 rank 以完全相同、可诊断的错误拒绝且不产�
 在 P=1 仍被接受（M0 兼容路径不选择分区轴）。机器可读参数以脚本内 fixture 常量为
 第一事实源。
 
+### 2.3b M2a local-domain 矩阵
+
+入口为 `tests/mpi/run_mpi_domain.py`。默认矩阵为 9 cases × 2/4 rank ×
+HostStaged/CudaAware（36 组），每个 case 先运行同输入 P=1 M1 oracle，并强制断言 P>1
+为 `DMGMD_DOMAIN mode=m2a`。覆盖：两跳 coordinate halo、真正 `local_count=0` 连续
+1000 步、force call 0/1000 的 `neighbor.out` 逐字节一致与周期 MPI_MAX 精确记账、
+迁移/restart、NEP5、mixed typewise cutoff、flexible ZBL、typewise ZBL。每步 collective、
+三类 p2p 字节、布局计数及逐原子 energy/force/virial/轨迹均按 P=1 oracle 和现行协议断言。
+非零 `center_begin` 的 ELL 行寻址另由 `dmgmd.domain_neighbor_cuda` 覆盖；无 GPU 的普通
+CTest 环境返回 skip，GPU 验收环境必须实际运行通过。
+
 ### 2.4 长程 NVE/NVT suite
 
 入口为 `tests/long_nve/run_long_nve.py`，机器可读合同位于
 `tests/long_nve/manifest.json`。当前包含：
 
-- 三个物理 fixture：4096-atom C、12288-atom water、5000-atom BaTiO3/ZBL；
+- 三个物理 fixture 使用 profile 专属几何：smoke 为 4096/12288/5000 atoms，nightly 为
+  24576/24576/20000 atoms，release 为 49152/49152/40000 atoms；nightly 的 2/4 rank 与
+  release 的 2/4/8 rank 均必须命中 M2a，最大-rank slab 宽度大于 `2*d_coord`；
 - 四个只跑静态/短轨迹的兼容分支：NEP5、typewise cutoff、flexible ZBL、typewise ZBL
   cutoff；
 - `short`、`long`、`replay`、`restart`、`nvt` 五个 section；
@@ -164,9 +178,10 @@ candidate stage 还必须存在结构合法的 `DMGMD_TIMING phase=run/total` �
 | DMG-MD 单 rank differential | 已实现 | baseline runner |
 | replicated-data MPI 1/2/4 rank | 已实现 | MPI runner |
 | 长 NVE/NVT、回放、跨 rank restart | 已实现 | long-NVE runner |
-| domain decomposition、owned/ghost halo | 未实现（M2 计划） | `docs/plans/domain-decomposition.md` |
-| M1 空间所有权逻辑迁移 fixtures | 已实现（`run_mpi_migration.py`） | MPI migration runner |
-| 分区面精确边界、周期 ghost（M2 边界 fixture） | 未实现 | `docs/plans/domain-decomposition.md` |
+| M1 空间所有权逻辑迁移 fixtures | 已实现（`run_mpi_migration.py`，含 mode=m1-fallback 断言） | MPI migration runner |
+| M2a 域分解 owned/ghost halo | 已实现并通过（`run_mpi_domain.py`：2/4 rank × 双后端大盒矩阵，含两跳链、迁移/周期/多 slab、restart 跨 rank 数、P=1 oracle 差分与逐字段通信字节断言；nightly 长程矩阵另有完整通过记录） | MPI domain runner |
+| M2a 长程守恒 nightly | 已通过（2026-09-18 手动执行：7 个 case、seed 0、1/2/4 rank、HostStaged/CudaAware，共 42 个配置；其中 M2a 2/4 rank 共 28 个配置） | long-NVE runner 扩展 |
+| 分区面精确边界、周期 ghost 的大盒边界 fixture | 已实现（`run_mpi_domain.py` 的 chain/crossings fixtures） | MPI domain runner |
 | 多节点本地 scratch/故障注入 | 自动化已定义；严格双节点验收 IN PROGRESS | `tests/mpi/run_rank_io_isolation.py`、`docs/plans/multi-node-io.md` |
 | 完整 malformed/invalid compatibility corpus | 未完成 | `docs/plans/risk-and-backlog.md` |
 

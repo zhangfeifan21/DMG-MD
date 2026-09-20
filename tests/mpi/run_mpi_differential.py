@@ -60,7 +60,16 @@ def key_values(line: str) -> Dict[str, str]:
     return result
 
 
-def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> None:
+def validate_runtime_record(
+    stage_dir: Path,
+    ranks: int,
+    backend_name: str,
+    expected_domain_mode: str = "m1-fallback",
+) -> None:
+    if expected_domain_mode not in ("m1-fallback", "m2a"):
+        raise baseline.BaselineError(
+            f"{stage_dir}: unsupported expected domain mode {expected_domain_mode!r}"
+        )
     stdout = (stage_dir / "execution.stdout").read_text(encoding="utf-8")
     implementations = [
         line for line in stdout.splitlines() if line.startswith("DMGMD_MPI implementation=")
@@ -123,14 +132,35 @@ def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> N
         "missing": "0",
         "overlapping": "0",
         "owned_output_coverage": "complete",
-        "nep_kernel_centers": "replicated-full",
-        "nep_N1_N2_shard_complete": "false",
+        "nep_kernel_centers": (
+            "replicated-full"
+            if expected_domain_mode == "m1-fallback"
+            else "local-domain-force-centers"
+        ),
+        "nep_N1_N2_shard_complete": (
+            "false" if expected_domain_mode == "m1-fallback" else "true"
+        ),
     }
     for key, value in expected.items():
         if fields.get(key) != value:
             raise baseline.BaselineError(
                 f"{stage_dir}: center proof {key}={fields.get(key)}, expected {value}"
             )
+
+    # The short differential suite passes the default M1 expectation for its
+    # 24 A fixtures.  Long-NVE callers pass an explicit per-fixture expectation
+    # so an accidental fallback can never be mistaken for M2a coverage.
+    domain = [
+        line for line in stdout.splitlines() if line.startswith("DMGMD_DOMAIN ")
+    ]
+    if len(domain) != 1:
+        raise baseline.BaselineError(f"{stage_dir}: missing unique DMGMD_DOMAIN record")
+    domain_fields = key_values(domain[0])
+    if domain_fields.get("mode") != expected_domain_mode:
+        raise baseline.BaselineError(
+            f"{stage_dir}: expected domain mode {expected_domain_mode!r}, got "
+            f"{domain_fields.get('mode')!r}"
+        )
 
     global_count = int(fields["global_count"])
     # M1 spatial ownership: one owned-count record per rank (the M0 contiguous
@@ -152,6 +182,64 @@ def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> N
         raise baseline.BaselineError(
             f"{stage_dir}: center ownership counts cover {owned_total}, expected {global_count}"
         )
+
+    layouts = [
+        line for line in stdout.splitlines() if line.startswith("DMGMD_DOMAIN_LAYOUT ")
+    ]
+    if expected_domain_mode == "m1-fallback":
+        if layouts:
+            raise baseline.BaselineError(
+                f"{stage_dir}: M1 fallback unexpectedly emitted local-domain layouts"
+            )
+    else:
+        initial_layout_ranks = set()
+        initial_owned_total = 0
+        for line in layouts:
+            item = key_values(line)
+            required = {
+                "rank", "step", "owned", "dep_left", "dep_right",
+                "coord_left", "coord_right", "local_count",
+            }
+            if not required.issubset(item):
+                raise baseline.BaselineError(
+                    f"{stage_dir}: incomplete local-domain layout record: {line}"
+                )
+            values = {
+                key: int(item[key])
+                for key in required
+            }
+            rank = values["rank"]
+            if rank < 0 or rank >= ranks:
+                raise baseline.BaselineError(
+                    f"{stage_dir}: local-domain layout has invalid rank {rank}"
+                )
+            count_keys = (
+                "owned", "dep_left", "dep_right", "coord_left", "coord_right"
+            )
+            if any(values[key] < 0 for key in count_keys) or values["local_count"] < 0:
+                raise baseline.BaselineError(
+                    f"{stage_dir}: local-domain layout has a negative count: {line}"
+                )
+            if sum(values[key] for key in count_keys) != values["local_count"]:
+                raise baseline.BaselineError(
+                    f"{stage_dir}: local-domain layout parts do not equal local_count: {line}"
+                )
+            if values["step"] == 0:
+                if rank in initial_layout_ranks:
+                    raise baseline.BaselineError(
+                        f"{stage_dir}: duplicate step-0 layout for rank {rank}"
+                    )
+                initial_layout_ranks.add(rank)
+                initial_owned_total += values["owned"]
+        if initial_layout_ranks != set(range(ranks)):
+            raise baseline.BaselineError(
+                f"{stage_dir}: step-0 local-domain layouts do not cover every rank"
+            )
+        if initial_owned_total != global_count:
+            raise baseline.BaselineError(
+                f"{stage_dir}: step-0 local-domain owned counts cover "
+                f"{initial_owned_total}, expected {global_count}"
+            )
 
     accounting = [
         line for line in stdout.splitlines() if line.startswith("DMGMD_COMM accounting=")
@@ -188,7 +276,7 @@ def validate_runtime_record(stage_dir: Path, ranks: int, backend_name: str) -> N
         if int(fields["mpi_input_bytes_global"]) == 0 or int(fields["mpi_output_bytes_global"]) == 0:
             raise baseline.BaselineError(f"{stage_dir}: empty per-step MPI byte accounting")
         if int(fields["collective_calls"]) < 2:
-            raise baseline.BaselineError(f"{stage_dir}: expected position/thermo collectives")
+            raise baseline.BaselineError(f"{stage_dir}: expected runtime control collectives")
         if backend_name == "HostStaged":
             if int(fields["device_to_host_bytes_global"]) == 0:
                 raise baseline.BaselineError(f"{stage_dir}: HostStaged omitted device-to-host bytes")

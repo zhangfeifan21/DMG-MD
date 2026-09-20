@@ -1,9 +1,29 @@
-# Replicated-data MPI runtime with M1 spatial slab ownership
+# Replicated-data MPI runtime with M1 spatial slab ownership and the M2a
+local-domain path
 
-类别：现行标准。本文描述当前已实现的 M1 runtime 合同：数据面 replicated-full，
-所有权为空间 slab，迁移为 global_id 上的逻辑移交。
+类别：现行标准。本文描述当前已实现的双路径 runtime 合同：
 
-## 数据所有权
+- **M1 replicated-full**：每 rank 持有全部 N 个槽位，积分/thermo/输出权威按空间
+  slab 所有权归属，NEP 对全部中心计算。它是 P=1（恒定）与不满足 M2a eligibility
+  的 P>1 输入的兼容 fallback，行为与 M1 里程碑完全一致。
+- **M2a local-domain**：rank-local owned/ghost 布局、保守两跳位置 halo、点对点
+  halo/迁移通信与 NEP 中心/依赖域分片（`docs/plans/domain-decomposition.md` 的
+  已批准合同在 M2a 实施后并入本节）。
+
+模式选择由 `run_replicated` 调度器完成：potential 只解析一次（deferred-workspace
+NEP 构造），按 typewise 半径推导 `d_dep`/`d_coord` 后判定 eligibility，rank 0 输出
+稳定机器可读记录
+
+```text
+DMGMD_DOMAIN mode=m2a|m1-fallback axis=x|y|z|none d_dep=... d_coord=... reason=...
+```
+
+M2a 的判据：P>1、正交、三方向全周期、每周期方向厚度满足 pinned NEP 的 large-box
+判据（厚度 > 2.5·(rc_radial_max+1)），且 partition slab 宽度 >= d_coord。任一
+判据不满足时回退 M1（不产生新错误）；triclinic/非周期输入在 P>1 下保持 M1 的
+unsupported 错误。radius 推导无法证明上界时同样 fail closed 到 M1。
+
+## 数据所有权（M1 路径）
 
 每个 rank 的 device arrays 仍以全局 `N` 为 SoA stride，持有完整
 position/type/mass/global_id 等输入（`global_count == storage stride == N`，
@@ -270,12 +290,15 @@ HostStaged/CudaAware，并验证：
 - 跨 rank 数/后端输出与 1-rank 无迁移参考在 committed 容差内一致（容差不放宽）；
 - 作业目录只有 rank 0 输出。
 
-`tests/long_nve/run_long_nve.py` 在此短矩阵之外提供 4096/12288/5000 原子、五显式初态和
-100000-step release 正确性验收，包括真实 `E(0)`、长期守恒统计、确定性 NVT 温度统计、时间
-平均 RDF、MSD、GPUMD↔DMG-MD 双向静态构型回放及跨 rank restart。release/nightly 同时覆盖
-NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL cutoff 的静态/短轨迹分支，并默认执行
-HostStaged 与 CudaAware。它保存 wall time/吞吐诊断但不设置性能通过门槛；replicated-full NEP
-阶段不发布多卡 speedup 或 scaling 结论。
+`tests/long_nve/run_long_nve.py` 在此短矩阵之外提供 profile 专属确定性几何和五显式初态：
+smoke 保留 4096/12288/5000 原子的小盒；nightly 使用 24576/24576/20000 原子、最大
+4-rank slab 宽 42.84/99.2/40 Å 的长轴盒；release 使用 49152/49152/40000 原子、最大
+8-rank 保持相同 slab 宽度的长轴盒。nightly/release 的 P>1 配置均锁定为 M2a，且最大-rank
+slab 宽度大于 `2*d_coord`。100000-step release 正确性验收包括真实 `E(0)`、长期守恒统计、
+确定性 NVT 温度统计、时间平均 RDF、MSD、GPUMD↔DMG-MD 双向静态构型回放及跨 rank
+restart。release/nightly 同时覆盖 NEP5、typewise cutoff、flexible ZBL 和 typewise ZBL
+cutoff 的静态/短轨迹分支，并默认执行 HostStaged 与 CudaAware。它保存 wall time/吞吐诊断但
+不设置性能通过门槛；在 M3 scaling 验收前不发布多卡 speedup 或 scaling 结论。
 
 `tests/mpi/run_rank_io_isolation.py` 在同一环境门槛后验证上文 I/O 隔离合同：每 rank 独立
 TMPDIR 根（单节点模拟 node-local temp）、成功后作业目录只含 rank 0 兼容输出且无 scratch
@@ -288,7 +311,120 @@ TMPDIR 根（单节点模拟 node-local temp）、成功后作业目录只含 ra
 ## 后续演进
 
 从本协议演进到 owned/ghost 域分解与 halo 通信的设计见
-[domain-decomposition.md](../plans/domain-decomposition.md)。其中 M0（删除每步 velocity
-Allgatherv，correct_velocity 触发步保留恢复复制态）与 M1（空间 slab 所有权 + indexed
-collective + global_id 逻辑迁移）已实施并纳入本标准；其余里程碑（M2 起的本地 owned/ghost
-布局、halo、NEP 中心分片和点对点通信）仍为待审批计划，尚未修改 runtime。
+[domain-decomposition.md](../plans/domain-decomposition.md)。M0（删除每步 velocity
+Allgatherv，correct_velocity 触发步保留恢复复制态）、M1（空间 slab 所有权 + indexed
+collective + global_id 逻辑迁移）与 M2a（rank-local owned/ghost 布局、保守两跳位置
+halo、p2p halo/迁移、NEP 中心/依赖域分片、M1 replicated-full fallback）已实施并
+纳入本标准；M2b（Fp/partial 分阶段交换）及之后的里程碑仍为待审批计划。
+
+## M2a local-domain 路径（现行合同）
+
+### 布局与身份
+
+M2a 的 device 数据面下每 rank 只保存自己的 owned 原子与 ghost；完整 host identity
+当前仍按 `data-layout.md` 保留用于静态元数据/兼容输出：
+
+- 槽位顺序统一为 `[0, owned)` owned（按 global_id 升序）、随后 dependency
+  ghosts、最后 coordinate-only ghosts；ghost 段按 `(source face, source rank,
+  global_id)` 确定性排序；`local_count` 是所有 SoA 与 NEP workspace 的唯一
+  stride（`global_count` 只是元数据）；
+- dependency ghosts 是与本 rank slab 的 MIC 距离 <= `d_dep` 的相邻 rank owned
+  原子（获得 Verlet 行、typewise 表、descriptor/Fp/partial）；coordinate-only
+  ghosts 是距离在 `(d_dep, d_coord]` 的原子（仅作邻居候选）；
+- 每个槽位携带 global_id、owner/source rank、face 与周期 image shift 元数据；
+  非确定性数值上不会出现重复 `(global_id, image)`（发送端按 MIC 带去重，接收端
+  拒绝重复 ID）；
+- ghost 位置每步通过缓存 face 计划刷新（24 B/原子）；成员关系只在全局 neighbor
+  rebuild 时重估（40 B membership 记录 + 4 B/face count handshake）。
+
+typewise 半径按 pinned kernel 的实际消费路径枚举：radial list 成员需要
+`d < (rc_radial[t1]+rc_radial[t2])/2`，angular list（radial-first filter）需要
+`d < min(Rr, Ra)`，ZBL 消费 angular list，因此 `R_force = R_dep = Rr`；
+`d_dep = max R_force + skin`，`d_coord = max chain (R_force + R_dep) + 2*skin`。
+类型对平均严格复现 kernel 的 float 表达式 `(a+b)*0.5f`，并取其与 loaded-float
+操作数精确平均的较大者；kernel 向上舍入时再向 `+inf` 扩一个 double ULP，禁止 host
+double 平均低估实际消费 cutoff。
+无法证明上界（非有限/非正 cutoff）时 fail closed。
+
+### 每步顺序（M2a）
+
+1. （correct_velocity 触发步）gather `(global_id, owned position, owned
+   velocity)` 到 root，root 按 global ID 恢复全局顺序并复用现有 CPU 修正，再按
+   current owner scatter 回 owned local 槽位（禁止把 3N 数据写入 local_count
+   stride 的 device 数组）；
+2. 自适应时间步（owned max |v| host max-Allreduce）；
+3. owned VV first half（+ unwrapped 跟踪）；
+4. owned 位置 wrap 进全局盒（pinned 单次 `<0/+1`、`>1/-1` 语义；单步位移超过
+   一个盒长时坐标可合法留在盒外，下游所有带判定使用 MIC 距离）；
+5. direct migration：逐个 owned 原子计算最终 owner（可一步跨任意多 slab，含周期
+   端），Alltoall count handshake + Alltoallv 载荷直发最终 owner；载荷含 gid、
+   type、mass、charge、group labels、wrapped position、half-step velocity、
+   unwrapped（启用时）；force/PE/virial 不迁移；完成后强制重建布局、halo、
+   workspace 与 neighbor cache；
+6. halo 位置刷新（缓存 face 计划；migration 步跳过，由 membership 交换携带）；
+7. 全局 neighbor-rebuild OR（任一 rank 的任一 local 槽位移 > skin/2 ⇒ 全体
+   重建；触发时同步重估 halo membership）；
+8. 域分片 NEP：dependency-center 邻居表/descriptor/partial
+   （`[0, owned+dep)`），owned radial force/many-body/ZBL（`[0, owned)`），
+   候选 `[0, local_count)`；
+9. owned VV second half；
+10. owned thermo 求和 + 8-double Allreduce（ghost 的 PE/virial scratch 不参与）；
+11. owned thermostat；
+12. 输出/measurement：local-owned-prefix gather 携带 global ID，root 恢复恰好
+    N 条按 global ID 排序的记录后复用既有 formatter（ghost 永不直接输出）。
+
+第一个 run 前的初始力先完成 local owned 初始化、bootstrap 设备 wrap（与
+pinned wrap kernel 逐位一致）、halo 与 NEP workspace。多段 run 延续同一 domain
+state，不在段间恢复 replicated device arrays。
+
+### 通信后端与字节口径
+
+`HostStaged` 与 `CudaAware` 都为 p2p 扩展了同一 tag 方案（左右方向独立 tag 与
+buffer，P=2 同 peer 安全；P=1 无操作；零 count 合法）。CudaAware 启用门新增
+真实 device-buffer p2p Send/Recv 自检（自检失败回退 HostStaged），由
+`tests/mpi/check_environment.py` 断言 `cuda_aware_p2p_self_test=passed`。
+
+`DMGMD_COMM` 的既有六个字段保持 global-aggregate 语义（M1 与 M2a 一致）；新增
+字段口径如下，均记录**发送 rank 自己的 local 值**，每 rank 另有
+`DMGMD_DOMAIN_COMM rank=... step=...` 行供逐 rank 精确断言：
+
+| 字段 | 口径 | 内容 |
+| --- | --- | --- |
+| `p2p_calls` | local | 已完成的 Isend/Irecv 请求个数（每 face 轮 4 个） |
+| `halo_send/recv_bytes_local` | local | 位置刷新（24 B/原子/步）+ membership 记录（40 B/原子，仅重建步） |
+| `migration_send/recv_bytes_local` | local | Alltoallv 迁移记录（无 group 时 80 B/原子，unwrapped 启用时 104 B） |
+| `control_send/recv_bytes_local` | local | face count handshake（8 B/轮）、Alltoall/Allgather of counts |
+
+普通 M2a 步不含任何 N-scaled collective（position Allgatherv 不存在于此协议）；
+输出步增加 gid gather（8N）+ 各字段 gather（8 B/atom/component，root 侧恢复
+input-slot 顺序）；correct_velocity 触发步增加 80N 的 gather/scatter。除下述周期记录外，
+迁移步的 collective 只有 thermo（64P）与 migration-OR（8P）；
+普通步另加 rebuild-OR（8P）。
+`neighbor.out` 每 1000 次 force 调用（含首次）由各 rank dependency-center local
+max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须在**本次** Verlet/typewise
+邻居表生成后读取；真正 `local_count=0` 的 rank 贡献零但仍参加 collective。初始力或段首力
+的聚合属一次性 control plane，不计入 step 行；若记录落在 step force，则该 step 精确增加
+2 次 collective、`mpi_input_bytes_global += 16P`、`mpi_output_bytes_global += 16P`。
+
+### 验证入口（M2a）
+
+`tests/mpi/run_mpi_domain.py` 在 `check_environment` 门槛后运行 2/4 rank ×
+HostStaged/CudaAware 的 64×24×24 大盒矩阵（nep_C.txt：rc=7、d_dep=8、d_coord=16、
+slab 32/16 Å）：
+
+- 断言 `DMGMD_DOMAIN mode=m2a`（fallback PASS 不算 M2a 覆盖）；
+- 三原子两跳链（owned i 依赖 ghost j 的 descriptor/partial，j 再依赖 coordinate-only
+  ghost k）证明两跳闭包；N<P、空 rank、周期端、一步跨多 slab、暂时空 slab 的
+  迁移经 `DMGMD_DOMAIN_MIGRATION` transitions 与逐步 dump 坐标重算验证；
+- 两原子静止 fixture 在 P=4 上令 rank 2 连续 1000 步保持逻辑 `local_count=0`，并验证
+  force call 1000 的第二条 `neighbor.out` 与该步两次 MPI_MAX 的精确记账；
+- NEP5、mixed typewise radial/angular cutoff、flexible ZBL、typewise ZBL 各有两步
+  large-box P=1 oracle，用 2/4 rank × 双后端覆盖对应 M2a 分支；
+- per-atom energy/force/virial、thermo、短轨迹与 restart 跨 rank 数对同一输入
+  P=1 oracle（恒为 M1 路径）在 committed 容差内（实测全部原子行逐字节一致，
+  仅帧头 stress/virial 求和存在 R16 归约顺序噪声）；
+- 每步通信记录逐字段精确匹配上表模型，含 per-rank p2p 类别与周期记录 collective；
+- owned global ID 全局恰好一次、ghost 不进积分/thermo/输出。
+
+既有 `run_mpi_differential.py` 与 `run_mpi_migration.py` 对其 24 Å 小盒
+fixture 断言 `mode=m1-fallback`（小盒 slab 12/6 Å < d_coord 16）。

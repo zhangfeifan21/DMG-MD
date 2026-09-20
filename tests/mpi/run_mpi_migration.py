@@ -343,6 +343,18 @@ def validate_ownership_records(
     elif "partition" in fields:
         raise baseline.BaselineError(f"{label}: P=1 must not report a spatial partition")
 
+    # These fixtures are 24 A boxes: the slab-width guard keeps them on the
+    # M1 replicated-full runtime (M2a coverage lives in run_mpi_domain.py).
+    domain = [line for line in stdout.splitlines() if line.startswith("DMGMD_DOMAIN ")]
+    if len(domain) != 1:
+        raise baseline.BaselineError(f"{label}: missing unique DMGMD_DOMAIN record")
+    domain_fields = key_values(domain[0])
+    if domain_fields.get("mode") != "m1-fallback":
+        raise baseline.BaselineError(
+            f"{label}: 24 A fixture must stay on the M1 fallback, got "
+            f"mode={domain_fields.get('mode')!r}"
+        )
+
     ownership = [line for line in stdout.splitlines() if line.startswith("DMGMD_CENTER_OWNERSHIP ")]
     if len(ownership) != ranks:
         raise baseline.BaselineError(f"{label}: ownership record count mismatch")

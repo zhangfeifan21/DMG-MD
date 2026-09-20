@@ -43,6 +43,12 @@ Purpose: Cell-list construction and the O(N) full (Verlet) neighbor builder
 with skin-based rebuild checks.
 
 Adaptations for this replica are listed at the bottom of this header block.
+
+DMG-MD domain additions (M2a): gpu_find_neighbor_ON1_domain (center range
+separated from the candidate domain, with a safe row-capacity guard),
+gpu_sort_neighbor_list_domain (global-ID row ordering) and the
+needs_rebuild_domain / find_neighbor_domain / invalidate_rebuild_reference
+entry points. The legacy builders and rebuild check are untouched.
 ----------------------------------------------------------------------------*/
 
 #include "neighbor.cuh"
@@ -50,7 +56,9 @@ Adaptations for this replica are listed at the bottom of this header block.
 #include "gpu_macro.cuh"
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
+#include <cstddef>
 #include <cstring>
+#include <stdexcept>
 
 namespace gpumd_compat {
 
@@ -208,11 +216,100 @@ static __global__ void gpu_find_neighbor_ON1(
   }
 }
 
+// M2a domain variant of gpu_find_neighbor_ON1 (docs/plans/domain-decomposition.md
+// section 5.2): centers are [center_begin, center_end) while candidates are
+// every local slot (owned + ghosts), removing the legacy assumption that a
+// candidate must also lie inside the center range. Writing past the per-row
+// capacity MN sets a device flag instead of corrupting memory; the host
+// wrapper turns that flag into a safe error (Q13 keeps the "safe error"
+// contract for capacity overflow).
+static __global__ void gpu_find_neighbor_ON1_domain(
+  const Box box,
+  const int N,
+  const int center_begin,
+  const int center_end,
+  const int* __restrict__ cell_counts,
+  const int* __restrict__ cell_count_sum,
+  const int* __restrict__ cell_contents,
+  int* NN,
+  int* NL,
+  const double* __restrict__ x,
+  const double* __restrict__ y,
+  const double* __restrict__ z,
+  const int nx,
+  const int ny,
+  const int nz,
+  const double rc_inv,
+  const float cutoff_square,
+  const int MN,
+  int* overflow_flag)
+{
+  const int n1 = blockIdx.x * blockDim.x + threadIdx.x + center_begin;
+  int count = 0;
+  if (n1 < center_end) {
+    const double x1 = x[n1];
+    const double y1 = y[n1];
+    const double z1 = z[n1];
+    int cell_id;
+    int cell_id_x;
+    int cell_id_y;
+    int cell_id_z;
+    find_cell_id(box, x1, y1, z1, rc_inv, nx, ny, nz, cell_id_x, cell_id_y, cell_id_z, cell_id);
+
+    const int z_lim = box.pbc_z ? 2 : 0;
+    const int y_lim = box.pbc_y ? 2 : 0;
+    const int x_lim = box.pbc_x ? 2 : 0;
+
+    for (int k = -z_lim; k <= z_lim; ++k) {
+      for (int j = -y_lim; j <= y_lim; ++j) {
+        for (int i = -x_lim; i <= x_lim; ++i) {
+          int neighbor_cell = cell_id + k * nx * ny + j * nx + i;
+          if (cell_id_x + i < 0)
+            neighbor_cell += nx;
+          else if (cell_id_x + i >= nx)
+            neighbor_cell -= nx;
+          if (cell_id_y + j < 0)
+            neighbor_cell += ny * nx;
+          else if (cell_id_y + j >= ny)
+            neighbor_cell -= ny * nx;
+          if (cell_id_z + k < 0)
+            neighbor_cell += nz * ny * nx;
+          else if (cell_id_z + k >= nz)
+            neighbor_cell -= nz * ny * nx;
+
+          const int num_atoms_neighbor_cell = cell_counts[neighbor_cell];
+          const int num_atoms_previous_cells = cell_count_sum[neighbor_cell];
+
+          for (int m = 0; m < num_atoms_neighbor_cell; ++m) {
+            const int n2 = cell_contents[num_atoms_previous_cells + m];
+            if (n1 != n2) {
+              float x12 = x[n2] - x1;
+              float y12 = y[n2] - y1;
+              float z12 = z[n2] - z1;
+              apply_mic(box, x12, y12, z12);
+              const float d2 = x12 * x12 + y12 * y12 + z12 * z12;
+
+              if (d2 < cutoff_square) {
+                if (count < MN) {
+                  NL[static_cast<size_t>(N) * count + n1] = n2;
+                } else {
+                  *overflow_flag = 1;
+                }
+                ++count;
+              }
+            }
+          }
+        }
+      }
+    }
+    NN[n1] = count;
+  }
+}
+
 // Host driver of the cell list: memset, count, thrust exclusive scan,
 // contents (reference neighbor.cu:164).
 
-void find_cell_list(
-  const double rc,
+void find_cell_list(  const double rc,
   const int* num_bins,
   Box& box,
   const GPU_Vector<double>& position_per_atom,
@@ -408,9 +505,15 @@ gpu_update_xyz0(int N, const double* x, const double* y, const double* z, double
 // rebuild; the H2D/D2H of the counter is a host synchronization point
 // (reference neighbor.cu:741).
 
-int Neighbor::check_atom_distance(Box& box, const double* x, const double* y, const double* z)
+int Neighbor::check_atom_distance(
+  Box& box,
+  const double* x,
+  const double* y,
+  const double* z,
+  const int num_atoms)
 {
-  const int N = NN.size();
+  const int N = num_atoms;
+  if (N <= 0) return 0;
   double d2 = skin * skin * 0.25;
   int* gpu_s2;
   CHECK(gpuGetSymbolAddress((void**)&gpu_s2, static_s2));
@@ -447,7 +550,7 @@ void Neighbor::find_neighbor_global(
     z0.resize(N);
   }
 
-  if (is_first_time || check_atom_distance(box, x, y, z)) {
+  if (is_first_time || check_atom_distance(box, x, y, z, N)) {
     find_neighbor(
       0,
       N,
@@ -474,6 +577,159 @@ void Neighbor::find_neighbor_global(
 }
 
 
+// Returns true when a domain rebuild must run before the next domain neighbor
+// build: first use for this stride, a stride/capacity change, or any local
+// slot (owned or refreshed ghost) more than skin/2 from the reference
+// positions. Ghost displacement equals its source owned atom's displacement
+// on the owner rank, so a global OR over the per-rank results covers every
+// local slot of every rank exactly once.
+bool Neighbor::needs_rebuild_domain(
+  Box& box,
+  const GPU_Vector<double>& position_per_atom,
+  const int num_atoms)
+{
+  const int N = num_atoms;
+  if (N <= 0) return false;  // empty rank: nothing to rebuild
+  if (NN.size() < static_cast<size_t>(N) ||
+      position_per_atom.size() < 3 * static_cast<size_t>(N)) {
+    throw std::logic_error("domain neighbor buffers are smaller than logical local_count");
+  }
+  if (x0.size() != static_cast<size_t>(N)) return true;  // first use / resize
+  return check_atom_distance(box, position_per_atom.data(),
+                             position_per_atom.data() + N,
+                             position_per_atom.data() + 2 * static_cast<size_t>(N), N) != 0;
+}
+
+// Domain Verlet build. Centers [center_begin, center_end) get rows; candidates
+// are all num_candidates local slots. Rows are then sorted by global ID so the
+// many-body reverse-edge binary search (find_properties_many_body_domain) uses
+// the same key. force_rebuild=true skips the displacement check (the caller
+// has already run the global rebuild OR, or knows the layout changed).
+void Neighbor::find_neighbor_domain(
+  const double rc,
+  Box& box,
+  const GPU_Vector<int>& type,
+  const GPU_Vector<double>& position_per_atom,
+  const GPU_Vector<unsigned long long>& global_id,
+  const int center_begin,
+  const int center_end,
+  const int num_candidates,
+  const bool force_rebuild)
+{
+  static_cast<void>(type);  // kept for interface parity; rows are untyped
+  const int N = num_candidates;
+  if (center_begin < 0 || center_end < center_begin || center_end > N) {
+    throw std::invalid_argument("domain neighbor center range is outside local_count");
+  }
+  if (N <= 0) return;  // empty rank: no local slots, nothing to build
+  if (type.size() < static_cast<size_t>(N) ||
+      position_per_atom.size() < 3 * static_cast<size_t>(N) ||
+      global_id.size() < static_cast<size_t>(N)) {
+    throw std::invalid_argument("domain neighbor input buffer is smaller than local_count");
+  }
+  const double* x = position_per_atom.data();
+  const double* y = position_per_atom.data() + N;
+  const double* z = position_per_atom.data() + 2 * static_cast<size_t>(N);
+  if (NN.size() != static_cast<size_t>(N) || x0.size() != static_cast<size_t>(N)) {
+    // First use for this stride, or the layout was rebuilt with a different
+    // local_count: every cached row and reference position is invalid.
+    NN.resize(N);
+    NL.resize(static_cast<size_t>(N) * row_capacity_);
+    cell_count.resize(static_cast<size_t>(N));
+    cell_count_sum.resize(static_cast<size_t>(N));
+    cell_contents.resize(static_cast<size_t>(N));
+    x0.resize(0);
+    y0.resize(0);
+    z0.resize(0);
+  }
+  if (center_end <= center_begin) {
+    // Empty center range: no rows exist, but the reference positions must stay
+    // current so the displacement check below stays meaningful on this rank.
+    if (x0.size() == 0) {
+      x0.resize(N);
+      y0.resize(N);
+      z0.resize(N);
+    }
+    gpu_update_xyz0<<<(N - 1) / 128 + 1, 128>>>(N, x, y, z, x0.data(), y0.data(), z0.data());
+    GPU_CHECK_KERNEL
+    return;
+  }
+  if (!force_rebuild && !needs_rebuild_domain(box, position_per_atom, N)) {
+    return;  // reuse the cached rows and reference positions verbatim
+  }
+
+  const int block_size = 256;
+  // The Verlet build radius is rc + skin, exactly like the legacy
+  // find_neighbor_global -> find_neighbor path: the typewise consumers sit at
+  // rc, and the skin band keeps pairs that drift inside rc between rebuilds.
+  const double rc_build = rc + skin;
+  const double rc_cell_list = 0.5 * rc_build;
+  const double rc_inv_cell_list = 2.0 / rc_build;
+
+  int num_bins[3];
+  box.get_num_bins(rc_cell_list, num_bins);
+
+  find_cell_list(
+    rc_cell_list, num_bins, box, position_per_atom, cell_count, cell_count_sum, cell_contents);
+
+  const int MN = static_cast<int>(row_capacity_);
+  if (domain_overflow_.size() == 0) domain_overflow_.resize(1);
+  int zero = 0;
+  domain_overflow_.copy_from_host(&zero, 1);
+
+  const int grid_size = (center_end - center_begin - 1) / block_size + 1;
+  gpu_find_neighbor_ON1_domain<<<grid_size, block_size>>>(
+    box,
+    N,
+    center_begin,
+    center_end,
+    cell_count.data(),
+    cell_count_sum.data(),
+    cell_contents.data(),
+    NN.data(),
+    NL.data(),
+    x,
+    y,
+    z,
+    num_bins[0],
+    num_bins[1],
+    num_bins[2],
+    rc_inv_cell_list,
+    rc_build * rc_build,
+    MN,
+    domain_overflow_.data());
+  GPU_CHECK_KERNEL
+
+  int overflow = 0;
+  domain_overflow_.copy_to_host(&overflow, 1);
+  if (overflow != 0) {
+    throw std::runtime_error(
+      "local domain neighbor list exceeded its per-row capacity; "
+      "increase MN_radial in the potential file or reduce the local density");
+  }
+
+  // The rebuild reference must cover every local slot of the new layout;
+  // the stride-change branch above only invalidates it.
+  if (x0.size() != static_cast<size_t>(N)) {
+    x0.resize(N);
+    y0.resize(N);
+    z0.resize(N);
+  }
+
+  // Sort only the dependency-center rows, by global ID (slot indices stored
+  // in NL remain local). Row-relative addressing keeps the kernel identical
+  // to the legacy sort while the offsets select the center rows.
+  gpu_sort_neighbor_list_domain<<<center_end - center_begin, MN, MN * sizeof(int)>>>(
+    N, NN.data() + center_begin, NL.data() + center_begin,
+    global_id.data());
+  GPU_CHECK_KERNEL
+
+  gpu_update_xyz0<<<(N - 1) / 128 + 1, 128>>>(
+    N, x, y, z, x0.data(), y0.data(), z0.data());
+  GPU_CHECK_KERNEL
+}
+
+
 // Allocates NN/NL and cell scratch; NL capacity is scaled by
 // (rc+skin)^3/rc^3 to absorb skin growth (reference neighbor.cu:824).
 
@@ -481,11 +737,19 @@ void Neighbor::initialize(const double rc, const int num_atoms, const int num_ne
 {
   const double rc_plus_skin = rc + skin;
   const int MN = num_neighbors * rc_plus_skin * rc_plus_skin * rc_plus_skin / (rc * rc * rc);
+  row_capacity_ = static_cast<size_t>(MN);
   NN.resize(num_atoms);
   NL.resize(static_cast<size_t>(num_atoms) * MN);
   cell_count.resize(num_atoms);
   cell_count_sum.resize(num_atoms);
   cell_contents.resize(num_atoms);
+}
+
+void Neighbor::invalidate_rebuild_reference(void)
+{
+  x0.resize(0);
+  y0.resize(0);
+  z0.resize(0);
 }
 
 }  // namespace gpumd_compat

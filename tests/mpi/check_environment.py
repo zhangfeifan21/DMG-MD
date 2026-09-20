@@ -3,7 +3,10 @@
 
 The checks are intentionally ordered from installation identity to runtime
 device collectives.  A failure here is an environment failure; the numerical
-suite is not started, so it cannot be mistaken for an NEP regression.
+suite is not started, so it cannot be mistaken for an NEP regression.  The
+CudaAware probe also gates the M2a point-to-point path: every rank must pass
+the real device-buffer Send/Recv self-test, not only the four collective
+forms.
 """
 
 from __future__ import annotations
@@ -237,6 +240,11 @@ def validate_environment(
             raise EnvironmentError(f"Open MPI CUDA-aware query failed: {line}")
         if fields.get("cuda_aware_self_test") != "passed":
             raise EnvironmentError(f"CUDA-aware numerical self-test failed: {line}")
+        # M2a gate: the CudaAware backend must also pass the real
+        # device-buffer point-to-point Send/Recv self-test before it may
+        # carry halo exchanges.
+        if fields.get("cuda_aware_p2p_self_test") != "passed":
+            raise EnvironmentError(f"CUDA-aware p2p self-test failed: {line}")
         if fields.get("backend") != "CudaAware":
             raise EnvironmentError(f"probe fell back from CudaAware: {line}")
         uuids.add(fields.get("cuda_uuid", ""))

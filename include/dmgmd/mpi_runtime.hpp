@@ -16,6 +16,17 @@ enum class CommunicationBackend {
   cuda_aware,
 };
 
+// Payload class for the M2a point-to-point and count exchanges. The three
+// classes are recorded separately in every DMGMD_COMM / DMGMD_DOMAIN_COMM
+// line: halo payload (position refresh + membership records), migration
+// payload (Alltoallv atom records), topology/count control (face count
+// handshakes, Alltoall/Allgather of counts).
+enum class ByteClass {
+  halo,
+  migration,
+  control,
+};
+
 // Keep this public boundary synchronized with docs/standards/replicated-mpi.md: callers
 // supply replicated input buffers plus an M1 indexed ownership plan, while
 // MpiRuntime owns backend selection, staging, collective calls, and byte
@@ -23,6 +34,12 @@ enum class CommunicationBackend {
 // Collective-buffer volume, not an estimate of physical network traffic.
 // Open MPI/UCX is free to select a tree/ring/other algorithm, so physical link
 // bytes are deliberately not claimed by this counter.
+//
+// The collective fields are GLOBAL aggregates (summed over all ranks, exactly
+// like the M1 records). The p2p fields below are LOCAL values of the logging
+// rank only -- its own p2p payload bytes -- and are named _local to make the
+// scope explicit; per-rank DMGMD_DOMAIN_COMM records expose every rank's
+// values so tests can verify them exactly.
 struct CommunicationVolume {
   std::uint64_t collective_calls = 0;
   std::uint64_t mpi_input_bytes_global = 0;
@@ -30,6 +47,32 @@ struct CommunicationVolume {
   std::uint64_t device_to_host_bytes_global = 0;
   std::uint64_t host_to_device_bytes_global = 0;
   std::uint64_t output_download_bytes = 0;
+  // M2a point-to-point accounting (local scope, see above).
+  std::uint64_t p2p_calls = 0;
+  std::uint64_t halo_send_bytes_local = 0;
+  std::uint64_t halo_recv_bytes_local = 0;
+  std::uint64_t migration_send_bytes_local = 0;
+  std::uint64_t migration_recv_bytes_local = 0;
+  std::uint64_t control_send_bytes_local = 0;
+  std::uint64_t control_recv_bytes_local = 0;
+
+  void add_p2p_bytes(ByteClass byte_class, std::uint64_t send, std::uint64_t recv)
+  {
+    switch (byte_class) {
+      case ByteClass::halo:
+        halo_send_bytes_local += send;
+        halo_recv_bytes_local += recv;
+        break;
+      case ByteClass::migration:
+        migration_send_bytes_local += send;
+        migration_recv_bytes_local += recv;
+        break;
+      case ByteClass::control:
+        control_send_bytes_local += send;
+        control_recv_bytes_local += recv;
+        break;
+    }
+  }
 };
 
 // Communication plan for the M1 indexed collectives. M1 spatial ownership is
@@ -217,7 +260,123 @@ class MpiRuntime {
       int root = 0);
 
   double allreduce_max_host(double value, CommunicationVolume& volume) const;
+
+  // -----------------------------------------------------------------------
+  // M2a local-domain exchanges (docs/plans/domain-decomposition.md section
+  // 6.1). Point-to-point directions use independent tags and buffers so the
+  // identical left/right peer at P=2 can never mismatch, and every zero
+  // count (empty face, empty rank) is a legal no-op.
+  // -----------------------------------------------------------------------
+
+  // Packs the per-face send lists from a local SoA, moves them with
+  // MPI_Isend/MPI_Irecv + MPI_Waitall to the left and right slab peers, and
+  // unpacks into the ghost slots addressed by the recv slot arrays (index i
+  // of a face's recv stream lands in recv_slots[i]). HostStaged stages
+  // through pinned host memory; CudaAware passes the packed device buffers
+  // directly after a device synchronize. Byte class: halo.
+  void exchange_p2p_indexed_device_soa(
+      double* device_values,
+      int components,
+      std::size_t stride,
+      const int* send_left_indices,
+      int send_left_count,
+      const int* send_right_indices,
+      int send_right_count,
+      const int* recv_left_slots,
+      int recv_left_count,
+      const int* recv_right_slots,
+      int recv_right_count,
+      int left_peer,
+      int right_peer,
+      CommunicationVolume& volume) const;
+
+  // Host-memory p2p with the same tag scheme, used for the rebuild-time face
+  // membership records (40 bytes per atom, halo class) and the one-int face
+  // count handshake (control class). Buffers may be null when the matching
+  // byte count is zero.
+  void exchange_p2p_host_bytes(
+      const void* send_left,
+      std::size_t send_left_bytes,
+      const void* send_right,
+      std::size_t send_right_bytes,
+      void* recv_left,
+      std::size_t recv_left_bytes,
+      void* recv_right,
+      std::size_t recv_right_bytes,
+      int left_peer,
+      int right_peer,
+      ByteClass byte_class,
+      CommunicationVolume& volume) const;
+
+  // All-to-all of one int per rank (migration count handshake; control).
+  [[nodiscard]] std::vector<int> alltoall_ints(
+      const std::vector<int>& send_values,
+      ByteClass byte_class,
+      CommunicationVolume& volume) const;
+
+  // Allgather of one int per rank (owned-count discovery at layout changes;
+  // control).
+  [[nodiscard]] std::vector<int> allgather_int(
+      int value,
+      ByteClass byte_class,
+      CommunicationVolume& volume) const;
+
+  // All-to-all-v of host bytes (migration payload records). Counts and
+  // displacements are in bytes; MPI_BYTE is used.
+  void alltoallv_host_bytes(
+      const void* send_buffer,
+      const std::vector<int>& send_counts_bytes,
+      const std::vector<int>& send_displacements_bytes,
+      void* recv_buffer,
+      const std::vector<int>& recv_counts_bytes,
+      const std::vector<int>& recv_displacements_bytes,
+      ByteClass byte_class,
+      CommunicationVolume& volume) const;
+
+  // Gathers the owned prefix [0, owned_count) of a local SoA to rank 0 as a
+  // per-rank-concatenated atom-major stream (AoS). `owned_counts` must be
+  // identical on every rank (e.g. from allgather_int). Empty on non-root.
+  // Collective accounting follows the M1 gather convention: input and output
+  // are the global totals.
+  [[nodiscard]] std::vector<double> gather_prefix_device_soa_to_root(
+      const double* device_values,
+      int components,
+      int owned_count,
+      std::size_t stride,
+      const std::vector<int>& owned_counts,
+      CommunicationVolume& volume) const;
+
+  // Gathers host-side unsigned 64-bit owned global IDs to rank 0 (per-rank
+  // concatenation). Empty on non-root.
+  [[nodiscard]] std::vector<unsigned long long> gather_u64_to_root(
+      const unsigned long long* host_values,
+      int count,
+      const std::vector<int>& counts,
+      CommunicationVolume& volume) const;
+
+  // Scatters an atom-major double stream (counts[rank] * components entries
+  // per rank) from rank 0 to every rank and uploads it into the owned prefix
+  // [0, counts[rank]) of the local SoA `device_values`. The payload is
+  // host-born on the root (correct_velocity's CPU correction), so both
+  // backends use the same host Scatterv; only the final H2D upload and the
+  // prefix unpack touch the device.
+  void scatterv_prefix_device_soa_from_root(
+      const std::vector<double>& root_payload,
+      int components,
+      const std::vector<int>& counts,
+      double* device_values,
+      std::size_t stride,
+      CommunicationVolume& volume) const;
+
   void log_step_communication(std::uint64_t step, const CommunicationVolume& volume) const;
+
+  // Per-rank M2a record: every rank reports its own LOCAL p2p byte classes
+  // for the sampled steps, so tests can verify each rank's halo/migration/
+  // control bytes exactly (rank 0's DMGMD_COMM line only shows its own local
+  // values). Not emitted by the M1 fallback path.
+  void log_step_domain_communication(
+      std::uint64_t step,
+      const CommunicationVolume& volume) const;
   void log_timing(
       const char* phase,
       std::uint64_t sequence,

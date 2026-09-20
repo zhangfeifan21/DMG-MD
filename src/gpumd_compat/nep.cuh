@@ -50,6 +50,8 @@ Adaptations for this replica are listed at the bottom of this header block.
 #include "common.cuh"
 #include "gpu_vector.cuh"
 
+#include <functional>
+
 namespace gpumd_compat {
 
 #pragma once
@@ -147,6 +149,11 @@ public:
     } small_box_data;
 
   NEP(const char* file_potential, const int num_atoms);
+  // M2a deferred-workspace constructor: parses the potential file exactly once
+  // and allocates nothing. The runtime decides the domain mode first and only
+  // then sizes the workspaces (global N for the M1 fallback, local_count for
+  // the domain path) through allocate_workspace.
+  NEP(const char* file_potential);
   ~NEP(void) override;
   void compute(
     Box& box,
@@ -155,6 +162,51 @@ public:
     GPU_Vector<double>& potential,
     GPU_Vector<double>& force,
     GPU_Vector<double>& virial) override;
+
+  // M2a domain compute (large-box only; the eligibility gate has already
+  // rejected small boxes). num_atoms is the logical local_count, independent
+  // of any non-zero allocation padding. N1/N2 are the force centers (owned
+  // prefix), ND1/ND2 the dependency/descriptor centers, and every array is
+  // strided by num_atoms. force_rebuild is the global rebuild OR computed by
+  // the runtime. The legacy compute() path is unchanged.
+  void compute_domain(
+    Box& box,
+    const int num_atoms,
+    const GPU_Vector<int>& type,
+    const GPU_Vector<double>& position,
+    GPU_Vector<double>& potential,
+    GPU_Vector<double>& force,
+    GPU_Vector<double>& virial,
+    const GPU_Vector<unsigned long long>& global_id,
+    const bool force_rebuild);
+
+  // (Re)allocates every per-atom NEP workspace and the neighbor scratch for
+  // num_atoms atoms, invalidating the neighbor rebuild reference. Safe to
+  // call repeatedly as the local layout changes; the potential parameters
+  // themselves are never re-parsed.
+  void allocate_workspace(const int num_atoms);
+
+  // True when the domain Verlet cache must be rebuilt before the next
+  // compute_domain (first use, stride change, or displacement > skin/2).
+  // num_atoms is the logical local_count, not a GPU_Vector capacity.
+  bool neighbor_needs_rebuild(
+    Box& box,
+    const GPU_Vector<double>& position_per_atom,
+    const int num_atoms);
+
+  // Read-only views for the M2a eligibility/radius computation
+  // (include/dmgmd/domain_layout.hpp).
+  const ParaMB& params() const { return paramb; }
+  const ZBL& zbl_params() const { return zbl; }
+
+  // When set, the periodic neighbor-occupancy record (legacy: appended to
+  // neighbor.out every 1000 large-box calls, including the first) is routed
+  // to this sink instead of being written to a file. The M2a runtime
+  // aggregates the per-rank dependency-center maxima through MPI and lets
+  // rank 0 write the single legacy-format record. Unset keeps the legacy
+  // file-append behavior byte-for-byte.
+  std::function<void(int /*call_index*/, int /*radial_actual*/, int /*angular_actual*/)>
+      neighbor_record_sink;
 
   const GPU_Vector<int>& get_NN_radial_ptr() override;
 

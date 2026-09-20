@@ -43,6 +43,15 @@ Purpose: NEP potential-file loader, large-box kernel orchestration, and the
 small-box/large-box dispatch driven by the DMG-MD runtime.
 
 Adaptations for this replica are listed at the bottom of this header block.
+
+DMG-MD domain additions (M2a): the parse-only NEP constructor with a separate
+allocate_workspace (parameters parsed exactly once; workspaces sized only
+after the domain-mode decision), the public params()/zbl_params() views used
+by the eligibility/radius computation, the neighbor_record_sink routing for
+the periodic neighbor-occupancy record, and compute_domain -- the local
+large-box orchestration with split force/dependency center domains, local
+stride and global-ID-sorted rows. The legacy constructor, compute() and both
+compute_*_box orchestrations are unchanged.
 ----------------------------------------------------------------------------*/
 
 #include "neighbor.cuh"
@@ -112,11 +121,12 @@ static std::vector<float> get_descriptor_parameters_type_pair(
 
 // Parses the NEP/NEP-ZBL potential file: model keyword, per-type cutoffs,
 // descriptor dimensions, ANN widths, then the flat parameter block; uploads
-// parameters to the device and sizes all NEP_Data workspaces for
-// num_atoms.  Exits the process on malformed input, exactly like the
-// reference loader (reference nep.cu:100).
+// parameters to the device. Exits the process on malformed input, exactly
+// like the reference loader (reference nep.cu:100). This deferred form
+// allocates no per-atom workspace: the M2a runtime parses once, decides the
+// domain mode, and only then sizes the workspaces through allocate_workspace.
 
-NEP::NEP(const char* file_potential, const int num_atoms)
+NEP::NEP(const char* file_potential)
 {
   std::ifstream input(file_potential);
   if (!input.is_open()) {
@@ -395,21 +405,39 @@ NEP::NEP(const char* file_potential, const int num_atoms)
     zbl.num_types = paramb.num_types;
   }
 
-  nep_data.f12x.resize(num_atoms * paramb.MN_angular);
-  nep_data.f12y.resize(num_atoms * paramb.MN_angular);
-  nep_data.f12z.resize(num_atoms * paramb.MN_angular);
+  B_projection_size = annmb.num_neurons1 * (annmb.dim + 2);
+}
+
+// Legacy eager constructor: parse once, then size every per-atom workspace
+// for num_atoms. P1/M1 keeps this entry point and its behavior unchanged.
+
+NEP::NEP(const char* file_potential, const int num_atoms)
+  : NEP(file_potential)
+{
+  allocate_workspace(num_atoms);
+}
+
+// Sizes every per-atom NEP workspace and the neighbor scratch for
+// num_atoms atoms (global N on the M1 fallback path, local_count on the M2a
+// domain path). Repeated calls (the local layout changed) reallocate every
+// buffer and invalidate the neighbor rebuild reference, so no cached view or
+// row can survive a stride change (risk R27).
+void NEP::allocate_workspace(const int num_atoms)
+{
+  nep_data.f12x.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
+  nep_data.f12y.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
+  nep_data.f12z.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
   neighbor.initialize(rc, num_atoms, paramb.MN_radial);
   nep_data.NN_radial.resize(num_atoms);
   nep_data.NL_radial.resize(static_cast<size_t>(num_atoms) * paramb.MN_radial);
   nep_data.NN_angular.resize(num_atoms);
-  nep_data.NL_angular.resize(num_atoms * paramb.MN_angular);
+  nep_data.NL_angular.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
   nep_data.Fp.resize(static_cast<size_t>(num_atoms) * annmb.dim);
   nep_data.sum_fxyz.resize(
     static_cast<size_t>(num_atoms) * (paramb.n_max_angular + 1) * ((paramb.L_max + 1) * (paramb.L_max + 1) - 1));
   nep_data.cpu_NN_radial.resize(num_atoms);
   nep_data.cpu_NN_angular.resize(num_atoms);
-
-  B_projection_size = annmb.num_neurons1 * (annmb.dim + 2);
+  neighbor.invalidate_rebuild_reference();
 }
 
 // Trivial destructor; GPU_Vector members free themselves (reference
@@ -418,6 +446,16 @@ NEP::NEP(const char* file_potential, const int num_atoms)
 NEP::~NEP(void)
 {
   // nothing
+}
+
+// Forwards the Verlet rebuild decision to the runtime so it can drive the
+// global rebuild OR before deciding to rebuild the halo membership.
+bool NEP::neighbor_needs_rebuild(
+  Box& box,
+  const GPU_Vector<double>& position_per_atom,
+  const int num_atoms)
+{
+  return neighbor.needs_rebuild_domain(box, position_per_atom, num_atoms);
 }
 
 // Partitions the flat device parameter buffer into per-type ANN weight /
@@ -1180,6 +1218,238 @@ void NEP::compute_large_box(
       force_per_atom.data(),
       force_per_atom.data() + N,
       force_per_atom.data() + N * 2,
+      virial_per_atom.data(),
+      potential_per_atom.data());
+    GPU_CHECK_KERNEL
+  }
+}
+
+// M2a local-domain large-box orchestration
+// (docs/plans/domain-decomposition.md sections 4-5). Same kernel sequence and
+// arithmetic as compute_large_box, but with the center domains split:
+//   * [N1, N2)   final-force centers (owned prefix);
+//   * [ND1, ND2) dependency centers (owned + dependency ghosts) that get
+//                Verlet rows, typewise lists, descriptors, Fp and angular
+//                partials;
+//   * [0, N)     every local slot (owned + dependency + coordinate-only
+//                ghosts) is a neighbor candidate and the only SoA stride.
+// Rows are sorted by global ID and the many-body reverse-edge search uses
+// the same key. Empty center ranges are short-circuited before launch.
+
+void NEP::compute_domain(
+  Box& box,
+  const int num_atoms,
+  const GPU_Vector<int>& type,
+  const GPU_Vector<double>& position_per_atom,
+  GPU_Vector<double>& potential_per_atom,
+  GPU_Vector<double>& force_per_atom,
+  GPU_Vector<double>& virial_per_atom,
+  const GPU_Vector<unsigned long long>& global_id,
+  const bool force_rebuild)
+{
+  const int BLOCK_SIZE = 64;
+  const int N = num_atoms;  // logical local_count; device capacity may be padded
+
+  if (N < 0 || N1 < 0 || N2 < N1 || N2 > N || ND1 < 0 || ND2 < ND1 || ND2 > N) {
+    throw std::invalid_argument("NEP domain center range is outside logical local_count");
+  }
+  if (type.size() < static_cast<size_t>(N) ||
+      position_per_atom.size() < 3 * static_cast<size_t>(N) ||
+      potential_per_atom.size() < static_cast<size_t>(N) ||
+      force_per_atom.size() < 3 * static_cast<size_t>(N) ||
+      virial_per_atom.size() < 9 * static_cast<size_t>(N) ||
+      global_id.size() < static_cast<size_t>(N)) {
+    throw std::invalid_argument("NEP domain device capacity is smaller than logical local_count");
+  }
+
+  static int num_calls = 0;
+  const int call_index = num_calls++;
+  const bool record_neighbors = call_index % 1000 == 0;
+
+  // Truly empty ranks still enter the sink-side collectives on record calls,
+  // but must not derive a logical stride from their one-element allocation
+  // capacity or touch any padded device element.
+  if (N == 0) {
+    if (record_neighbors) {
+      if (neighbor_record_sink) {
+        neighbor_record_sink(call_index, 0, 0);
+      } else {
+        std::ofstream output_file("neighbor.out", std::ios_base::app);
+        output_file << "Neighbor info at step " << call_index << ": "
+                    << "radial(max=" << paramb.MN_radial << ",actual=0), angular(max="
+                    << paramb.MN_angular << ",actual=0)." << std::endl;
+      }
+    }
+    return;
+  }
+
+  neighbor.find_neighbor_domain(
+    rc, box, type, position_per_atom, global_id, ND1, ND2, N, force_rebuild);
+
+  const int grid_dep =
+    (ND2 > ND1) ? (ND2 - ND1 - 1) / BLOCK_SIZE + 1 : 0;
+  const int grid_owned =
+    (N2 > N1) ? (N2 - N1 - 1) / BLOCK_SIZE + 1 : 0;
+
+  if (grid_dep > 0) {
+    find_neighbor_list_large_box<<<grid_dep, BLOCK_SIZE>>>(
+      paramb,
+      N,
+      ND1,
+      ND2,
+      box,
+      type.data(),
+      position_per_atom.data(),
+      position_per_atom.data() + N,
+      position_per_atom.data() + static_cast<size_t>(N) * 2,
+      neighbor.NN.data(),
+      neighbor.NL.data(),
+      nep_data.NN_radial.data(),
+      nep_data.NL_radial.data(),
+      nep_data.NN_angular.data(),
+      nep_data.NL_angular.data());
+    GPU_CHECK_KERNEL
+  }
+
+  // Sample only after this call's Verlet rows and typewise lists are ready.
+  // Empty dependency ranges contribute zero without reading uninitialized
+  // workspace, while every rank still invokes the sink in lockstep.
+  if (record_neighbors) {
+    // Local maxima over the dependency centers only (rows outside [ND1,ND2)
+    // are never written on the domain path). The sink lets the M2a runtime
+    // aggregate with MPI and write one legacy-format record from rank 0.
+    int radial_actual = 0;
+    int angular_actual = 0;
+    if (ND2 > ND1) {
+      nep_data.NN_radial.copy_to_host(nep_data.cpu_NN_radial.data());
+      nep_data.NN_angular.copy_to_host(nep_data.cpu_NN_angular.data());
+      for (int n = ND1; n < ND2; ++n) {
+        if (radial_actual < nep_data.cpu_NN_radial[n]) {
+          radial_actual = nep_data.cpu_NN_radial[n];
+        }
+        if (angular_actual < nep_data.cpu_NN_angular[n]) {
+          angular_actual = nep_data.cpu_NN_angular[n];
+        }
+      }
+    }
+    if (neighbor_record_sink) {
+      neighbor_record_sink(call_index, radial_actual, angular_actual);
+    } else {
+      std::ofstream output_file("neighbor.out", std::ios_base::app);
+      output_file << "Neighbor info at step " << call_index << ": "
+                  << "radial(max=" << paramb.MN_radial << ",actual=" << radial_actual
+                  << "), angular(max=" << paramb.MN_angular << ",actual=" << angular_actual << ")."
+                  << std::endl;
+      output_file.close();
+    }
+  }
+
+  bool is_polarizability = paramb.model_type == 2;
+  if (grid_dep > 0) {
+    find_descriptor<<<grid_dep, BLOCK_SIZE>>>(
+      paramb,
+      annmb,
+      N,
+      ND1,
+      ND2,
+      box,
+      nep_data.NN_radial.data(),
+      nep_data.NL_radial.data(),
+      nep_data.NN_angular.data(),
+      nep_data.NL_angular.data(),
+      type.data(),
+      position_per_atom.data(),
+      position_per_atom.data() + N,
+      position_per_atom.data() + static_cast<size_t>(N) * 2,
+      is_polarizability,
+      potential_per_atom.data(),
+      nep_data.Fp.data(),
+      virial_per_atom.data(),
+      nep_data.sum_fxyz.data(),
+      need_B_projection,
+      B_projection,
+      B_projection_size);
+    GPU_CHECK_KERNEL
+  }
+
+  bool is_dipole = paramb.model_type == 1;
+  if (grid_owned > 0) {
+    find_force_radial<<<grid_owned, BLOCK_SIZE>>>(
+      paramb,
+      annmb,
+      N,
+      N1,
+      N2,
+      box,
+      nep_data.NN_radial.data(),
+      nep_data.NL_radial.data(),
+      type.data(),
+      position_per_atom.data(),
+      position_per_atom.data() + N,
+      position_per_atom.data() + static_cast<size_t>(N) * 2,
+      nep_data.Fp.data(),
+      is_dipole,
+      force_per_atom.data(),
+      force_per_atom.data() + N,
+      force_per_atom.data() + static_cast<size_t>(N) * 2,
+      virial_per_atom.data());
+    GPU_CHECK_KERNEL
+  }
+
+  if (grid_dep > 0) {
+    find_partial_force_angular<<<grid_dep, BLOCK_SIZE>>>(
+      paramb,
+      annmb,
+      N,
+      ND1,
+      ND2,
+      box,
+      nep_data.NN_angular.data(),
+      nep_data.NL_angular.data(),
+      type.data(),
+      position_per_atom.data(),
+      position_per_atom.data() + N,
+      position_per_atom.data() + static_cast<size_t>(N) * 2,
+      nep_data.Fp.data(),
+      nep_data.sum_fxyz.data(),
+      nep_data.f12x.data(),
+      nep_data.f12y.data(),
+      nep_data.f12z.data());
+    GPU_CHECK_KERNEL
+  }
+
+  find_properties_many_body_domain(
+    box,
+    nep_data.NN_angular.data(),
+    nep_data.NL_angular.data(),
+    nep_data.f12x.data(),
+    nep_data.f12y.data(),
+    nep_data.f12z.data(),
+    is_dipole,
+    global_id,
+    N,
+    position_per_atom,
+    force_per_atom,
+    virial_per_atom);
+  GPU_CHECK_KERNEL
+
+  if (zbl.enabled && grid_owned > 0) {
+    find_force_ZBL<<<grid_owned, BLOCK_SIZE>>>(
+      paramb,
+      N,
+      zbl,
+      N1,
+      N2,
+      box,
+      nep_data.NN_angular.data(),
+      nep_data.NL_angular.data(),
+      type.data(),
+      position_per_atom.data(),
+      position_per_atom.data() + N,
+      position_per_atom.data() + static_cast<size_t>(N) * 2,
+      force_per_atom.data(),
+      force_per_atom.data() + N,
+      force_per_atom.data() + static_cast<size_t>(N) * 2,
       virial_per_atom.data(),
       potential_per_atom.data());
     GPU_CHECK_KERNEL

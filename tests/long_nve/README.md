@@ -10,13 +10,32 @@
 `manifest.json` 为可复用 fixture 库锁定 10 组显式速度初态；默认 release profile 从中选择
 seed 0–4，共 5 组。模型由
 `long_nve_common.py` 确定性生成，每一组完整 `model.xyz` 的 SHA-256 都保存在 manifest；运行器
-在启动任何 GPU 作业前重新生成并校验全部 30 个哈希。
+在启动任何 GPU 作业前重新生成并校验 base/nightly/release 三套几何的全部 90 个基础模型哈希。
+派生 compatibility case 继承对应基础模型的几何与哈希。
+
+base 几何只供 smoke 使用：
 
 | case | 原子数 | 盒与构造 | 势 | 固定 dt |
 | --- | ---: | --- | --- | ---: |
 | `carbon_crystal` | 4096 | 8×8×8 diamond conventional cells，28.56 Å 立方盒 | NEP4 C | 0.1 fs |
 | `dense_water` | 12288 | 16³ 个带确定性取向/位置扰动的 H₂O，49.6 Å 立方盒 | 双元素 NEP4 | 0.1 fs |
 | `batio3_zbl` | 5000 | 10³ 个 BaTiO₃ 晶胞；中心 Ti/Ba 距离 1.0 Å，进入 ZBL 插值区 | NEP4-ZBL | 0.01 fs |
+
+nightly/release 使用只沿分解轴 `y` 拉长的 profile 专属几何。这样避免立方放大造成原子数按三次方
+增长，同时让最大 rank 的 slab 明显宽于 `2*d_coord`，左右 halo 不再覆盖整块相邻 slab：
+
+| profile | case | cells | 原子数 | `Ly` / 最大-rank slab | `2*d_coord` |
+| --- | --- | --- | ---: | ---: | ---: |
+| nightly（4 rank） | `carbon_crystal` | 8×48×8 | 24576 | 171.36 / 42.84 Å | 32 Å |
+| nightly（4 rank） | `dense_water` | 8×128×8 | 24576 | 396.8 / 99.2 Å | 28 Å |
+| nightly（4 rank） | `batio3_zbl` | 10×40×10 | 20000 | 160 / 40 Å | 28 Å |
+| release（8 rank） | `carbon_crystal` | 8×96×8 | 49152 | 342.72 / 42.84 Å | 32 Å |
+| release（8 rank） | `dense_water` | 8×256×8 | 49152 | 793.6 / 99.2 Å | 28 Å |
+| release（8 rank） | `batio3_zbl` | 10×80×10 | 40000 | 320 / 40 Å | 28 Å |
+
+nightly 与 release 在各自最大 rank 下保持相同的每-rank owned slab 尺寸；release 通过把长轴再
+扩大一倍覆盖 8 rank。水体系同时把横截面缩到 8×8 cells，以降低扩散原子跨任一 slab 边界后
+触发全局布局/neighbor 重建的频率。密度、分子构造、势、速度分布和时间步均保持不变。
 
 这些是数值压力 fixture，不宣称是生产研究用的已平衡热力学样本。选定的 dt 是保守验收值；若
 未来改成经 GPUMD 预平衡的科学体系，必须先做仅参考程序参与的 dt 收敛实验，再审查生成器、
@@ -38,6 +57,21 @@ seed 0–4，共 5 组。模型由
 profile 已固定默认后端：smoke 为 HostStaged，nightly/release 为 HostStaged 与 CudaAware。
 `--backends` 可用于缩小诊断范围，但发布门槛不得据此删去后端。无论 profile 如何，MPI 环境
 预检都先于数值作业执行。
+
+每个 profile/fixture/rank 的预期数据面由 `manifest.json` 的 profile 几何
+`domain_mode_by_rank` 锁定。批量运行器在
+每个 backend 内按 profile 的 rank 顺序执行，并按配置分别校验 M1/M2a；M1 必须报告 `replicated-full`，M2a 必须报告
+`local-domain-force-centers`、完整的 step-0 local layout 和无缺失/重叠的 owned 分区。运行时若
+意外 fallback，不能按 M2a 通过。当前模式矩阵为：
+
+| profile | r1 | r2 | r4 | r8 |
+| --- | --- | --- | --- | --- |
+| smoke/base | M1 | 未执行 | 未执行 | 未执行 |
+| nightly（全部体系） | M1 | M2a | M2a | 未执行 |
+| release（全部体系） | M1 | M2a | M2a | M2a |
+
+兼容性派生 case 继承其基础 fixture 的模式合同。`LONG_NVE_CONFIG`、config checkpoint 与最终
+JSON 报告同时记录 `domain_mode`，因此 M2a 意外 fallback 时会在对应 stage 立即失败。
 
 ## 执行
 
@@ -179,6 +213,7 @@ restart 不保存 global time 且使用文本量化，本测试不要求它与�
 
 ## 非性能测试
 
-运行器没有 wall-time、atom-steps/s、speedup 或 scaling 判据。当前 replicated prototype 每张
-GPU仍执行完整 NEP，长测只验证正确性。`DMGMD_COMM_LOG_INTERVAL` 由 profile 设置为 10 或
-100，减少长程 stdout；默认 runtime 行为仍是每步记录，现有短 MPI differential 不受影响。
+运行器没有 wall-time、atom-steps/s、speedup 或 scaling 判据。M1 每张 GPU 执行完整 NEP，
+M2a 按 owned/dependency center 执行 local-domain NEP；本长测对两条路径都只验证正确性。
+`DMGMD_COMM_LOG_INTERVAL` 由 profile 设置为 10 或 100，减少长程 stdout；默认 runtime 行为
+仍是每步记录，现有短 MPI differential 不受影响。

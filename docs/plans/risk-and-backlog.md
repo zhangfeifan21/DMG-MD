@@ -81,18 +81,18 @@
 
 | ID | 等级 | 风险 | 代码证据 | 失败症状 | 验证/缓解 |
 | --- | --- | --- | --- | --- | --- |
-| R1 | P0 | NEP多层halo | `nep.cu:727-728`; `potential.cu:209-252` | 边界力错但内部原子正确 | M2a 两跳 oracle；分区边界三原子构型；M2b 后续对比 |
-| R2 | P0 | global/local N和SoA stride混用 | `atom.cuh`; ELL地址 `slot*N+n` | 越界、分量串线、ghost被积分 | typed views；canary；owned/ghost单元测试 |
+| R1 | P0（M2a 已关闭验证路径） | NEP多层halo | `nep.cu:727-728`; `potential.cu:209-252` | 边界力错但内部原子正确 | 已实施：d_coord = max(R_force+R_dep)+2*skin，三原子两跳链 fixture 与 P=1 oracle 逐字节一致（2026-09-18）；M2b 对比待做 |
+| R2 | P0（M2a 已关闭验证路径） | global/local N和SoA stride混用 | `atom.cuh`; ELL地址 `slot*N+n` | 越界、分量串线、ghost被积分 | 已实施：logical local_count 与 allocation capacity 分离、domain 接口显式计数、真正 local_count=0 的 1000-step P=4 fixture + ghost 不进积分/thermo/输出断言（2026-09-18） |
 | R3 | P0 | 无stable global ID | `read_xyz.cu`, `group.cu` | 输出重排、迁移后group错 | input row ID；跨rank迁移/输出排序测试 |
 | R4 | P0/P1 | thermo/thermostat/RNG rank依赖 | `ensemble.cu`, `ensemble_ber.cu`, `velocity.cu` | NVT各rank温度不同、rank数改变初速 | global reduction；counter RNG；rank-count tests |
 | R5 | P0 | `NEP_MULTIGPU`抢全部设备 | `force.cu:139-160` | OOM、GPU竞争、每rank完整复制 | 禁用该编排；显式local-rank device binding |
 | R6 | P0 | ghost force/PE/virial所有权 | large只写center；small atomic写n1/n2 | 重复总能量/virial或漏reverse force | large中心gather首选；small路径明确reverse exchange |
 | R7 | P0 | 邻居表不完整/不互反/未排序 | `neighbor.cu:347`; `potential.cu:227-252` | angular force读取错误/未初始化partial | 每row排序；反向edge invariant检查；边界测试 |
-| R8 | P0 | neighbor build候选域错误 | `gpu_find_neighbor_ON1`要求n2也在`[N1,N2)` (`neighbor.cu:144`) | owned看不到ghost | 新接口分center域和candidate域 |
+| R8 | P0（M2a 已关闭） | neighbor build候选域错误 | `gpu_find_neighbor_ON1`要求n2也在`[N1,N2)` (`neighbor.cu:144`) | owned看不到ghost | 已实施：`Neighbor::find_neighbor_domain` 分离 center/candidate 域 + 行容量守卫（2026-09-18） |
 | R9 | P0 | PBC/triclinic domain归属 | `box.cuh` MIC；`gpu_apply_pbc` fractional转换 | 倾斜盒漏halo、边界重复owner | fractional decomposition；精确边界golden |
 | R10 | P0 | PBC wrap只加减一次且 `s==1` 不wrap | `force.cu:434-453` | 大位移/精确上边界行为不同 | 兼容测试锁定；迁移前限制/规范化策略需审批 |
-| R11 | P0 | skin重建是全局OR，迁移使reference失效 | `Neighbor::check_atom_distance/find_neighbor_global` | 某rank不重建或用错old position | 所有rank OR；迁移/容量变化强制rebuild |
-| R12 | P0 | typewise cutoff/ZBL范围隐含 | `nep.cu:465-480`; ZBL传angular list | `Ra>Rr`或ZBL outer较大时截断 | loader明确检查或忠实复现；合成potential实验 |
+| R11 | P0（M2a 已关闭） | skin重建是全局OR，迁移使reference失效 | `Neighbor::check_atom_distance/find_neighbor_global` | 某rank不重建或用错old position | 已实施：全局 max-OR + 迁移/布局变化强制重建 + `invalidate_rebuild_reference`（2026-09-18） |
+| R12 | P0（M2a 半关闭） | typewise cutoff/ZBL范围隐含 | `nep.cu:465-480`; ZBL传angular list | `Ra>Rr`或ZBL outer较大时截断 | M2a 半径推导忠实按消费路径及 kernel float pair-average 舍入取保守上界；`Ra>Rr`/ZBL outer 语义裁决仍属 B2 |
 | R13 | P0 | small-box多image和atomic | `nep_small_box.cuh:56-703` | 多计/少计、ghost partial未返回 | 首切口拒绝small-box；后续image-aware edge+reverse |
 | R14 | P1 | group使用local array index | `group.cu:25-72` | 迁移后fix/dump group错误 | labels随原子；global size归约；contents临时重建 |
 | R15 | P1 | fixed/move ghost影响温度自由度 | `ensemble.cu:646-653` | T/KE分母错误 | 全局owned group counts；只计owned kinetic |
@@ -105,9 +105,9 @@
 | R22 | P1 | 单rank错误导致collective死锁 | GPUMD普遍 `exit(1)` | 其他rank永久等待 | error object + allrank status + `MPI_Abort` only after message |
 | R23 | P1 | 默认随机初速不可重现 | `velocity.cu` libc rand/array index | 分区改变初始轨迹 | counter-based global-ID RNG；与GPUMD baseline定义容差 |
 | R24 | P1 | `correct_velocity`需要全局COM/惯量 | `velocity.cu:77-308` | 每rank各自去动量，物理改变 | 多阶段global reductions；PBC下角动量定义做golden |
-| R25 | P2 | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | M2a 各rank local max经MPI_MAX聚合，仅rank0写单记录；fallback保持现行语义 |
+| R25 | P2（M2a 已关闭） | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | 已实施：在本次 typewise 表生成后采样，各rank local max经MPI_MAX聚合，仅rank0写；1000-step fixture 精确断言记录值/归约字节（2026-09-18） |
 | R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + collective及p2p数值自检；同步；HostStaged fallback |
-| R27 | P2 | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | epoch/versioned views；迁移后统一capacity growth和重建 |
+| R27 | P2（M2a 已关闭） | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | 已实施：布局 epoch 全量重建 + workspace 仅随 local_count 重分配 + 强制 neighbor 重建；device 指针每用途现取（2026-09-18） |
 | R28 | P0（整改与验证进行中） | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `src/runtime.cu` `RankIoIsolation`（整改前 `runtime.cu:80-129`） | 非零rank无法chdir，异常路径可能collective hang | 目标合同：每 rank 本机 `mkdtemp` scratch（0700）+ 两阶段错误归约共享出口 + 三阶段 finish；严格关闭条件为 [multi-node-io.md](./multi-node-io.md) 的双物理节点验收，现行合同见 [replicated-mpi.md](../standards/replicated-mpi.md) |
 
 ## 4. PBC 与 triclinic 专项
@@ -150,7 +150,7 @@ halo selection = physical cutoff relative to triclinic rank faces
 
 1. 先在单rank引入owned/local显式域但令owned=N、ghost=0，证明数值无变化。
 2. 做“复制全局数据”的MPI原型，只测试归约、rank0输出和设备绑定。
-3. 实现正交大盒domain decomposition与保守两跳position halo，关闭R1/R2/R3/R6-R8。
+3. 实现正交大盒domain decomposition与保守两跳position halo，关闭R1/R2/R3/R6-R8。（M2a 已于 2026-09-18 实施并通过验收矩阵；R6 由"中心 gather + ghost scratch 永不 gather"关闭，R3 由迁移载荷/输出排序关闭，R7 由 global-ID 行排序 + 两跳 halo 关闭。）
 4. 实现分阶段intermediate exchange，与两跳oracle逐原子比较。
 5. 加migration、跨周期边界、不同rank数restart。
 6. 最后考虑triclinic、small-box、fix和随机thermostat。

@@ -1,13 +1,16 @@
 # 域分解与 halo 通信协议（设计稿）
 
-类别：实施中计划。状态：IN PROGRESS——M0 与 M1 已于 2026-09-15 实施并验收；维护者已于
-2026-09-17 批准 M2a 进入实现，当前代码尚未实现 M2a。M2b 及之后仍待后续审批。
+类别：实施中计划。状态：IN PROGRESS——M0、M1 已于 2026-09-15 实施并验收；M2a 已于
+2026-09-18 实施并通过专属验收矩阵（见 [status/current.md](../status/current.md)），
+其生效合同已并入 [replicated-mpi.md](../standards/replicated-mpi.md) 的 M2a 节与
+[data-layout.md](../standards/data-layout.md)；M2a nightly 已于 2026-09-18 手动执行并
+通过，100000-step 长程 release 矩阵仍未执行。
+M2b 及之后仍待后续审批。
 
 本文档规定 DMG-MD 从 replicated-data 原型演进为 owned/ghost 域分解
-runtime 的数据面协议。M0 与 M1 已按维护者指令实施，其协议与字节合同并入
-[replicated-mpi.md](../standards/replicated-mpi.md)，实测记录见
-[status/current.md](../status/current.md)。本文从 §3 起给出 M2a 的已批准交付合同；在代码和
-验收门全部落地前，[replicated-mpi.md](../standards/replicated-mpi.md) 仍是现行运行时合同。
+runtime 的数据面协议。M0、M1 与 M2a 已按维护者指令实施；实测记录见
+[status/current.md](../status/current.md)。本文保留 M2a 的设计依据与 M2b 起的
+未实施合同；生效合同以 standards 为准。
 
 前置阅读：[replicated-mpi.md](../standards/replicated-mpi.md)（现行协议）、
 [risk-and-backlog.md](./risk-and-backlog.md)（风险与待办登记）、
@@ -254,7 +257,9 @@ radial cutoff `continue`，再填 angular list，ZBL 也消费该 angular list�
 加载后枚举实际类型对/三元组，按**现有 kernel 的有效消费路径**计算 §4.3 的 `R_force`、
 `R_dep`、`d_dep`、`d_coord` 并写入启动日志。M2a 不借机改变 `Ra > Rr` 或 ZBL 被现有列表
 截断的数值语义；这些语义的产品裁决仍属于 B2。若无法证明某分支的有效上界，就 fail closed
-到 M1，而不是低估 halo。
+到 M1，而不是低估 halo。pair 平均必须复现 kernel 的 float `(a+b)*0.5f` 舍入；host
+上界取该结果与 loaded-float 操作数精确平均的较大者，kernel 向上舍入时再向 `+inf`
+扩一个 double ULP，不能用纯 double 平均低估 mixed-type cutoff。
 
 ### 4.5 双 oracle 策略（Q4 已确认）
 
@@ -299,7 +304,9 @@ M2a 不得靠每次 local_count 改变时重新解析 potential。参数加载�
 半径/large-box eligibility；确定模式后才按 `local_count` 分配/重建 workspace 并显式作废
 neighbor cache；domain compute 接收 force/dependency 中心域。eligible M2a 路径不得为了判定
 模式而在 GPU 上先持久分配一份 global-N atom/NEP scratch。现有 `compute` 和 P=1 launch 路径
-保持不变。所有空中心域（含空 rank）必须在 launch 前安全短路，不能生成零/负 grid。
+保持不变。逻辑 `local_count` 必须作为独立参数传入 domain compute/rebuild，不能从为兼容
+零字节分配而填充过的 `GPU_Vector::size()` 反推；所有空中心域（含 owned/ghost 都为零的
+真正空 rank）必须在 launch 前安全短路，不能访问填充元素或生成零/负 grid。
 
 ### 5.2 邻居构建器的域分离（R8）
 
@@ -322,7 +329,9 @@ domain 路径的每个邻居行按候选 `global_id`（相同 ID 时再按 image
 `compute_large_box` 每 1000 次调用 append `neighbor.out` 的隐式 D2H 副作用
 （`nep.cu:1063-1078`，R25/Q18）：M2a 保留单文件/单记录语义。各 rank 只计算本地
 dependency 中心的最大邻居数，经 `MPI_MAX` 聚合后仅 rank 0 使用既有格式写一条记录；
-非 root 不得 append。fallback/P=1 继续走现有行为。
+采样点位于本次 typewise 表生成之后，空 dependency 域贡献零；非 root 不得 append。
+记录若发生在 step force，两个 scalar MPI_MAX 必须进入该步 `CommunicationVolume`；
+fallback/P=1 继续走现有行为。
 
 ## 6. 每步协议（M2 目标时序）
 
@@ -480,7 +489,8 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
   - **fallback 门**：既有 24 Å/small-box differential 与 migration fixtures 继续通过，且
     明确断言日志为 M1 fallback；不得把它们误当成 M2a 覆盖；
   - **CPU/domain-layout 单测**：eligibility、M1 等宽边界、typewise 两跳半径、P=2 同 peer
-    双方向、空 rank/零 count、确定性槽位布局和 malformed exchange plan；
+    双方向、mixed-type float cutoff 向上舍入、真正 `local_count=0`、确定性槽位布局和
+    malformed exchange plan；
   - **新增 `tests/mpi/run_mpi_domain.py`**：使用满足 large-box 与 `slab_width >= d_coord`
     的专用大盒，覆盖 2/4 rank × HostStaged/CudaAware；以同一输入 P=1 为数值 oracle；
   - **边界 fixture**：`s=0`、`s=1`、恰在 slab 边界、周期首尾；并加入三原子链，令 owned
@@ -488,11 +498,18 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
     证明两跳闭包；
   - **迁移 fixture**：普通跨界、一步跨多 slab 的 direct routing、周期端点、暂时空 slab、
     correct_velocity、输出/restart 跨 rank 数；
+  - **空域/周期记录 fixture**：两原子聚集在 rank 0，P=4 的 rank 2 连续 1000 步保持
+    `local_count=0`；force call 1000 的 `neighbor.out` 与两次 MPI_MAX 通信量精确匹配 P=1
+    oracle/字节模型；
+  - **势分支 fixture**：NEP5、mixed typewise radial/angular cutoff、flexible ZBL、
+    typewise ZBL 各以两步 large-box P=1 oracle 覆盖 2/4 rank × 双后端；
   - per-atom energy/force/virial 与 P=1/committed golden 在既有容差内；owned global ID
     全局恰好一次，ghost 不进积分/thermo/输出，local index/ELL 容量合法；普通 M2a 步不得
     出现 position Allgatherv，p2p/control 字节按精确模型断言；
-  - 既有 `tests/long_nve/run_long_nve.py` 的小盒 profile 允许走 fallback，不能单独作为 M2a
-    验收；至少增加一个真正命中 M2a 的大盒 smoke/profile 后，再执行长程守恒 nightly；
+  - `tests/long_nve/run_long_nve.py` 的 smoke 小盒保持 P=1 M1 oracle；nightly 使用针对 4 rank、
+    release 使用针对 8 rank 的长轴大盒，所有 P>1 配置必须命中 M2a，且最大-rank slab 宽度
+    大于 `2*d_coord`；M2a nightly 已于 2026-09-18 手动执行并通过，100000-step 长程
+    release 仍待执行；
   - debug 构建启用 `risk-and-backlog.md` §5 不变量断言。
 - **M2b**：与 M2a oracle 的逐原子 force/virial 等价（Q4 验收）+ 同套长程守恒。
 - **M3**：多节点 I/O 的严格双物理节点验收按
@@ -507,7 +524,7 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 | 项 | 处置 | 章节 |
 | --- | --- | --- |
 | R1 两跳依赖 | 坐标 halo = `max(R_force + R_dep) + 2*skin`；M2a 不交换中间量即闭环 | §4 |
-| R2 计数/stride 混用 | `AtomCounts` 已类型化；local_count 为唯一 stride；kernel 参数化 | §3.2、§5.1 |
+| R2 计数/stride 混用 | `AtomCounts` 已类型化；logical local_count 与 allocation capacity 分离并显式传入 domain kernel | §3.2、§5.1 |
 | R3 迁移身份 | global_id 稳定；输出按 global ID 排序；载荷清单固定 | §8 |
 | R4 归约/温控/RNG rank 依赖 | thermo 仍是 owned 求和 + 全局 Allreduce；Berendsen 用归约后全局温度；RNG 改造不在本切口 | §6 |
 | R5 NEP_MULTIGPU 编排 | 不复用其编排（AGENTS.md）；仅引用窗口数学证据 | §1.1、§4 |
@@ -515,9 +532,9 @@ scaling 基准解除；本文档以上为解析上界，不构成实测承诺。
 | R7 邻居表互反/排序 | 深位置 halo 保证行完整；行排序键改 global ID（Q15） | §3.4 |
 | R8 候选域=中心域假设 | 邻居构建器接口分离 center/candidate 域 | §5.2 |
 | R11 重建全局 OR / 迁移作废 | 全 rank OR；迁移后强制重建 | §4.3、§8 |
-| R12 typewise/ZBL 截断半径 | loader 后按现有 kernel 消费路径枚举类型对/三元组求上界；不改变数值语义 | §4.4 |
+| R12 typewise/ZBL 截断半径 | loader 后按现有 kernel 消费路径和 float 舍入枚举类型对/三元组求上界；不改变数值语义 | §4.4 |
 | R16 MPI 归约非结合 | 容差三层级，M1 量化 | §10 |
-| R25 `neighbor.out` 副作用 | 各 rank local max 经 MPI_MAX 聚合，仅 rank0 保持单记录格式 | §5.3 |
+| R25 `neighbor.out` 副作用 | 本次邻居表生成后取 local max，经 MPI_MAX 聚合，仅 rank0 写；周期归约精确记账 | §5.3 |
 | R26 CUDA-aware 同步 | p2p 自检两道门；默认 stream + 阻塞语义（Q40） | §6.1 |
 | R27 容量变化 view 失效 | epoch/versioned view | §8 |
 | R28 多节点临时目录 | 整改与双节点验收进行中（[multi-node-io.md](./multi-node-io.md)） | §10 |
@@ -537,8 +554,10 @@ M1  空间 slab 所有权 + 迁移机制（数据仍复制、仍 indexed Allgath
      双 epoch 迁移时序；M2a 保持等宽 fractional slab，并另做 large-box/d_coord eligibility】
     门：golden 差分 + 迁移 fixture + 跨 rank restart
 M2a 本地 owned/ghost 布局 + p2p 深位置 halo + NEP 中心/descriptor 域分片
-    【已批准进入实现，尚未落地】
-    门：单 rank逐字节退化 + fallback兼容 + 专属大盒边界/两跳/迁移矩阵 + 长程守恒
+    【已实施 2026-09-18：单 rank 逐字节退化、fallback 兼容、专属大盒边界/两跳/
+     迁移矩阵全过；M2a nightly 已于 2026-09-18 手动执行并通过；100000-step release 待执行】
+    门：单 rank逐字节退化 + fallback兼容 + 专属大盒边界/两跳/迁移矩阵 + nightly；
+        100000-step release 仍是后续门槛
 M2b （可选）Fp/partial 分阶段交换，替代深位置 halo
     门：与 M2a 逐原子等价（Q4）
 M3  多节点硬化：rank-slab 节点布局、多节点 I/O、scaling 基准

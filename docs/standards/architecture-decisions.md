@@ -2,7 +2,7 @@
 
 类别：现行标准。
 
-更新日期：2026-09-09。参考 GPUMD commit：
+更新日期：2026-09-18。参考 GPUMD commit：
 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 
 ## D-001：NEP 采用仓库内复现（2026-09-09 修订）
@@ -94,3 +94,49 @@ HostStaged；CudaAware 必须同时通过 Open MPI capability query 和覆盖
 原因：锁定 NEP force 读取远端中心 `Fp` 和反向 directed partial；没有 phase-level exchange
 时，直接中心分片不完整。启动 coverage collective 证明 owned 槽位恰好覆盖一次，并明确
 记录 NEP kernel 仍为 replicated-full。见 [replicated-mpi.md](./replicated-mpi.md)。
+
+## D-010：M2a 域分解采用模式分派 + 保守两跳位置 halo（2026-09-18）
+
+决定：`run_replicated` 成为模式调度器——potential 只解析一次（deferred-workspace
+NEP 构造，参数加载与按原子数分配 workspace 分离），按 typewise 半径推导
+`d_dep`/`d_coord` 后判定 eligibility；满足判据的 P>1 输入进入
+`run_local_domain`（rank-local owned/ghost 布局 + 点对点 halo/迁移），其余保持
+M1 replicated-full 兼容 fallback，rank 0 输出 `DMGMD_DOMAIN` 机器可读记录。
+M2a 数据面采用保守两跳位置 halo（坐标 ghost 深度 `max(R_force+R_dep)+2*skin`），
+各 rank 对 dependency 域做冗余 descriptor/partial 计算，力域只算 owned；NEP
+kernels 只做中心域/候选域/stride 的最小参数化，domain 路径的邻居行按 global ID
+排序，many-body 反向边二分用同一键。逻辑 `local_count` 与非零 device allocation
+capacity 分离；domain compute/rebuild 接口显式接收逻辑计数，因此真正空域不会把填充
+元素误识别成原子。typewise pair reach 复现 kernel float 平均并取保守上界。
+
+原因：
+
+- 兼容性优先：小盒/窄 slab 输入继续可运行（fallback），不产生新错误；P=1 与
+  triclinic/非周期行为逐字节不变；
+- 两跳 halo 是唯一不需要中间量通信即可闭环的协议（M1 证据：`Fp(n2)` 与反向
+  partial 的两层依赖），并作为 M2b 分阶段交换的 oracle；
+- 逐字节对齐 P=1 oracle 依赖三个细节：bootstrap wrap 必须用共享 device kernel
+  （host 复算因 FMA 收缩差 1 ULP）、unwrapped 种子必须是 raw 输入坐标（M1 在
+  首次 wrap 前 enable）、Verlet 构建半径必须 `rc + skin`（漏 skin 会在原子漂移
+  后丢邻居）；
+- 发送带判定必须用对邻居 slab 的 MIC 距离：pinned wrap 的单次 `<0/>1` 调整使
+  单步位移超过一个盒长的原子合法地留在盒外，裸坐标带判定会静默丢失邻居；
+- 排序键选 global ID（而非 local index）使累加顺序与输入槽位顺序一致——identity
+  映射下 M2a 的 per-atom 输出与 P=1 逐字节一致，把差分噪声压缩到帧头全局求和的
+  R16 归约顺序层级。
+
+## D-011：M2a 通信按三类别逐 rank 记账（2026-09-18）
+
+决定：`CommunicationVolume` 保持既有六个 global-aggregate 字段语义（M1/M2a
+一致），新增 `p2p_calls` 与 halo/migration/control 三对 `*_local` 字段（发送 rank
+自己的值），每 rank 另有 `DMGMD_DOMAIN_COMM` 行；collective 字段只覆盖物理数据
+collective（thermo Allreduce、OR 归约、输出/修速 gather/scatter、neighbor.out
+MPI_MAX），Alltoall/Allgather/Alltoallv 与 p2p 只计入类别字段。CudaAware 启用门
+新增真实 device-buffer p2p Send/Recv 自检。
+
+原因：per-rank 精确断言需要 local 口径（rank 0 的聚合行只含自己的 p2p 值），
+类别拆分让 halo/迁移/控制字节能从 layout 记录独立推导并被
+`run_mpi_domain.py` 逐字段精确测试；普通 M2a 步不含任何 N-scaled collective 的
+性质由精确字节模型而非下限检查保证。
+周期 `neighbor.out` 记录若落在 step force，该步的两个 scalar MPI_MAX 也属于上述
+collective 字段（输入/输出各 `16P`）；段首/初始 force 的同类控制面归约不进入 step 行。

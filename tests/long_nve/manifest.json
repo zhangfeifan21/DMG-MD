@@ -6,6 +6,7 @@
   },
   "profiles": {
     "smoke": {
+      "case_geometry": "base",
       "steps": 100,
       "short_steps": 10,
       "thermo_interval": 10,
@@ -27,6 +28,7 @@
       ]
     },
     "nightly": {
+      "case_geometry": "nightly",
       "steps": 10000,
       "short_steps": 100,
       "thermo_interval": 100,
@@ -48,6 +50,7 @@
       ]
     },
     "release": {
+      "case_geometry": "release",
       "steps": 100000,
       "short_steps": 100,
       "thermo_interval": 100,
@@ -67,6 +70,144 @@
         "dense_water_typewise_cutoff", "batio3_flexible_zbl",
         "batio3_typewise_zbl_cutoff"
       ]
+    }
+  },
+  "case_geometries": {
+    "nightly": {
+      "carbon_crystal": {
+        "atoms": 24576,
+        "cells": [8, 48, 8],
+        "domain_mode_by_rank": {
+          "1": "m1-fallback",
+          "2": "m2a",
+          "4": "m2a",
+          "8": "m2a"
+        },
+        "model_sha256": {
+          "0": "59dcd7aa32b3c451e8bcceb2b82d4a4332b8a5b4c0e96d30495d8de0f8b2f5ca",
+          "1": "d9861216798bb93c6cb775d672e27838a7d5d8d7a108972475b57b317fbe21ee",
+          "2": "4e6300f169ebee737097738b3618054ac16465eaeab89d3f45c13fa677bddab0",
+          "3": "03497485c79973a21b94cc92f6b2f2a9b5bc1152576a4c632c983459ceebbfe8",
+          "4": "97893ec9b7b681b25913fa669d417f5ac403b21c62823b2b6d7dfec6cc54f933",
+          "5": "d06aa8d7b21e6f06f8124757ae7ab80595335c144c4fad300ed73fdbe239d9cd",
+          "6": "e221976e7a332860de07724cd6cf52e9b97dc1b5e8a0d9a2e0dd8e01fb160415",
+          "7": "b462b7a2693b4fe2a013d64ee8d152b0cc5c5e2460091ccc6eb3f8ae65ec4975",
+          "8": "9e41af0e48932b0e93331b1c68398c9fc5219d1a2f47230619119301cae09426",
+          "9": "edf982690e0465b9c6952e0b3b636fdf10cd408640020b05acd20f11f1148614"
+        }
+      },
+      "dense_water": {
+        "atoms": 24576,
+        "cells": [8, 128, 8],
+        "domain_mode_by_rank": {
+          "1": "m1-fallback",
+          "2": "m2a",
+          "4": "m2a",
+          "8": "m2a"
+        },
+        "model_sha256": {
+          "0": "e7e3441967fd834824af3b1122321106b2d8415d8233298a067e0382637829de",
+          "1": "a56467c8077cdb0c0d931898f5b7b317484c0614a28997042fb7188c88aa6d24",
+          "2": "d4f6e51e2afb47ab102c18f19da823aa66a0ac36e8716fa265e3ee36025a983a",
+          "3": "520e77a6f9577dbed49b963e1d7de03b0a587d19ef50b8552a26f387e02c4890",
+          "4": "4fb0fabe166293dce2deb0daf06f8aac00202ccfdaa583d15faefdd14e4b0c58",
+          "5": "d70f370efb1a11c030fee29faca7cf7529c1578b6eaba4093622389c01122b78",
+          "6": "3b4d344e730d3ccf6d40371aa109fcacff55efd0468d20e4d2a5ded075e71602",
+          "7": "d43a7871722c1f83d8ecf672201a7d6317df092e0321bea45d67c5df16b89124",
+          "8": "f8ec9238d79213c861cd98fb6b6d1bda257c352e07569ee239bc1bff645c928c",
+          "9": "6d5532fbef4b4972af42545d37366c011756319749beff0cb40a099b318f3a80"
+        }
+      },
+      "batio3_zbl": {
+        "atoms": 20000,
+        "cells": [10, 40, 10],
+        "domain_mode_by_rank": {
+          "1": "m1-fallback",
+          "2": "m2a",
+          "4": "m2a",
+          "8": "m2a"
+        },
+        "model_sha256": {
+          "0": "0fd8e54db9ccd4dd0b72ec89e2cab349965d230e7c1f97f642d28c125d246aaa",
+          "1": "5d69104d46e53b07ee141042387b376308fa9ee3f622d2055aa6c860166837f6",
+          "2": "9c1f5c781741eaeb5051923d04545153698837a9f3a3f3d6b1e21fc6ee6dae41",
+          "3": "6a57fb7a809c48123b15395b349de2e6e4c3297cdb039982fa1d771339d44cbd",
+          "4": "40094559f89fb627f6d57df66f94dd8042cbee259ecb2d6e49dc11906d3bf142",
+          "5": "c6426c8b47177b2a96a228710bde1bca4e1a6b9341077640a6d0edc189c18c28",
+          "6": "59646a083011f76f453b17bd47ba1ff15a0ffe774d70ce85f9e1cfa49dd4acf5",
+          "7": "545c97deafa05b3a53b1dd623a14d0155712916ea4c521b98170279a86746e15",
+          "8": "66247023e44f1e77daa128f1591a4123c0aeff7facdd21cd874d4f8699aaa84b",
+          "9": "bb833058814a7a349fe08245613d54aea8e351975d80a3c526a5482f193a7a94"
+        }
+      }
+    },
+    "release": {
+      "carbon_crystal": {
+        "atoms": 49152,
+        "cells": [8, 96, 8],
+        "domain_mode_by_rank": {
+          "1": "m1-fallback",
+          "2": "m2a",
+          "4": "m2a",
+          "8": "m2a"
+        },
+        "model_sha256": {
+          "0": "43f29842145de13db732b7eb3f4c1de2c2d7538e04e505b7ef59e306acc4e5af",
+          "1": "f8ba0c154590e4d7efa8fb19022f0c52e2fea24c0d32222c2814430df1e8c496",
+          "2": "b5b7f3075c4dab303ee7d1b366e3694b97fe0000b08142aa962f2c4e1b858043",
+          "3": "a34107be27e26d6da24b30689c4ffa2a7f68cf4ad9233112c350861574cf8799",
+          "4": "37cc2afa67c97fb94012760b5e3b84a89ee3abe4d5339d4d6f38a7e3817e5720",
+          "5": "9b021513817b742813233d59786696551718be296a6a1751b20b150500824084",
+          "6": "d43897147c1ec1cfe3acd9ad2b69779d74bf115b94952ecda2762eb4abe1fd2f",
+          "7": "4c2d190395503ca3b6be27fd86012e4e3bf5799b6bce797072645335cda4ad86",
+          "8": "9ff8f80cbc1b666182f88e52e40186ddfc56fbc0cfc1f2c0e7d14e045bcf14d5",
+          "9": "953567b181a71e848e9e266f33c56a820d6e4ad3f6e1e540e629787e14812c0a"
+        }
+      },
+      "dense_water": {
+        "atoms": 49152,
+        "cells": [8, 256, 8],
+        "domain_mode_by_rank": {
+          "1": "m1-fallback",
+          "2": "m2a",
+          "4": "m2a",
+          "8": "m2a"
+        },
+        "model_sha256": {
+          "0": "36409534c5e30ea10eb56da21317528d5195c4571fa4073c9e501f5e2f6ecaa1",
+          "1": "af0407d88249c2d0d11e87cfbd9e56d4f02c96b0c3e32cf59c2ca1a3cb0de4f5",
+          "2": "5ae397909b810576e8efba2cf1383859c45ea7e9b606fbe3c18e50ce7b4fd571",
+          "3": "f136e355cae813fb2622e7d5d480627d72bc4c4d0f5e20247a1628fa2ae1a639",
+          "4": "3bb684e8194051ef67a5afdd0457fe1c58baa99084579e3ab0f21a1f3231f3cb",
+          "5": "f73af71a94518ff0d5424ff79d1072b2ff496c47a6a2bd524359bf10468a3547",
+          "6": "f7762811c5bb714c304def1b7ea526ff811e8b963873088dfae659a337f730d9",
+          "7": "def89364944f017d8a2d08bd4698d5ec09af7bed0bc41a73331aff89473e0608",
+          "8": "ad11e3f9ecef53f17f62e39d9ee5930a335d37b0fe96ae777a2d683e00cec70f",
+          "9": "124fcc8455d6f3aaea77940b347dd0671e278deed8fae7ffc6ee969bec5a2159"
+        }
+      },
+      "batio3_zbl": {
+        "atoms": 40000,
+        "cells": [10, 80, 10],
+        "domain_mode_by_rank": {
+          "1": "m1-fallback",
+          "2": "m2a",
+          "4": "m2a",
+          "8": "m2a"
+        },
+        "model_sha256": {
+          "0": "28a64d4f7ec67fe1f776fbfbb0c7d0b38492e0b9c338bdf5b761bc59263038f6",
+          "1": "d5c5cd8071ff21b5d674caac8343d4b2ac1d9be1e01044a9d120bf93e0218883",
+          "2": "984598916e2b49a9b53ef4fa9dc81ee44653e822dbfa93f29b09d8ba26821c56",
+          "3": "475926217a2bfa29b67886cd1370b433fdadfb5c1b36a739294cf73591f16820",
+          "4": "e014afc9537c38c3f640ee177af4479a32ef78db4e2c3889689553bf779bb490",
+          "5": "a4309c06d5e0213841dd250dcac097998cedb935bb280197cc0b8328879a7e9c",
+          "6": "f2b67bec79030d643eb7a5cee6a4b2532994e5a397b1ccde230ea0d8bbd48da8",
+          "7": "0c0f2ee5bd0ee517fd6f9bb5c84dbae0eb1e2db3e1ff3e79fd71488b1f47b1b4",
+          "8": "665370caba00c24cd570bc447e9d747e278b0db2c2f0c45647e6a705293e5d4f",
+          "9": "8439c9d304296ab539eb9bb11226b8c15e100016ff29f4ac987cf1389c3e3b73"
+        }
+      }
     }
   },
   "acceptance": {
@@ -112,6 +253,12 @@
       "coverage": "physics",
       "potential": "tests/baseline/inputs/potentials/nep_C.txt",
       "potential_sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
+      "domain_mode_by_rank": {
+        "1": "m1-fallback",
+        "2": "m1-fallback",
+        "4": "m1-fallback",
+        "8": "m1-fallback"
+      },
       "rdf_rmax_A": 6.0,
       "rdf_bins": 120,
       "model_sha256": {
@@ -141,6 +288,12 @@
       "coverage": "physics",
       "potential": "tests/baseline/inputs/potentials/nep_water.txt",
       "potential_sha256": "8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3",
+      "domain_mode_by_rank": {
+        "1": "m1-fallback",
+        "2": "m2a",
+        "4": "m1-fallback",
+        "8": "m1-fallback"
+      },
       "rdf_rmax_A": 6.0,
       "rdf_bins": 120,
       "model_sha256": {
@@ -171,6 +324,12 @@
       "coverage": "physics",
       "potential": "tests/baseline/inputs/potentials/nep_BaTiO3_zbl.txt",
       "potential_sha256": "d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02",
+      "domain_mode_by_rank": {
+        "1": "m1-fallback",
+        "2": "m2a",
+        "4": "m1-fallback",
+        "8": "m1-fallback"
+      },
       "rdf_rmax_A": 6.0,
       "rdf_bins": 120,
       "model_sha256": {

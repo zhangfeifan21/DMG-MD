@@ -4,26 +4,24 @@
 // subset in src/gpumd_compat (copied from the pinned reference commit
 // 9d23496e41319b9e2af5221a7df6285387401d1e, numerics unchanged).  DMG-MD
 // must never include or link ../gpumd-reference directly.
-#include "gpumd_compat/box.cuh"
-#include "gpumd_compat/common.cuh"
-#include "gpumd_compat/gpu_vector.cuh"
-#include "gpumd_compat/nep.cuh"
+//
+// File layout since M2a: this translation unit keeps the M1/P1
+// replicated-full runtime and the GPUMD-compatible output formatters shared
+// with the local-domain runtime; the pieces both runtimes need live in
+// src/runtime_internal.hpp, and the M2a local-domain runtime lives in
+// src/domain_runtime.cu. run_replicated() is the mode dispatcher
+// (docs/plans/domain-decomposition.md section 3.3).
+#include "runtime_internal.hpp"
 
 #include <cuda_runtime.h>
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -34,450 +32,15 @@
 #include <vector>
 
 namespace dmgmd {
-namespace {
+namespace detail {
 
-using gpumd_compat::Box;
-using gpumd_compat::GPU_Vector;
 using gpumd_compat::NEP;
 using gpumd_compat::Potential;
 // K_B is a #define in gpumd_compat/common.cuh and needs no using-declaration.
 using gpumd_compat::PRESSURE_UNIT_CONVERSION;
 using gpumd_compat::TIME_UNIT_CONVERSION;
 
-constexpr int kThreads = 128;
-constexpr int kThermoThreads = 1024;
-
-void check_cuda(cudaError_t status, const char* operation)
-{
-  if (status != cudaSuccess) {
-    throw std::runtime_error(
-        std::string(operation) + ": " + cudaGetErrorString(status));
-  }
-}
-
-int checked_int(std::size_t value, const char* name)
-{
-  if (value > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-    throw std::length_error(std::string(name) + " exceeds GPUMD's int range");
-  }
-  return static_cast<int>(value);
-}
-
-std::uint64_t file_fingerprint(const std::filesystem::path& path)
-{
-  std::ifstream input(path, std::ios::binary);
-  if (!input) throw std::runtime_error("cannot fingerprint input file '" + path.string() + "'");
-  std::uint64_t hash = UINT64_C(1469598103934665603);
-  char byte = 0;
-  while (input.get(byte)) {
-    hash ^= static_cast<unsigned char>(byte);
-    hash *= UINT64_C(1099511628211);
-  }
-  return hash;
-}
-
-// mkdtemp replaces exactly six trailing 'X' characters with random text.
-constexpr std::size_t kScratchRandomSuffixLength = 6;
-
-// Test-only fault injection hook. Setting
-// DMGMD_RANK_IO_FAULT="<world_rank>:<operation>" (operation in {mkdir, file,
-// chdir, setup_restore, restore, cleanup}) makes exactly that rank fail
-// exactly that step, with no filesystem side effect.
-// tests/mpi/run_rank_io_isolation.py uses it to prove that one rank's local
-// failure routes every rank through the same bounded failure exit instead of
-// hanging in a collective. Unset or non-matching values disable injection.
-bool rank_io_fault_requested(const char* operation, int world_rank)
-{
-  const char* value = std::getenv("DMGMD_RANK_IO_FAULT");
-  if (value == nullptr) return false;
-  const std::string specification(value);
-  const std::size_t separator = specification.find(':');
-  if (separator == std::string::npos) return false;
-  return specification.substr(0, separator) == std::to_string(world_rank) &&
-         specification.substr(separator + 1) == operation;
-}
-
-// Normalizes a trailing separator (e.g. TMPDIR="/tmp/") so the safety
-// boundary's parent comparison against the recorded temp root is exact.
-std::filesystem::path strip_trailing_separators(std::filesystem::path path)
-{
-  while (path.has_relative_path() && path.filename().empty()) {
-    path = path.parent_path();
-  }
-  return path;
-}
-
-// Random hex token used only for scratch naming and diagnostics. Uniqueness of
-// the scratch directories themselves is owned by mkdtemp, so even a repeated
-// nonce across concurrent jobs cannot make two ranks share a directory.
-std::string make_job_nonce()
-{
-  // The nonce is diagnostic only; mkdtemp owns directory uniqueness. Keep
-  // generation free of entropy-device failures because rank 0 produces it
-  // before the first isolation collective.
-  std::uint64_t value = static_cast<std::uint64_t>(
-      std::chrono::high_resolution_clock::now().time_since_epoch().count());
-  value ^= static_cast<std::uint64_t>(
-      std::chrono::steady_clock::now().time_since_epoch().count()) << 1;
-  static constexpr char kHexadecimal[] = "0123456789abcdef";
-  std::string nonce(16, '0');
-  for (std::size_t index = nonce.size(); index-- > 0;) {
-    nonce[index] = kHexadecimal[value & UINT64_C(0xF)];
-    value >>= 4;
-  }
-  return nonce;
-}
-
-// Guards the broadcast nonce against anything that is not a safe, fixed-shape
-// path component. A violation is identical on every rank (they all received
-// the same broadcast), so throwing here is already a symmetric exit.
-bool is_hex_token(const std::string& text)
-{
-  if (text.size() != 16) return false;
-  for (const unsigned char character : text) {
-    if (!((character >= '0' && character <= '9') ||
-          (character >= 'a' && character <= 'f'))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// One self-describing diagnostic per rank. World rank and hostname are what
-// an operator needs to locate the failing node in a multi-node job; the
-// target path and reason identify the local filesystem failure.
-std::string rank_io_diagnostic(
-    const MpiRuntime& mpi,
-    const char* operation,
-    const std::filesystem::path& target,
-    const std::string& reason)
-{
-  return "rank=" + std::to_string(mpi.world_rank()) + " hostname=" + mpi.hostname() +
-         " " + operation + " " + target.string() + ": " + reason;
-}
-
-// File ownership is part of docs/standards/replicated-mpi.md, not merely a
-// test setup: only world rank 0 may write the user's job directory, while
-// legacy GPUMD-derived code opens files by relative name (ordinary NEP
-// appends neighbor.out every 1000 force calls). Every non-root rank therefore
-// executes inside a private scratch directory on its OWN node. The previous
-// design let rank 0 create one shared temp root and broadcast its path, which
-// silently assumed a cross-node visible /tmp and could hang when a remote
-// chdir failed; no filesystem path is broadcast anymore.
-//
-// Protocol: docs/standards/replicated-mpi.md "I/O 与 NEP_MULTIGPU"; remaining
-// dual-node verification: docs/plans/multi-node-io.md.
-//   * Setup is a two-phase collective. Each non-root rank locally creates
-//     <local tmp>/dmgmd-rank-io-<nonce>-r<rank>-XXXXXX with mkdtemp - one
-//     atomic step that is unique by construction and owner-only (mode 0700,
-//     independent of umask) - creates a plain neighbor.out inside, and chdirs
-//     there. All local failures are captured, never thrown directly; one
-//     success-flag Allreduce decides the outcome. On any failure every rank
-//     restores its own cwd first, then all ranks leave through one shared
-//     failure exit (identical exception everywhere -> bounded MPI_Abort, no
-//     rank left waiting in a collective).
-//   * finish() runs three ordered phases: (1) restore-cwd reduction, where
-//     any failure fails the job; (2) local deletion of the rank's OWN
-//     directory behind a safety boundary; (3) a cleanup status summary, where
-//     failure only warns and keeps the exact directory for diagnosis.
-//   * The destructor is local, best-effort and MPI-free; collectives run only
-//     in finish(), never during stack unwinding.
-class RankIoIsolation {
- public:
-  explicit RankIoIsolation(MpiRuntime& mpi)
-      : mpi_(mpi)
-  {
-    if (mpi_.world_size() == 1) return;
-
-    // Capturing cwd is itself a rank-local filesystem operation. Keep its
-    // error inside the same setup handshake as TMPDIR/mkdtemp/file/chdir so a
-    // single broken cwd cannot strand peers in a later collective.
-    std::string setup_error;
-    if (!mpi_.is_root()) {
-      std::error_code error;
-      original_ = std::filesystem::current_path(error);
-      if (error) {
-        setup_error = rank_io_diagnostic(
-            mpi_, "resolve original cwd", std::filesystem::path("<cwd>"), error.message());
-      }
-    }
-
-    // The nonce is a naming/diagnostic token only (see make_job_nonce).
-    std::string nonce;
-    if (mpi_.is_root()) nonce = make_job_nonce();
-    nonce = mpi_.broadcast_string(std::move(nonce));
-    if (!is_hex_token(nonce)) {
-      throw std::logic_error("rank I/O isolation received a malformed job nonce");
-    }
-    name_prefix_ =
-        "dmgmd-rank-io-" + nonce + "-r" + std::to_string(mpi_.world_rank()) + "-";
-
-    // Phase 1: local preparation with captured errors. A direct throw here
-    // would strand the other ranks inside the status Allreduce below.
-    if (!mpi_.is_root() && setup_error.empty()) {
-      setup_error = prepare_local_scratch();
-    }
-
-    // Phase 2: one collective outcome for the whole world. On any local
-    // failure every rank restores its cwd FIRST (a rank must not unwind while
-    // still sitting inside the directory being diagnosed), removes its own
-    // half-built or completed scratch best-effort, and only then all ranks
-    // throw the same aggregated error.
-    if (!mpi_.allreduce_all_passed(setup_error.empty(),
-                                   "reduce rank I/O isolation setup status")) {
-      std::string error = setup_error;
-      const std::string restore = restore_cwd("setup_restore");
-      if (!restore.empty()) error += error.empty() ? restore : "; " + restore;
-      std::string removal_note;
-      if (restore.empty()) {
-        try_delete_scratch(&removal_note);
-      } else if (!scratch_.empty()) {
-        removal_note = rank_io_diagnostic(
-            mpi_, "keep scratch after failed cwd restore", scratch_, "cleanup skipped");
-      }
-      if (!removal_note.empty()) error += error.empty() ? removal_note : "; " + removal_note;
-      fail_together("setup", error);
-    }
-    active_ = true;
-  }
-
-  // Local, best-effort, MPI-free unwind guarantee. finish() owns all
-  // collective teardown; this covers exceptions thrown between setup and
-  // finish(), where running collectives during unwinding could deadlock.
-  // Failures are not reported - the originating exception owns the exit.
-  ~RankIoIsolation() noexcept
-  {
-    if (!active_) return;
-    try {
-      if (in_scratch_ && !restore_cwd().empty()) return;
-      if (!scratch_.empty()) {
-        std::string ignored;
-        try_delete_scratch(&ignored);
-      }
-    } catch (...) {
-      // Best-effort destructors must never replace the exception currently
-      // unwinding the runtime. A failed cleanup deliberately leaves scratch.
-    }
-  }
-
-  // Symmetric teardown; every rank must call it exactly once (run_replicated
-  // does, after all segments completed successfully).
-  void finish()
-  {
-    if (!active_) return;
-
-    // Phase 1 - restore reduction. A rank that cannot leave its scratch
-    // directory must not have that directory removed, and a job with unknown
-    // cwd state must not report success: any restore failure fails the job
-    // through the shared exit.
-    std::string restore_error;
-    if (!mpi_.is_root() && in_scratch_) {
-      restore_error = restore_cwd("restore");
-    }
-    if (!mpi_.allreduce_all_passed(restore_error.empty(),
-                                   "reduce rank I/O isolation restore status")) {
-      // A genuinely failing rank may still sit in its scratch directory; the
-      // destructor retries that restore locally during unwinding.
-      fail_together("restore", restore_error);
-    }
-
-    // Phase 2 - local delete. Every rank is now provably outside its scratch
-    // directory, so each non-root rank removes its OWN directory behind the
-    // safety boundary in try_delete_scratch. rank 0 never touches another
-    // node's paths.
-    std::string cleanup_error;
-    if (!mpi_.is_root()) {
-      if (rank_io_fault_requested("cleanup", mpi_.world_rank())) {
-        cleanup_error =
-            rank_io_diagnostic(mpi_, "remove scratch directory", scratch_, "injected");
-      } else {
-        try_delete_scratch(&cleanup_error);
-      }
-    }
-
-    // Phase 3 - cleanup summary. The MD results are already complete, so a
-    // cleanup failure is a warning, not a job failure: rank 0 reports each
-    // affected rank and the exact directory is kept for diagnosis.
-    if (!mpi_.allreduce_all_passed(cleanup_error.empty(),
-                                   "reduce rank I/O isolation cleanup status")) {
-      const std::vector<std::string> diagnostics = mpi_.gather_strings(cleanup_error);
-      if (mpi_.is_root()) {
-        for (int rank = 0; rank < mpi_.world_size(); ++rank) {
-          const std::string& entry = diagnostics[static_cast<std::size_t>(rank)];
-          if (!entry.empty()) {
-            std::cout << "DMGMD_RANK_IO_CLEANUP status=warning " << entry << '\n';
-            std::cout.flush();
-          }
-        }
-      }
-    }
-    active_ = false;
-  }
-
- private:
-  // Creates this rank's private scratch directory on the LOCAL node and
-  // enters it. Returns an empty string on success, or a self-describing
-  // diagnostic; nothing here throws, and on failure the rank is never left
-  // inside a directory it did not fully set up.
-  std::string prepare_local_scratch()
-  {
-    std::error_code error;
-    std::filesystem::path temp_root = std::filesystem::temp_directory_path(error);
-    if (error) {
-      return rank_io_diagnostic(mpi_, "resolve temporary directory",
-                                std::filesystem::path("<TMPDIR>"), error.message());
-    }
-    temp_root_ = strip_trailing_separators(std::move(temp_root));
-    if (temp_root_.is_relative()) {
-      temp_root_ = (original_ / temp_root_).lexically_normal();
-    }
-
-    if (rank_io_fault_requested("mkdir", mpi_.world_rank())) {
-      return rank_io_diagnostic(mpi_, "create scratch directory",
-                                temp_root_ / (name_prefix_ + "XXXXXX"), "injected");
-    }
-    // mkdtemp is the atomic-unique, owner-only primitive: it creates the
-    // final directory in one uninterruptible step with mode 0700 (regardless
-    // of umask) and re-randomizes the six trailing X characters until unique.
-    // Remnants of an abnormally ended earlier job can never be reused, and
-    // uniqueness never depends on the broadcast nonce or a timestamp.
-    std::string pattern = (temp_root_ / (name_prefix_ + "XXXXXX")).string();
-    std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
-    mutable_pattern.push_back('\0');
-    if (mkdtemp(mutable_pattern.data()) == nullptr) {
-      return rank_io_diagnostic(mpi_, "create scratch directory", temp_root_,
-                                std::strerror(errno));
-    }
-    scratch_ = std::filesystem::path(mutable_pattern.data());
-
-    // A plain regular neighbor.out: legacy NEP opens it by relative name and
-    // appends, and the whole directory is deleted at teardown. This replaces
-    // the old neighbor.out -> /dev/null symlink, removing that extra per-rank
-    // failure point while keeping multi-rank append impossible.
-    const std::filesystem::path neighbor = scratch_ / "neighbor.out";
-    if (rank_io_fault_requested("file", mpi_.world_rank())) {
-      return rank_io_diagnostic(mpi_, "create scratch neighbor.out", neighbor, "injected");
-    }
-    if (FILE* sink = std::fopen(neighbor.c_str(), "a"); sink == nullptr) {
-      return rank_io_diagnostic(mpi_, "create scratch neighbor.out", neighbor,
-                                std::strerror(errno));
-    } else {
-      std::fclose(sink);
-    }
-
-    if (rank_io_fault_requested("chdir", mpi_.world_rank())) {
-      return rank_io_diagnostic(mpi_, "enter scratch directory", scratch_, "injected");
-    }
-    std::filesystem::current_path(scratch_, error);
-    if (error) {
-      return rank_io_diagnostic(mpi_, "enter scratch directory", scratch_, error.message());
-    }
-    in_scratch_ = true;
-    return std::string();
-  }
-
-  // Best-effort return to the original working directory: empty string on
-  // success (or when this rank never chdir'd), a diagnostic on failure.
-  // Never throws - callers are already handling a failure.
-  std::string restore_cwd(const char* fault_operation = nullptr)
-  {
-    if (!in_scratch_) return std::string();
-    if (fault_operation != nullptr &&
-        rank_io_fault_requested(fault_operation, mpi_.world_rank())) {
-      return rank_io_diagnostic(mpi_, "restore cwd", original_, "injected");
-    }
-    std::error_code error;
-    std::filesystem::current_path(original_, error);
-    if (error) {
-      return rank_io_diagnostic(mpi_, "restore cwd", original_, error.message());
-    }
-    in_scratch_ = false;
-    return std::string();
-  }
-
-  // Deletes this rank's OWN scratch directory behind the safety boundary: the
-  // target must still sit directly inside the temp root recorded at setup,
-  // its basename must be exactly the expected prefix plus mkdtemp's six
-  // random characters, and it must be a real directory (symlink_status does
-  // not follow links, so a swapped-in symlink is rejected). Any mismatch or
-  // removal error keeps the directory and reports; deletion never widens.
-  bool try_delete_scratch(std::string* diagnostic)
-  {
-    if (scratch_.empty()) return true;  // rank 0, or the directory never existed
-    if (in_scratch_) {
-      *diagnostic = rank_io_diagnostic(
-          mpi_, "scratch safety check failed; directory kept", scratch_,
-          "process cwd is still inside scratch");
-      return false;
-    }
-    std::error_code error;
-    const std::string name = scratch_.filename().string();
-    const bool parent_matches = scratch_.parent_path() == temp_root_;
-    const bool name_matches =
-        name.size() == name_prefix_.size() + kScratchRandomSuffixLength &&
-        name.compare(0, name_prefix_.size(), name_prefix_) == 0;
-    const std::filesystem::file_status status =
-        std::filesystem::symlink_status(scratch_, error);
-    const bool target_is_directory =
-        !error && status.type() == std::filesystem::file_type::directory;
-    if (parent_matches && name_matches && target_is_directory) {
-      std::filesystem::remove_all(scratch_, error);
-      if (!error) {
-        scratch_.clear();
-        return true;
-      }
-      *diagnostic =
-          rank_io_diagnostic(mpi_, "remove scratch directory", scratch_, error.message());
-      return false;
-    }
-    const char* reason = !parent_matches ? "parent is not the recorded temp root"
-                        : !name_matches ? "basename does not match this rank's scratch prefix"
-                                        : "target is not a plain directory";
-    *diagnostic = rank_io_diagnostic(mpi_, "scratch safety check failed; directory kept",
-                                     scratch_, reason);
-    return false;
-  }
-
-  // Shared failure exit, reached only after a completed status Allreduce, so
-  // the diagnostic gather and message broadcast below cannot deadlock. All
-  // ranks throw one identical exception; main() logs it and the job ends
-  // through the regular MPI_Abort path with nobody stuck in a collective.
-  [[noreturn]] void fail_together(const char* phase, const std::string& local_error)
-  {
-    const std::vector<std::string> diagnostics = mpi_.gather_strings(local_error);
-    std::string message = std::string("rank I/O isolation ") + phase + " failed";
-    if (mpi_.is_root()) {
-      for (int rank = 0; rank < mpi_.world_size(); ++rank) {
-        const std::string& entry = diagnostics[static_cast<std::size_t>(rank)];
-        if (!entry.empty()) message += "; " + entry;
-      }
-    }
-    throw std::runtime_error(mpi_.broadcast_string(std::move(message)));
-  }
-
-  MpiRuntime& mpi_;
-  std::filesystem::path original_;  // non-root absolute cwd captured during setup
-  std::filesystem::path temp_root_;  // this rank's local temp root, recorded at setup
-  std::filesystem::path scratch_;    // empty on rank 0 (no scratch, no chdir)
-  std::string name_prefix_;          // "dmgmd-rank-io-<nonce>-r<rank>-"
-  bool in_scratch_ = false;
-  bool active_ = false;
-};
-
-Box make_box(const BoxData& input)
-{
-  Box box{};
-  box.pbc_x = input.periodic[0];
-  box.pbc_y = input.periodic[1];
-  box.pbc_z = input.periodic[2];
-  std::copy(input.h.begin(), input.h.end(), box.cpu_h);
-  box.get_inverse();
-  box.set_is_orthogonal();
-  if (!std::isfinite(box.get_volume()) || box.get_volume() <= 0.0) {
-    throw std::runtime_error("model.xyz lattice has non-positive volume");
-  }
-  return box;
-}
+namespace {
 
 class DeviceAtoms {
  public:
@@ -537,16 +100,6 @@ class DeviceAtoms {
   GPU_Vector<double> virial;
   GPU_Vector<double> unwrapped;
   GPU_Vector<double> previous_position;
-};
-
-struct HostSnapshot {
-  std::vector<unsigned long long> global_id;
-  std::vector<double> position;
-  std::vector<double> velocity;
-  std::vector<double> force;
-  std::vector<double> potential;
-  std::vector<double> virial;
-  std::vector<double> unwrapped;
 };
 
 // Persistent M1 spatial ownership state plus its device mirrors and the
@@ -802,62 +355,6 @@ HostSnapshot gather_owned_snapshot(
   return snapshot;
 }
 
-__global__ void wrap_positions(
-    int local_count,
-    int stride,
-    Box box,
-    double* position)
-{
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
-  if (atom >= local_count) {
-    return;
-  }
-  double x = position[atom];
-  double y = position[stride + atom];
-  double z = position[2 * stride + atom];
-  double sx = box.cpu_h[9] * x + box.cpu_h[10] * y + box.cpu_h[11] * z;
-  double sy = box.cpu_h[12] * x + box.cpu_h[13] * y + box.cpu_h[14] * z;
-  double sz = box.cpu_h[15] * x + box.cpu_h[16] * y + box.cpu_h[17] * z;
-  if (box.pbc_x == 1) {
-    if (sx < 0.0) sx += 1.0;
-    else if (sx > 1.0) sx -= 1.0;
-  }
-  if (box.pbc_y == 1) {
-    if (sy < 0.0) sy += 1.0;
-    else if (sy > 1.0) sy -= 1.0;
-  }
-  if (box.pbc_z == 1) {
-    if (sz < 0.0) sz += 1.0;
-    else if (sz > 1.0) sz -= 1.0;
-  }
-  position[atom] = box.cpu_h[0] * sx + box.cpu_h[1] * sy + box.cpu_h[2] * sz;
-  position[stride + atom] =
-      box.cpu_h[3] * sx + box.cpu_h[4] * sy + box.cpu_h[5] * sz;
-  position[2 * stride + atom] =
-      box.cpu_h[6] * sx + box.cpu_h[7] * sy + box.cpu_h[8] * sz;
-}
-
-__global__ void clear_owned_properties(
-    int begin,
-    int end,
-    int stride,
-    double* force,
-    double* potential,
-    double* virial)
-{
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x + begin;
-  if (atom >= end) {
-    return;
-  }
-  force[atom] = 0.0;
-  force[stride + atom] = 0.0;
-  force[2 * stride + atom] = 0.0;
-  potential[atom] = 0.0;
-  for (int component = 0; component < 9; ++component) {
-    virial[component * stride + atom] = 0.0;
-  }
-}
-
 // M1 kernels iterate an owned slot index list instead of a contiguous
 // [begin,end) range: spatial slab ownership is an arbitrary subset of the
 // replicated slots. The per-atom arithmetic is unchanged, so a P=1 run whose
@@ -965,20 +462,6 @@ __global__ void find_owned_thermo_sums(
   }
 }
 
-__global__ void normalize_global_thermo(
-    int global_count,
-    double volume,
-    double* thermo)
-{
-  const int quantity = threadIdx.x;
-  if (quantity >= 8) return;
-  if (quantity == 0) {
-    thermo[quantity] /= 3.0 * global_count * K_B;
-  } else if (quantity >= 2) {
-    thermo[quantity] /= volume;
-  }
-}
-
 __global__ void scale_owned_velocity(
     const int* owned_indices,
     int owned_count,
@@ -995,10 +478,6 @@ __global__ void scale_owned_velocity(
   velocity[stride + atom] *= factor;
   velocity[2 * stride + atom] *= factor;
 }
-
-struct ThermoState {
-  std::array<double, 8> values{};
-};
 
 ThermoState compute_thermo(
     DeviceAtoms& atoms,
@@ -1027,17 +506,22 @@ ThermoState compute_thermo(
 
 class NepForce {
  public:
-  NepForce(const std::string& filename, const AtomCounts& counts)
-      : nep_(filename.c_str(), checked_int(counts.local_count(), "local_count"))
+  // Takes over the exactly-once parsed NEP (M2a contract: the potential
+  // parameters are never re-parsed) and sizes the replicated-full workspace
+  // for the global atom count.
+  NepForce(std::unique_ptr<NEP> potential, const AtomCounts& counts)
+      : nep_(std::move(potential))
   {
-    // See the NEP completeness proof in docs/standards/replicated-mpi.md. The pinned
-    // ordinary NEP implementation reads Fp(n2) and reverse
-    // directed partials belonging to neighboring centers. Merely assigning a
-    // rank-local N1/N2 leaves those arrays incomplete. Until phase-level
-    // intermediate exchange exists, every rank evaluates full NEP scratch and
-    // the runtime grants authority only to its M1 spatial-ownership outputs.
-    nep_.N1 = 0;
-    nep_.N2 = checked_int(counts.local_count(), "local_count");
+    const int local = checked_int(counts.local_count(), "local_count");
+    nep_->allocate_workspace(local);
+    // See the NEP completeness proof in docs/standards/replicated-mpi.md. The
+    // pinned ordinary NEP implementation reads Fp(n2) and reverse directed
+    // partials belonging to neighboring centers. Merely assigning a rank-local
+    // N1/N2 leaves those arrays incomplete. Until phase-level intermediate
+    // exchange exists, every rank evaluates full NEP scratch and the runtime
+    // grants authority only to its M1 spatial-ownership outputs.
+    nep_->N1 = 0;
+    nep_->N2 = local;
   }
 
   void compute(Box& box, DeviceAtoms& atoms)
@@ -1049,12 +533,376 @@ class NepForce {
     clear_owned_properties<<<(local + kThreads - 1) / kThreads, kThreads>>>(
         0, local, local, atoms.force.data(), atoms.potential.data(), atoms.virial.data());
     check_cuda(cudaGetLastError(), "prepare NEP force buffers");
-    nep_.compute(box, atoms.type, atoms.position, atoms.potential, atoms.force, atoms.virial);
+    nep_->compute(box, atoms.type, atoms.position, atoms.potential, atoms.force,
+                  atoms.virial);
   }
 
  private:
-  NEP nep_;
+  std::unique_ptr<NEP> nep_;
 };
+
+std::vector<std::size_t> all_owned_indices(const HostAtoms& atoms)
+{
+  std::vector<std::size_t> result(atoms.counts.owned_count);
+  for (std::size_t index = 0; index < result.size(); ++index) result[index] = index;
+  return result;
+}
+
+double adaptive_time_step(
+    DeviceAtoms& atoms,
+    const RuntimeOwnership& ownership,
+    double initial_time_step,
+    const std::optional<double>& maximum_distance,
+    MpiRuntime& mpi,
+    CommunicationVolume& communication)
+{
+  if (!maximum_distance) return initial_time_step;
+  std::vector<double> velocity(atoms.velocity.size());
+  atoms.velocity.copy_to_host(velocity.data());
+  const std::size_t stride = atoms.counts.local_count();
+  double maximum_squared = 0.0;
+  for (std::size_t slot : ownership.current().owned_indices()) {
+    const double vx = velocity[slot];
+    const double vy = velocity[stride + slot];
+    const double vz = velocity[2 * stride + slot];
+    maximum_squared = std::max(maximum_squared, vx * vx + vy * vy + vz * vz);
+  }
+  maximum_squared = mpi.allreduce_max_host(maximum_squared, communication);
+  const double limited = maximum_squared == 0.0
+                             ? initial_time_step
+                             : *maximum_distance / std::sqrt(maximum_squared);
+  return limited < initial_time_step ? limited : initial_time_step;
+}
+
+void correct_device_velocity(
+    DeviceAtoms& device,
+    const HostAtoms& identity,
+    const CorrectVelocityCommand& command,
+    MpiRuntime& mpi,
+    CommunicationVolume& communication)
+{
+  std::vector<double> position(device.position.size());
+  std::vector<double> velocity(device.velocity.size());
+  if (mpi.is_root()) {
+    device.position.copy_to_host(position.data());
+    device.velocity.copy_to_host(velocity.data());
+  }
+  if (mpi.is_root() && !command.grouping_method) {
+    correct_velocity_subset(identity.mass, position, velocity, all_owned_indices(identity));
+  } else if (mpi.is_root()) {
+    const std::size_t method = static_cast<std::size_t>(*command.grouping_method);
+    if (method >= identity.group_labels.size()) {
+      throw std::runtime_error("correct_velocity grouping method is out of range");
+    }
+    int maximum_group = -1;
+    for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
+      maximum_group = std::max(maximum_group, identity.group_labels[method][atom]);
+    }
+    for (int group = 0; group <= maximum_group; ++group) {
+      std::vector<std::size_t> subset;
+      for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
+        if (identity.group_labels[method][atom] == group) subset.push_back(atom);
+      }
+      correct_velocity_subset(identity.mass, position, velocity, subset);
+    }
+  }
+  if (mpi.is_root()) device.upload_velocity(velocity);
+  mpi.broadcast_device(
+      device.velocity.data(), device.velocity.size(), communication);
+}
+
+void launch_velocity_verlet(
+    DeviceAtoms& atoms,
+    const RuntimeOwnership& ownership,
+    bool first_half,
+    double time_step)
+{
+  const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
+  if (owned_count == 0) return;  // An empty spatial slab integrates nothing.
+  const int stride = checked_int(atoms.counts.local_count(), "local_count");
+  velocity_verlet<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
+      first_half, ownership.plan().device_owned_indices, owned_count, stride,
+      time_step, atoms.mass.data(), atoms.position.data(), atoms.velocity.data(),
+      atoms.force.data());
+  if (first_half && atoms.has_unwrapped()) {
+    update_unwrapped<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
+        ownership.plan().device_owned_indices, owned_count, stride,
+        atoms.position.data(), atoms.previous_position.data(),
+        atoms.unwrapped.data());
+  }
+  check_cuda(cudaGetLastError(), first_half ? "velocity-Verlet first half"
+                                            : "velocity-Verlet second half");
+}
+
+void run_segment(
+    int steps,
+    double base_time_step,
+    const std::optional<double>& maximum_distance,
+    const EnsembleCommand& ensemble,
+    const std::optional<CorrectVelocityCommand>& velocity_correction,
+    const std::vector<Measurement>& measurements,
+    double& global_time,
+    std::uint64_t& global_step,
+    Box& box,
+    HostAtoms& identity,
+    DeviceAtoms& atoms,
+    NepForce& force,
+    RuntimeOwnership& ownership,
+    MpiRuntime& mpi)
+{
+  // Per-step protocol (docs/standards/replicated-mpi.md, M1): integrate the
+  // currently owned slots, allgather replicated coordinates, evaluate full
+  // NEP scratch, recompute spatial ownership and migrate the dynamic state
+  // under the old ownership, then integrate/thermo/output under the new
+  // ownership. Replicated velocity is not refreshed every step (M0): the only
+  // remaining consumers of non-owned velocity are correct_velocity (restored
+  // here on trigger steps) and ownership migration itself (which syncs the
+  // authoritative half-step velocity before a new owner takes over).
+  int thermo_count = 0;
+  int restart_count = 0;
+  for (const Measurement& measurement : measurements) {
+    if (std::holds_alternative<DumpThermoCommand>(measurement)) ++thermo_count;
+    if (std::holds_alternative<DumpRestartCommand>(measurement)) ++restart_count;
+  }
+  if (thermo_count > 1 || restart_count > 1) {
+    throw std::runtime_error("multiple dump_thermo or dump_restart commands within one run");
+  }
+  for (const Measurement& measurement : measurements) {
+    if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
+      if (mpi.is_root()) {
+        FILE* file = std::fopen("thermo.out", "a");
+        if (!file) throw std::runtime_error("cannot open thermo.out");
+        write_thermo_header(file, dump->interval, identity, base_time_step);
+        std::fclose(file);
+      }
+    }
+    if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+      if (dump->quantities.group_labels && identity.group_labels.empty()) {
+        throw std::runtime_error("cannot output group labels without model groups");
+      }
+    }
+  }
+
+  GPU_Vector<double> device_thermo(8);
+  force.compute(box, atoms);
+  for (int step = 0; step < steps; ++step) {
+    CommunicationVolume communication;
+    // 1. correct_velocity trigger: restore the replicated velocity under the
+    // CURRENT ownership so the root's CPU correction reads fresh values.
+    if (velocity_correction && step % velocity_correction->interval == 0) {
+      mpi.allgather_indexed_device_soa(
+          atoms.velocity.data(), 3, atoms.counts.local_count(),
+          ownership.plan(), communication);
+      correct_device_velocity(atoms, identity, *velocity_correction, mpi, communication);
+    }
+    // 2. Adaptive timestep scans only the currently owned slots.
+    const double time_step = adaptive_time_step(
+        atoms, ownership, base_time_step, maximum_distance, mpi, communication);
+    global_time += time_step;
+    if (atoms.has_unwrapped()) {
+      atoms.previous_position.copy_from_device(atoms.position.data());
+    }
+    // 3. VV first half + position/unwrapped update: current owned slots.
+    launch_velocity_verlet(atoms, ownership, true, time_step);
+    // 4. Indexed position Allgatherv restores the replicated state.
+    mpi.allgather_indexed_device_soa(
+        atoms.position.data(), 3, atoms.counts.local_count(),
+        ownership.plan(), communication);
+    // 5. Full replicated NEP (wrap + clear + compute), unchanged from M0.
+    force.compute(box, atoms);
+    // 6-7. Recompute the spatial owner map from the wrapped positions,
+    // verify it matches on every rank, migrate velocity/unwrapped under the
+    // OLD ownership, and only then adopt the new ownership (epoch++).
+    ownership.recompute_and_commit(atoms, mpi, communication, global_step + 1);
+    // 8. VV second half, thermo, Berendsen and output gather run under the
+    // NEW ownership: an atom that crossed a slab boundary finishes its step
+    // with its new owner, exactly once.
+    launch_velocity_verlet(atoms, ownership, false, time_step);
+    const ThermoState thermo = compute_thermo(
+        atoms, box, ownership, device_thermo, mpi, communication);
+
+    if (ensemble.kind == EnsembleKind::nvt_ber) {
+      const double fraction = static_cast<double>(step) / static_cast<double>(steps);
+      const double target = ensemble.initial_temperature +
+                            (ensemble.final_temperature - ensemble.initial_temperature) * fraction;
+      const double coupling = 1.0 / ensemble.temperature_coupling;
+      if (coupling > 1.0e-5) {
+        const double factor = std::sqrt(1.0 + coupling * (target / thermo.values[0] - 1.0));
+        const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
+        if (owned_count != 0) {
+          const int stride = checked_int(atoms.counts.local_count(), "local_count");
+          scale_owned_velocity<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
+              ownership.plan().device_owned_indices, owned_count, stride, factor,
+              atoms.velocity.data());
+        }
+        check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
+      }
+    }
+    bool need_snapshot = false;
+    for (const Measurement& measurement : measurements) {
+      if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+        need_snapshot = need_snapshot || ((step + 1) % dump->interval == 0);
+      } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
+        need_snapshot = need_snapshot || ((step + 1) % restart->interval == 0);
+      }
+    }
+    std::optional<HostSnapshot> snapshot;
+    if (need_snapshot) {
+      snapshot = gather_owned_snapshot(atoms, ownership.plan(), mpi, communication);
+    }
+
+    for (const Measurement& measurement : measurements) {
+      if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
+        if ((step + 1) % dump->interval == 0) {
+          if (mpi.is_root()) {
+            FILE* file = std::fopen("thermo.out", "a");
+            if (!file) throw std::runtime_error("cannot open thermo.out");
+            write_thermo_row(file, thermo, identity, box);
+            std::fclose(file);
+          }
+        }
+      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+        if (mpi.is_root() && (step + 1) % dump->interval == 0) {
+          write_xyz(*dump, step, global_time, box, identity, *snapshot, thermo);
+        }
+      } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
+        if (mpi.is_root() && (step + 1) % restart->interval == 0) {
+          write_restart(box, identity, *snapshot);
+        }
+      }
+    }
+    ++global_step;
+    mpi.log_step_communication(global_step, communication);
+  }
+}
+
+// The M1 replicated-full runtime: also the P=1 path and the M2a fallback for
+// inputs that do not meet the local-domain eligibility criteria. Behavior is
+// unchanged from the M1 milestone; only the NEP construction moved to the
+// dispatcher (parsed exactly once, workspace sized here).
+void run_m1_replicated(
+    const RunProgram& program,
+    Model model,
+    gpumd_compat::Box box,
+    std::unique_ptr<NEP> potential,
+    const std::string& potential_filename,
+    MpiRuntime& mpi)
+{
+  const auto total_started = std::chrono::steady_clock::now();
+  // The full Model is replicated input. The M1 spatial ownership set below is
+  // the only authority for integration, thermodynamics and output; data stays
+  // fully replicated (no ghost slots, no local compaction) and NEP stays
+  // replicated-full. Ownership migrates logically between epochs; atoms are
+  // never inserted or removed from the replicated slots.
+  // Keep this boundary aligned with docs/standards/replicated-mpi.md.
+  if (model.atoms.counts.ghost_count != 0 ||
+      model.atoms.counts.owned_count != model.atoms.counts.global_count) {
+    throw std::logic_error(
+        "replicated initialization requires a complete input model and no ghosts");
+  }
+  // P=1 degenerates to the constant rank-0 map (M0 path, byte-identical);
+  // P>1 requires an orthogonal fully-periodic box and partitions along the
+  // longest edge. The ownership epoch persists across every run segment.
+  RuntimeOwnership ownership(model.atoms, box, mpi);
+  mpi.verify_and_log_center_partition(ownership.current(), ownership.partition_axis());
+
+  if (!model.atoms.has_input_velocity) {
+    if (mpi.is_root()) {
+      std::srand(static_cast<unsigned int>(
+          std::chrono::system_clock::now().time_since_epoch().count()));
+      initialize_random_velocity(model.atoms, 300.0, std::nullopt);
+    }
+    mpi.broadcast_doubles(model.atoms.velocity.data(), model.atoms.velocity.size());
+  }
+
+  DeviceAtoms atoms(model.atoms);
+  RankIoIsolation rank_io(mpi);
+  auto force = std::make_unique<NepForce>(std::move(potential), atoms.counts);
+  bool potential_seen = false;
+  double time_step = 1.0 / TIME_UNIT_CONVERSION;
+  std::optional<double> maximum_distance;
+  std::optional<EnsembleCommand> ensemble;
+  std::optional<CorrectVelocityCommand> velocity_correction;
+  std::vector<Measurement> measurements;
+  double global_time = 0.0;
+  std::uint64_t global_step = 0;
+  std::uint64_t run_sequence = 0;
+
+  for (const Command& command : program.commands) {
+    try {
+      if (const auto* potential_command = std::get_if<PotentialCommand>(&command.data)) {
+        if (potential_seen || potential_command->filename != potential_filename) {
+          throw std::runtime_error(
+              "multiple potentials are not supported by the replicated runtime");
+        }
+        potential_seen = true;
+      } else if (const auto* velocity = std::get_if<VelocityCommand>(&command.data)) {
+        if (!model.atoms.has_input_velocity) {
+          if (mpi.is_root()) {
+            initialize_random_velocity(model.atoms, velocity->temperature, velocity->seed);
+          }
+          mpi.broadcast_doubles(model.atoms.velocity.data(), model.atoms.velocity.size());
+          atoms.upload_velocity(model.atoms.velocity);
+        }
+      } else if (const auto* step = std::get_if<TimeStepCommand>(&command.data)) {
+        time_step = step->femtoseconds / TIME_UNIT_CONVERSION;
+        maximum_distance = step->maximum_distance_angstrom;
+      } else if (const auto* selected = std::get_if<EnsembleCommand>(&command.data)) {
+        ensemble = *selected;
+      } else if (const auto* correction =
+                     std::get_if<CorrectVelocityCommand>(&command.data)) {
+        velocity_correction = *correction;
+      } else if (const auto* dump = std::get_if<DumpThermoCommand>(&command.data)) {
+        measurements.emplace_back(*dump);
+      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&command.data)) {
+        if (dump->quantities.unwrapped_position) atoms.enable_unwrapped();
+        measurements.emplace_back(*dump);
+      } else if (const auto* dump = std::get_if<DumpRestartCommand>(&command.data)) {
+        measurements.emplace_back(*dump);
+      } else if (const auto* run = std::get_if<RunCommand>(&command.data)) {
+        if (!potential_seen) throw std::runtime_error("run requires a preceding potential command");
+        if (!ensemble) throw std::runtime_error("run requires a preceding ensemble command");
+        check_cuda(cudaDeviceSynchronize(), "synchronize before timed run segment");
+        mpi.barrier();
+        const auto segment_started = std::chrono::steady_clock::now();
+        run_segment(run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
+                    measurements, global_time, global_step, box, model.atoms, atoms, *force,
+                    ownership, mpi);
+        check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
+        const double segment_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - segment_started).count();
+        mpi.log_timing(
+            "run", run_sequence, static_cast<std::uint64_t>(run->steps),
+            model.atoms.counts.global_count, segment_seconds);
+        ++run_sequence;
+        measurements.clear();
+        velocity_correction.reset();
+        maximum_distance.reset();
+      }
+    } catch (const InputError&) {
+      throw;
+    } catch (const std::exception& error) {
+      throw InputError(command.source, error.what());
+    }
+  }
+  if (!measurements.empty()) {
+    throw InputError(SourceLocation{"run.in", 0, {}},
+                     "dump command is not followed by run");
+  }
+  check_cuda(cudaDeviceSynchronize(), "finish replicated MPI run");
+  force.reset();
+  rank_io.finish();
+  const double total_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - total_started).count();
+  mpi.log_timing(
+      "total", 0, global_step, model.atoms.counts.global_count, total_seconds);
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Shared host functions declared in runtime_internal.hpp.
+// ---------------------------------------------------------------------------
 
 void zero_linear_momentum(
     const std::vector<double>& mass,
@@ -1153,13 +1001,6 @@ void correct_velocity_subset(
     velocity[stride + atom] -= omega[2] * dx - omega[0] * dz;
     velocity[2 * stride + atom] -= omega[0] * dy - omega[1] * dx;
   }
-}
-
-std::vector<std::size_t> all_owned_indices(const HostAtoms& atoms)
-{
-  std::vector<std::size_t> result(atoms.counts.owned_count);
-  for (std::size_t index = 0; index < result.size(); ++index) result[index] = index;
-  return result;
 }
 
 void initialize_random_velocity(
@@ -1399,237 +1240,7 @@ void write_restart(
   std::fclose(file);
 }
 
-using Measurement = std::variant<DumpThermoCommand, DumpXyzCommand, DumpRestartCommand>;
-
-double adaptive_time_step(
-    DeviceAtoms& atoms,
-    const RuntimeOwnership& ownership,
-    double initial_time_step,
-    const std::optional<double>& maximum_distance,
-    MpiRuntime& mpi,
-    CommunicationVolume& communication)
-{
-  if (!maximum_distance) return initial_time_step;
-  std::vector<double> velocity(atoms.velocity.size());
-  atoms.velocity.copy_to_host(velocity.data());
-  const std::size_t stride = atoms.counts.local_count();
-  double maximum_squared = 0.0;
-  for (std::size_t slot : ownership.current().owned_indices()) {
-    const double vx = velocity[slot];
-    const double vy = velocity[stride + slot];
-    const double vz = velocity[2 * stride + slot];
-    maximum_squared = std::max(maximum_squared, vx * vx + vy * vy + vz * vz);
-  }
-  maximum_squared = mpi.allreduce_max_host(maximum_squared, communication);
-  const double limited = maximum_squared == 0.0
-                             ? initial_time_step
-                             : *maximum_distance / std::sqrt(maximum_squared);
-  return limited < initial_time_step ? limited : initial_time_step;
-}
-
-void correct_device_velocity(
-    DeviceAtoms& device,
-    const HostAtoms& identity,
-    const CorrectVelocityCommand& command,
-    MpiRuntime& mpi,
-    CommunicationVolume& communication)
-{
-  std::vector<double> position(device.position.size());
-  std::vector<double> velocity(device.velocity.size());
-  if (mpi.is_root()) {
-    device.position.copy_to_host(position.data());
-    device.velocity.copy_to_host(velocity.data());
-  }
-  if (mpi.is_root() && !command.grouping_method) {
-    correct_velocity_subset(identity.mass, position, velocity, all_owned_indices(identity));
-  } else if (mpi.is_root()) {
-    const std::size_t method = static_cast<std::size_t>(*command.grouping_method);
-    if (method >= identity.group_labels.size()) {
-      throw std::runtime_error("correct_velocity grouping method is out of range");
-    }
-    int maximum_group = -1;
-    for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
-      maximum_group = std::max(maximum_group, identity.group_labels[method][atom]);
-    }
-    for (int group = 0; group <= maximum_group; ++group) {
-      std::vector<std::size_t> subset;
-      for (std::size_t atom = 0; atom < identity.counts.owned_count; ++atom) {
-        if (identity.group_labels[method][atom] == group) subset.push_back(atom);
-      }
-      correct_velocity_subset(identity.mass, position, velocity, subset);
-    }
-  }
-  if (mpi.is_root()) device.upload_velocity(velocity);
-  mpi.broadcast_device(
-      device.velocity.data(), device.velocity.size(), communication);
-}
-
-void launch_velocity_verlet(
-    DeviceAtoms& atoms,
-    const RuntimeOwnership& ownership,
-    bool first_half,
-    double time_step)
-{
-  const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
-  if (owned_count == 0) return;  // An empty spatial slab integrates nothing.
-  const int stride = checked_int(atoms.counts.local_count(), "local_count");
-  velocity_verlet<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-      first_half, ownership.plan().device_owned_indices, owned_count, stride,
-      time_step, atoms.mass.data(), atoms.position.data(), atoms.velocity.data(),
-      atoms.force.data());
-  if (first_half && atoms.has_unwrapped()) {
-    update_unwrapped<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-        ownership.plan().device_owned_indices, owned_count, stride,
-        atoms.position.data(), atoms.previous_position.data(),
-        atoms.unwrapped.data());
-  }
-  check_cuda(cudaGetLastError(), first_half ? "velocity-Verlet first half"
-                                            : "velocity-Verlet second half");
-}
-
-void run_segment(
-    int steps,
-    double base_time_step,
-    const std::optional<double>& maximum_distance,
-    const EnsembleCommand& ensemble,
-    const std::optional<CorrectVelocityCommand>& velocity_correction,
-    const std::vector<Measurement>& measurements,
-    double& global_time,
-    std::uint64_t& global_step,
-    Box& box,
-    HostAtoms& identity,
-    DeviceAtoms& atoms,
-    NepForce& force,
-    RuntimeOwnership& ownership,
-    MpiRuntime& mpi)
-{
-  // Per-step protocol (docs/standards/replicated-mpi.md, M1): integrate the
-  // currently owned slots, allgather replicated coordinates, evaluate full
-  // NEP scratch, recompute spatial ownership and migrate the dynamic state
-  // under the old ownership, then integrate/thermo/output under the new
-  // ownership. Replicated velocity is not refreshed every step (M0): the only
-  // remaining consumers of non-owned velocity are correct_velocity (restored
-  // here on trigger steps) and ownership migration itself (which syncs the
-  // authoritative half-step velocity before a new owner takes over).
-  int thermo_count = 0;
-  int restart_count = 0;
-  for (const Measurement& measurement : measurements) {
-    if (std::holds_alternative<DumpThermoCommand>(measurement)) ++thermo_count;
-    if (std::holds_alternative<DumpRestartCommand>(measurement)) ++restart_count;
-  }
-  if (thermo_count > 1 || restart_count > 1) {
-    throw std::runtime_error("multiple dump_thermo or dump_restart commands within one run");
-  }
-  for (const Measurement& measurement : measurements) {
-    if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
-      if (mpi.is_root()) {
-        FILE* file = std::fopen("thermo.out", "a");
-        if (!file) throw std::runtime_error("cannot open thermo.out");
-        write_thermo_header(file, dump->interval, identity, base_time_step);
-        std::fclose(file);
-      }
-    }
-    if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
-      if (dump->quantities.group_labels && identity.group_labels.empty()) {
-        throw std::runtime_error("cannot output group labels without model groups");
-      }
-    }
-  }
-
-  GPU_Vector<double> device_thermo(8);
-  force.compute(box, atoms);
-  for (int step = 0; step < steps; ++step) {
-    CommunicationVolume communication;
-    // 1. correct_velocity trigger: restore the replicated velocity under the
-    // CURRENT ownership so the root's CPU correction reads fresh values.
-    if (velocity_correction && step % velocity_correction->interval == 0) {
-      mpi.allgather_indexed_device_soa(
-          atoms.velocity.data(), 3, atoms.counts.local_count(),
-          ownership.plan(), communication);
-      correct_device_velocity(atoms, identity, *velocity_correction, mpi, communication);
-    }
-    // 2. Adaptive timestep scans only the currently owned slots.
-    const double time_step = adaptive_time_step(
-        atoms, ownership, base_time_step, maximum_distance, mpi, communication);
-    global_time += time_step;
-    if (atoms.has_unwrapped()) {
-      atoms.previous_position.copy_from_device(atoms.position.data());
-    }
-    // 3. VV first half + position/unwrapped update: current owned slots.
-    launch_velocity_verlet(atoms, ownership, true, time_step);
-    // 4. Indexed position Allgatherv restores the replicated state.
-    mpi.allgather_indexed_device_soa(
-        atoms.position.data(), 3, atoms.counts.local_count(),
-        ownership.plan(), communication);
-    // 5. Full replicated NEP (wrap + clear + compute), unchanged from M0.
-    force.compute(box, atoms);
-    // 6-7. Recompute the spatial owner map from the wrapped positions,
-    // verify it matches on every rank, migrate velocity/unwrapped under the
-    // OLD ownership, and only then adopt the new ownership (epoch++).
-    ownership.recompute_and_commit(atoms, mpi, communication, global_step + 1);
-    // 8. VV second half, thermo, Berendsen and output gather run under the
-    // NEW ownership: an atom that crossed a slab boundary finishes its step
-    // with its new owner, exactly once.
-    launch_velocity_verlet(atoms, ownership, false, time_step);
-    const ThermoState thermo = compute_thermo(
-        atoms, box, ownership, device_thermo, mpi, communication);
-
-    if (ensemble.kind == EnsembleKind::nvt_ber) {
-      const double fraction = static_cast<double>(step) / static_cast<double>(steps);
-      const double target = ensemble.initial_temperature +
-                            (ensemble.final_temperature - ensemble.initial_temperature) * fraction;
-      const double coupling = 1.0 / ensemble.temperature_coupling;
-      if (coupling > 1.0e-5) {
-        const double factor = std::sqrt(1.0 + coupling * (target / thermo.values[0] - 1.0));
-        const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
-        if (owned_count != 0) {
-          const int stride = checked_int(atoms.counts.local_count(), "local_count");
-          scale_owned_velocity<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-              ownership.plan().device_owned_indices, owned_count, stride, factor,
-              atoms.velocity.data());
-        }
-        check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
-      }
-    }
-    bool need_snapshot = false;
-    for (const Measurement& measurement : measurements) {
-      if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
-        need_snapshot = need_snapshot || ((step + 1) % dump->interval == 0);
-      } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
-        need_snapshot = need_snapshot || ((step + 1) % restart->interval == 0);
-      }
-    }
-    std::optional<HostSnapshot> snapshot;
-    if (need_snapshot) {
-      snapshot = gather_owned_snapshot(atoms, ownership.plan(), mpi, communication);
-    }
-
-    for (const Measurement& measurement : measurements) {
-      if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
-        if ((step + 1) % dump->interval == 0) {
-          if (mpi.is_root()) {
-            FILE* file = std::fopen("thermo.out", "a");
-            if (!file) throw std::runtime_error("cannot open thermo.out");
-            write_thermo_row(file, thermo, identity, box);
-            std::fclose(file);
-          }
-        }
-      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
-        if (mpi.is_root() && (step + 1) % dump->interval == 0) {
-          write_xyz(*dump, step, global_time, box, identity, *snapshot, thermo);
-        }
-      } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
-        if (mpi.is_root() && (step + 1) % restart->interval == 0) {
-          write_restart(box, identity, *snapshot);
-        }
-      }
-    }
-    ++global_step;
-    mpi.log_step_communication(global_step, communication);
-  }
-}
-
-}  // namespace
+}  // namespace detail
 
 void run_replicated(
     const RunProgram& program,
@@ -1637,13 +1248,13 @@ void run_replicated(
     const std::string& potential_filename,
     MpiRuntime& mpi)
 {
-  const auto total_started = std::chrono::steady_clock::now();
-  // The full Model is replicated input. The M1 spatial ownership set below is
-  // the only authority for integration, thermodynamics and output; data stays
-  // fully replicated (no ghost slots, no local compaction) and NEP stays
-  // replicated-full. Ownership migrates logically between epochs; atoms are
-  // never inserted or removed from the replicated slots.
-  // Keep this boundary aligned with docs/standards/replicated-mpi.md.
+  using gpumd_compat::NEP;
+  // Mode dispatcher (docs/plans/domain-decomposition.md section 3.3): the
+  // potential is parsed exactly once here; eligibility is decided from the
+  // parsed cutoffs and the box; P=1 always keeps the existing path, P>1
+  // inputs that fail an M2a criterion keep the M1 replicated-full runtime as
+  // the compatibility fallback (never a new error), and triclinic /
+  // non-periodic inputs at P>1 keep the M1 unsupported errors.
   if (model.atoms.counts.ghost_count != 0 ||
       model.atoms.counts.owned_count != model.atoms.counts.global_count) {
     throw std::logic_error(
@@ -1651,107 +1262,68 @@ void run_replicated(
   }
   const std::filesystem::path absolute_potential =
       std::filesystem::absolute(potential_filename);
-  mpi.assert_same_fingerprint(file_fingerprint("run.in"), "run.in");
-  mpi.assert_same_fingerprint(file_fingerprint("model.xyz"), "model.xyz");
-  mpi.assert_same_fingerprint(file_fingerprint(absolute_potential), "potential file");
+  mpi.assert_same_fingerprint(detail::file_fingerprint("run.in"), "run.in");
+  mpi.assert_same_fingerprint(detail::file_fingerprint("model.xyz"), "model.xyz");
+  mpi.assert_same_fingerprint(
+      detail::file_fingerprint(absolute_potential), "potential file");
   mpi.initialize_device();
-  Box box = make_box(model.box);
-  // P=1 degenerates to the constant rank-0 map (M0 path, byte-identical);
-  // P>1 requires an orthogonal fully-periodic box and partitions along the
-  // longest edge. The ownership epoch persists across every run segment.
-  RuntimeOwnership ownership(model.atoms, box, mpi);
-  mpi.verify_and_log_center_partition(ownership.current(), ownership.partition_axis());
+  gpumd_compat::Box box = detail::make_box(model.box);
 
-  if (!model.atoms.has_input_velocity) {
-    if (mpi.is_root()) {
-      std::srand(static_cast<unsigned int>(
-          std::chrono::system_clock::now().time_since_epoch().count()));
-      initialize_random_velocity(model.atoms, 300.0, std::nullopt);
+  if (mpi.world_size() > 1) {
+    if (!box.is_orthogonal) {
+      throw std::runtime_error(
+          "M1 spatial slab ownership supports only orthogonal boxes; a "
+          "triclinic lattice must be reported before any decomposition");
     }
-    mpi.broadcast_doubles(model.atoms.velocity.data(), model.atoms.velocity.size());
-  }
-
-  DeviceAtoms atoms(model.atoms);
-  RankIoIsolation rank_io(mpi);
-  auto force = std::make_unique<NepForce>(absolute_potential.string(), atoms.counts);
-  bool potential_seen = false;
-  double time_step = 1.0 / TIME_UNIT_CONVERSION;
-  std::optional<double> maximum_distance;
-  std::optional<EnsembleCommand> ensemble;
-  std::optional<CorrectVelocityCommand> velocity_correction;
-  std::vector<Measurement> measurements;
-  double global_time = 0.0;
-  std::uint64_t global_step = 0;
-  std::uint64_t run_sequence = 0;
-
-  for (const Command& command : program.commands) {
-    try {
-      if (const auto* potential = std::get_if<PotentialCommand>(&command.data)) {
-        if (potential_seen || potential->filename != potential_filename) {
-          throw std::runtime_error(
-              "multiple potentials are not supported by the replicated runtime");
-        }
-        potential_seen = true;
-      } else if (const auto* velocity = std::get_if<VelocityCommand>(&command.data)) {
-        if (!model.atoms.has_input_velocity) {
-          if (mpi.is_root()) {
-            initialize_random_velocity(model.atoms, velocity->temperature, velocity->seed);
-          }
-          mpi.broadcast_doubles(model.atoms.velocity.data(), model.atoms.velocity.size());
-          atoms.upload_velocity(model.atoms.velocity);
-        }
-      } else if (const auto* step = std::get_if<TimeStepCommand>(&command.data)) {
-        time_step = step->femtoseconds / TIME_UNIT_CONVERSION;
-        maximum_distance = step->maximum_distance_angstrom;
-      } else if (const auto* selected = std::get_if<EnsembleCommand>(&command.data)) {
-        ensemble = *selected;
-      } else if (const auto* correction =
-                     std::get_if<CorrectVelocityCommand>(&command.data)) {
-        velocity_correction = *correction;
-      } else if (const auto* dump = std::get_if<DumpThermoCommand>(&command.data)) {
-        measurements.emplace_back(*dump);
-      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&command.data)) {
-        if (dump->quantities.unwrapped_position) atoms.enable_unwrapped();
-        measurements.emplace_back(*dump);
-      } else if (const auto* dump = std::get_if<DumpRestartCommand>(&command.data)) {
-        measurements.emplace_back(*dump);
-      } else if (const auto* run = std::get_if<RunCommand>(&command.data)) {
-        if (!potential_seen) throw std::runtime_error("run requires a preceding potential command");
-        if (!ensemble) throw std::runtime_error("run requires a preceding ensemble command");
-        check_cuda(cudaDeviceSynchronize(), "synchronize before timed run segment");
-        mpi.barrier();
-        const auto segment_started = std::chrono::steady_clock::now();
-        run_segment(run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
-                    measurements, global_time, global_step, box, model.atoms, atoms, *force,
-                    ownership, mpi);
-        check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
-        const double segment_seconds = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - segment_started).count();
-        mpi.log_timing(
-            "run", run_sequence, static_cast<std::uint64_t>(run->steps),
-            model.atoms.counts.global_count, segment_seconds);
-        ++run_sequence;
-        measurements.clear();
-        velocity_correction.reset();
-        maximum_distance.reset();
-      }
-    } catch (const InputError&) {
-      throw;
-    } catch (const std::exception& error) {
-      throw InputError(command.source, error.what());
+    if (box.pbc_x != 1 || box.pbc_y != 1 || box.pbc_z != 1) {
+      throw std::runtime_error(
+          "M1 spatial slab ownership requires periodicity in all three "
+          "directions; a non-periodic direction is unsupported");
     }
   }
-  if (!measurements.empty()) {
-    throw InputError(SourceLocation{"run.in", 0, {}},
-                     "dump command is not followed by run");
+
+  // Parse the potential exactly once on every rank. Workspaces are sized
+  // only after the mode decision (deferred-workspace NEP constructor).
+  auto potential = std::make_unique<NEP>(absolute_potential.c_str());
+
+  DomainEligibility eligibility;
+  {
+    const auto& params = potential->params();
+    CutoffSet cutoffs;
+    cutoffs.num_types = params.num_types;
+    cutoffs.rc_radial.assign(params.rc_radial, params.rc_radial + params.num_types);
+    cutoffs.rc_angular.assign(params.rc_angular, params.rc_angular + params.num_types);
+    cutoffs.zbl_enabled = potential->zbl_params().enabled;
+    cutoffs.zbl_flexible = potential->zbl_params().flexibled;
+    cutoffs.zbl_rc_outer = potential->zbl_params().rc_outer;
+    cutoffs.zbl_typewise = params.use_typewise_cutoff_zbl;
+    const DomainRadii radii = compute_domain_radii(cutoffs);
+    eligibility = evaluate_domain_eligibility(
+        mpi.world_size(), model.box.h, radii, params.rc_radial_max);
   }
-  check_cuda(cudaDeviceSynchronize(), "finish replicated MPI run");
-  force.reset();
-  rank_io.finish();
-  const double total_seconds = std::chrono::duration<double>(
-      std::chrono::steady_clock::now() - total_started).count();
-  mpi.log_timing(
-      "total", 0, global_step, model.atoms.counts.global_count, total_seconds);
+  if (mpi.is_root()) {
+    static const char* axis_names[3] = {"x", "y", "z"};
+    std::cout << "DMGMD_DOMAIN mode="
+              << (eligibility.eligible ? "m2a" : "m1-fallback")
+              << " axis="
+              << (eligibility.axis >= 0 ? axis_names[eligibility.axis] : "none")
+              << " d_dep=" << eligibility.d_dep << " d_coord=" << eligibility.d_coord;
+    if (eligibility.eligible) {
+      std::cout << " axis_thickness=" << eligibility.axis_thickness
+                << " slab_width=" << eligibility.slab_width;
+    }
+    std::cout << " ranks=" << mpi.world_size()
+              << " reason=" << eligibility.reason << '\n';
+    std::cout.flush();
+  }
+
+  if (eligibility.eligible) {
+    run_local_domain(
+        program, std::move(model), box, std::move(potential), eligibility, mpi);
+    return;
+  }
+  detail::run_m1_replicated(
+      program, std::move(model), box, std::move(potential), potential_filename, mpi);
 }
 
 }  // namespace dmgmd

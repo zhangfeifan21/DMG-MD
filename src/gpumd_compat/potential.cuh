@@ -43,6 +43,12 @@ Purpose: Abstract Potential base class kept for the NEP inheritance and the
 shared many-body force/virial gather.
 
 Adaptations for this replica are listed at the bottom of this header block.
+
+DMG-MD domain additions (M2a): the base class carries a second center range
+ND1..ND2 (dependency/descriptor centers) in addition to the legacy force-center
+range N1..N2, plus a global-ID-keyed many-body gather used by the local-domain
+NEP path (docs/plans/domain-decomposition.md section 5). The legacy
+find_properties_many_body and the P1/M1 center semantics are unchanged.
 ----------------------------------------------------------------------------*/
 
 #include "box.cuh"
@@ -63,6 +69,12 @@ public:
 
   int N1;
   int N2;
+  // M2a dependency/descriptor center range (defaults to the full range; the
+  // legacy P1/M1 path never touches it). [N1,N2) stays the final-force center
+  // range; [ND1,ND2) covers the centers whose descriptor/Fp/partial must exist
+  // locally so the force centers can consume them.
+  int ND1 = 0;
+  int ND2 = 0;
   double rc; // maximum cutoff distance
   int nep_model_type =
     -1; // -1 for non_nep, 0 for potential, 1 for dipole, 2 for polarizability, 3 for temperature
@@ -110,6 +122,23 @@ protected:
     const float* f12y,
     const float* f12z,
     const bool is_dipole,
+    const GPU_Vector<double>& position_per_atom,
+    GPU_Vector<double>& force_per_atom,
+    GPU_Vector<double>& virial_per_atom);
+
+  // M2a domain variant: identical arithmetic, but the reverse-edge binary
+  // search compares global IDs (the domain rows are sorted by global ID, not
+  // by local index) and the SoA stride is the local atom count.
+  void find_properties_many_body_domain(
+    Box& box,
+    const int* NN,
+    const int* NL,
+    const float* f12x,
+    const float* f12y,
+    const float* f12z,
+    const bool is_dipole,
+    const GPU_Vector<unsigned long long>& global_id,
+    const int number_of_particles,
     const GPU_Vector<double>& position_per_atom,
     GPU_Vector<double>& force_per_atom,
     GPU_Vector<double>& virial_per_atom);

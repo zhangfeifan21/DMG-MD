@@ -78,6 +78,44 @@ def load_manifest() -> Dict[str, Any]:
     return manifest
 
 
+def profile_case(
+    manifest: Mapping[str, Any], profile_name: str, case_name: str
+) -> Dict[str, Any]:
+    """Return one case with the selected profile's deterministic geometry.
+
+    Derived compatibility cases share their base case's model geometry while
+    retaining their own potential transform and coverage metadata.  Keeping
+    the geometry selection here prevents the larger nightly/release boxes from
+    turning the single-rank smoke profile into a multi-gigabyte I/O job.
+    """
+    profiles = manifest.get("profiles")
+    cases = manifest.get("cases")
+    geometries = manifest.get("case_geometries")
+    if not isinstance(profiles, Mapping) or profile_name not in profiles:
+        raise baseline.BaselineError(f"unknown long-NVE profile {profile_name}")
+    if not isinstance(cases, Mapping) or case_name not in cases:
+        raise baseline.BaselineError(f"unknown long-NVE case {case_name}")
+
+    profile = profiles[profile_name]
+    case = dict(cases[case_name])
+    geometry_name = profile.get("case_geometry", "base")
+    if geometry_name != "base":
+        if not isinstance(geometries, Mapping) or geometry_name not in geometries:
+            raise baseline.BaselineError(
+                f"{profile_name}: unknown long-NVE case geometry {geometry_name}"
+            )
+        base_name = str(case.get("base_case", case_name))
+        geometry = geometries[geometry_name]
+        override = geometry.get(base_name) if isinstance(geometry, Mapping) else None
+        if not isinstance(override, Mapping):
+            raise baseline.BaselineError(
+                f"{profile_name}/{case_name}: no geometry override for base case {base_name}"
+            )
+        case.update(override)
+    case["name"] = case_name
+    return case
+
+
 def stable_unit(seed: int, atom: int, component: int, stream: str) -> float:
     payload = f"dmgmd-long-nve-v1:{stream}:{seed}:{atom}:{component}".encode()
     integer = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")

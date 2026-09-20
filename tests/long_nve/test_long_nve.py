@@ -28,6 +28,37 @@ class LongNveTests(unittest.TestCase):
                 common.validate_generated_model(case, seed, text)
                 self.assertEqual(int(text.splitlines()[0]), case["atoms"])
 
+    def test_profile_geometries_match_locked_hashes_counts_and_base_inheritance(self) -> None:
+        expected = {
+            "nightly": {
+                "carbon_crystal": ([8, 48, 8], 24576),
+                "dense_water": ([8, 128, 8], 24576),
+                "batio3_zbl": ([10, 40, 10], 20000),
+            },
+            "release": {
+                "carbon_crystal": ([8, 96, 8], 49152),
+                "dense_water": ([8, 256, 8], 49152),
+                "batio3_zbl": ([10, 80, 10], 40000),
+            },
+        }
+        for profile_name, cases in expected.items():
+            for case_name, (cells, atoms) in cases.items():
+                case = common.profile_case(self.manifest, profile_name, case_name)
+                self.assertEqual(case["cells"], cells)
+                self.assertEqual(case["atoms"], atoms)
+                for seed in self.manifest["profiles"][profile_name]["seeds"]:
+                    model = common.generate_model(case, seed)
+                    common.validate_generated_model(case, seed, model)
+                    self.assertEqual(int(model.splitlines()[0]), atoms)
+
+        derived = common.profile_case(
+            self.manifest, "release", "dense_water_typewise_cutoff"
+        )
+        release_water = common.profile_case(self.manifest, "release", "dense_water")
+        self.assertEqual(derived["cells"], release_water["cells"])
+        self.assertEqual(derived["atoms"], release_water["atoms"])
+        self.assertEqual(derived["model_sha256"], release_water["model_sha256"])
+
     def test_retry_count_must_be_nonnegative(self) -> None:
         self.assertEqual(runner.nonnegative_integer("0"), 0)
         self.assertEqual(runner.nonnegative_integer("2"), 2)
@@ -171,6 +202,7 @@ class LongNveTests(unittest.TestCase):
 
     def test_release_matrix_covers_backends_variants_and_nvt_statistics(self) -> None:
         release = self.manifest["profiles"]["release"]
+        self.assertEqual(release["case_geometry"], "release")
         self.assertEqual(release["backends"], ["HostStaged", "CudaAware"])
         self.assertEqual(release["ranks"], [1, 2, 4, 8])
         self.assertEqual(release["seeds"], list(range(5)))
@@ -193,6 +225,105 @@ class LongNveTests(unittest.TestCase):
                 "msd_slope_A2_per_fs",
             },
         )
+
+    def test_manifest_separates_m1_and_m2a_configurations(self) -> None:
+        smoke_carbon = common.profile_case(self.manifest, "smoke", "carbon_crystal")
+        smoke_water = common.profile_case(self.manifest, "smoke", "dense_water")
+        nightly_carbon = common.profile_case(self.manifest, "nightly", "carbon_crystal")
+        nightly_water = common.profile_case(self.manifest, "nightly", "dense_water")
+        nightly_water_typewise = common.profile_case(
+            self.manifest, "nightly", "dense_water_typewise_cutoff"
+        )
+        release_water = common.profile_case(self.manifest, "release", "dense_water")
+        self.assertEqual(runner.expected_domain_mode(smoke_carbon, 2), "m1-fallback")
+        self.assertEqual(runner.expected_domain_mode(smoke_water, 2), "m2a")
+        self.assertEqual(runner.expected_domain_mode(smoke_water, 4), "m1-fallback")
+        self.assertEqual(runner.expected_domain_mode(nightly_carbon, 2), "m2a")
+        self.assertEqual(runner.expected_domain_mode(nightly_water, 1), "m1-fallback")
+        self.assertEqual(runner.expected_domain_mode(nightly_water, 2), "m2a")
+        self.assertEqual(runner.expected_domain_mode(nightly_water, 4), "m2a")
+        self.assertEqual(runner.expected_domain_mode(nightly_water_typewise, 4), "m2a")
+        self.assertEqual(runner.expected_domain_mode(release_water, 8), "m2a")
+        self.assertEqual(
+            runner.ordered_configurations(
+                nightly_water, [1, 2, 4], ["HostStaged", "CudaAware"]
+            ),
+            [
+                ("HostStaged", 1, "m1-fallback"),
+                ("HostStaged", 2, "m2a"),
+                ("HostStaged", 4, "m2a"),
+                ("CudaAware", 1, "m1-fallback"),
+                ("CudaAware", 2, "m2a"),
+                ("CudaAware", 4, "m2a"),
+            ],
+        )
+        with self.assertRaises(common.baseline.BaselineError):
+            runner.expected_domain_mode(nightly_water, 3)
+
+    def test_candidate_validation_uses_distinct_m1_and_m2a_contracts(self) -> None:
+        def write_stage(root: Path, mode: str) -> Path:
+            stage = root / mode
+            stage.mkdir()
+            center = (
+                "replicated-full false"
+                if mode == "m1-fallback"
+                else "local-domain-force-centers true"
+            ).split()
+            lines = [
+                "DMGMD_MPI implementation=OpenMPI",
+                "DMGMD_MPI rank=0 world_size=2 local_rank=0 local_size=2 "
+                "hostname=node cuda_device=0 cuda_uuid=uuid0 "
+                "cuda_aware_capability=supported cuda_aware_self_test=not-run "
+                "backend=HostStaged",
+                "DMGMD_MPI rank=1 world_size=2 local_rank=1 local_size=2 "
+                "hostname=node cuda_device=1 cuda_uuid=uuid1 "
+                "cuda_aware_capability=supported cuda_aware_self_test=not-run "
+                "backend=HostStaged",
+                f"DMGMD_DOMAIN mode={mode}",
+                "DMGMD_CENTER_PARTITION global_count=4 missing=0 overlapping=0 "
+                "owned_output_coverage=complete "
+                f"nep_kernel_centers={center[0]} "
+                f"nep_N1_N2_shard_complete={center[1]}",
+                "DMGMD_CENTER_OWNERSHIP rank=0 owned_count=2",
+                "DMGMD_CENTER_OWNERSHIP rank=1 owned_count=2",
+            ]
+            if mode == "m2a":
+                lines.extend(
+                    (
+                        "DMGMD_DOMAIN_LAYOUT rank=0 step=0 owned=2 dep_left=0 "
+                        "dep_right=1 coord_left=0 coord_right=0 local_count=3",
+                        "DMGMD_DOMAIN_LAYOUT rank=1 step=0 owned=2 dep_left=1 "
+                        "dep_right=0 coord_left=0 coord_right=0 local_count=3",
+                    )
+                )
+            lines.extend(
+                (
+                    "DMGMD_COMM accounting=collective-buffer-bytes log_interval=1",
+                    "DMGMD_COMM step=1 backend=HostStaged collective_calls=2 "
+                    "mpi_input_bytes_global=1 mpi_output_bytes_global=1 "
+                    "device_to_host_bytes_global=1 host_to_device_bytes_global=1 "
+                    "output_download_bytes=0",
+                    "DMGMD_TIMING phase=total sequence=0 steps=1 atoms=4 ranks=2 "
+                    "backend=HostStaged seconds_min=1 seconds_mean=1 seconds_max=1 "
+                    "global_atom_steps_per_second=4",
+                )
+            )
+            (stage / "execution.stdout").write_text(
+                "\n".join(lines) + "\n", encoding="utf-8"
+            )
+            (stage / "run.in").write_text("run 1\n", encoding="utf-8")
+            return stage
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            m1 = write_stage(root, "m1-fallback")
+            m2a = write_stage(root, "m2a")
+            runner.validate_candidate_stage(m1, 2, "HostStaged", "m1-fallback")
+            runner.validate_candidate_stage(m2a, 2, "HostStaged", "m2a")
+            with self.assertRaises(common.baseline.BaselineError):
+                runner.validate_candidate_stage(m1, 2, "HostStaged", "m2a")
+            with self.assertRaises(common.baseline.BaselineError):
+                runner.validate_candidate_stage(m2a, 2, "HostStaged", "m1-fallback")
 
     def test_generated_models_have_zero_mass_weighted_momentum(self) -> None:
         case = self.manifest["cases"]["dense_water"]

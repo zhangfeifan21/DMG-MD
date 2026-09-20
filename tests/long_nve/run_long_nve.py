@@ -31,6 +31,7 @@ baseline = common.baseline
 DEFAULT_REFERENCE = PROJECT_ROOT.parent / "gpumd-reference" / "src" / "gpumd"
 RUN_CHECKPOINT_NAME = ".dmgmd-run-checkpoint.json"
 CONFIG_COMPLETE_NAME = ".dmgmd-config-complete.json"
+DOMAIN_MODE_ORDER = ("m1-fallback", "m2a")
 
 
 def comma_list(text: str) -> List[str]:
@@ -191,6 +192,26 @@ def normalized_backends(values: Sequence[str]) -> List[str]:
     return result
 
 
+def expected_domain_mode(case: Mapping[str, Any], ranks: int) -> str:
+    modes = case.get("domain_mode_by_rank")
+    mode = modes.get(str(ranks)) if isinstance(modes, Mapping) else None
+    if mode not in DOMAIN_MODE_ORDER:
+        raise baseline.BaselineError(
+            f"{case.get('name', '<unnamed>')}: no valid domain-mode contract for {ranks} ranks"
+        )
+    return str(mode)
+
+
+def ordered_configurations(
+    case: Mapping[str, Any], ranks: Sequence[int], backends: Sequence[str]
+) -> List[Tuple[str, int, str]]:
+    return [
+        (backend, rank_count, expected_domain_mode(case, rank_count))
+        for backend in backends
+        for rank_count in ranks
+    ]
+
+
 def resolve_selection(
     manifest: Mapping[str, Any], args: argparse.Namespace
 ) -> Tuple[Mapping[str, Any], List[str], List[int], List[int], List[str], List[str]]:
@@ -213,12 +234,17 @@ def resolve_selection(
         raise baseline.BaselineError(f"unknown long-NVE sections: {unknown_sections}")
     if "replay" in sections and "long" not in sections:
         raise baseline.BaselineError("replay requires the long section")
+    for case_name in cases:
+        case = common.profile_case(manifest, args.profile, case_name)
+        for rank in ranks:
+            expected_domain_mode(case, rank)
     return profile, cases, seeds, ranks, normalized_backends(backends), sections
 
 
-def print_hashes(manifest: Mapping[str, Any]) -> None:
+def print_hashes(manifest: Mapping[str, Any], profile_name: str) -> None:
     result = {}
-    for case_name, case in manifest["cases"].items():
+    for case_name in manifest["cases"]:
+        case = common.profile_case(manifest, profile_name, case_name)
         result[case_name] = {
             str(seed): common.text_sha256(common.generate_model(case, seed)) for seed in range(10)
         }
@@ -237,8 +263,19 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         if not potential.is_file():
             raise baseline.BaselineError(f"missing long-NVE potential: {potential}")
         common.validate_generated_potential(case, common.generate_potential(case))
-        for seed in range(10):
-            common.validate_generated_model(case, seed, common.generate_model(case, seed))
+    validated_models = set()
+    for profile_name, profile in manifest["profiles"].items():
+        for case_name in profile["cases"]:
+            case = common.profile_case(manifest, profile_name, case_name)
+            for rank in profile["ranks"]:
+                expected_domain_mode(case, int(rank))
+            base_name = str(case.get("base_case", case_name))
+            model_key = (profile_name, base_name)
+            if model_key in validated_models:
+                continue
+            for seed in range(10):
+                common.validate_generated_model(case, seed, common.generate_model(case, seed))
+            validated_models.add(model_key)
 
 
 def reference_environment(device: str) -> Dict[str, str]:
@@ -261,8 +298,12 @@ def candidate_environment(
     return env
 
 
-def validate_candidate_stage(stage: Path, ranks: int, backend: str) -> None:
-    mpi_differential.validate_runtime_record(stage, ranks, backend)
+def validate_candidate_stage(
+    stage: Path, ranks: int, backend: str, expected_mode: str
+) -> None:
+    mpi_differential.validate_runtime_record(
+        stage, ranks, backend, expected_domain_mode=expected_mode
+    )
     stdout = (stage / "execution.stdout").read_text(encoding="utf-8")
     timings = [line for line in stdout.splitlines() if line.startswith("DMGMD_TIMING ")]
     if not timings:
@@ -322,6 +363,7 @@ def run_candidate_stage(
     mpiexec: Path,
     ranks: int,
     backend: str,
+    expected_mode: str,
     model: str,
     run: str,
     potential_text: str,
@@ -355,7 +397,7 @@ def run_candidate_stage(
         adopt_existing=adopt_existing,
         retries=retries,
     )
-    validate_candidate_stage(result, ranks, backend)
+    validate_candidate_stage(result, ranks, backend, expected_mode)
     return result
 
 
@@ -397,7 +439,7 @@ def replay_frames(
     timeout: int,
     collector: baseline.DiffCollector,
     label: str,
-    candidate_runtime: Tuple[int, str] | None,
+    candidate_runtime: Tuple[int, str, str] | None,
     resume: bool,
     adopt_existing: bool,
     retries: int,
@@ -423,7 +465,12 @@ def replay_frames(
             retries=retries,
         )
         if candidate_runtime is not None:
-            validate_candidate_stage(evaluated, candidate_runtime[0], candidate_runtime[1])
+            validate_candidate_stage(
+                evaluated,
+                candidate_runtime[0],
+                candidate_runtime[1],
+                candidate_runtime[2],
+            )
         evaluated_frame = baseline.parse_xyz(evaluated / "static.xyz")[0]
         common.compare_configuration_frames(
             source_frame, evaluated_frame, collector, f"{label}:frame[{index}]"
@@ -483,8 +530,10 @@ def restart_transition(
     source_env = candidate_environment(
         devices, source_ranks, backend, int(profile["communication_log_interval"])
     )
+    source_mode = expected_domain_mode(case, source_ranks)
+    destination_mode = expected_domain_mode(case, destination_ranks)
     actual_a = run_candidate_stage(
-        candidate, mpiexec, source_ranks, backend, model, run_a, potential_text,
+        candidate, mpiexec, source_ranks, backend, source_mode, model, run_a, potential_text,
         root / f"candidate-r{source_ranks}-a", source_env, timeout,
         ("thermo.out", "restart.xyz", "segment-a.xyz"), resume, adopt_existing, retries,
     )
@@ -498,7 +547,7 @@ def restart_transition(
         devices, destination_ranks, backend, int(profile["communication_log_interval"])
     )
     actual_static = run_candidate_stage(
-        candidate, mpiexec, destination_ranks, backend, actual_restart_model,
+        candidate, mpiexec, destination_ranks, backend, destination_mode, actual_restart_model,
         common.static_run(), potential_text, root / f"candidate-r{destination_ranks}-boundary",
         destination_env, timeout, ("thermo.out", "static.xyz"), resume, adopt_existing, retries,
     )
@@ -507,7 +556,8 @@ def restart_transition(
         f"restart-boundary/{case['name']}/{backend}/r{source_ranks}-to-r{destination_ranks}",
     )
     actual_b = run_candidate_stage(
-        candidate, mpiexec, destination_ranks, backend, actual_restart_model, run_b, potential_text,
+        candidate, mpiexec, destination_ranks, backend, destination_mode,
+        actual_restart_model, run_b, potential_text,
         root / f"candidate-r{destination_ranks}-b", destination_env, timeout,
         ("thermo.out", "restart.xyz", "segment-b.xyz"), resume, adopt_existing, retries,
     )
@@ -525,6 +575,8 @@ def restart_transition(
     return {
         "source_ranks": source_ranks,
         "destination_ranks": destination_ranks,
+        "source_domain_mode": source_mode,
+        "destination_domain_mode": destination_mode,
         "reference_metrics": reference_metrics,
         "candidate_metrics": actual_metrics,
         "noninferiority": comparison,
@@ -535,12 +587,16 @@ def main() -> int:
     args = parse_args()
     manifest = common.load_manifest()
     if args.print_model_hashes:
-        print_hashes(manifest)
+        print_hashes(manifest, args.profile)
         return 0
     if args.candidate is None:
         raise baseline.BaselineError("--candidate is required unless --print-model-hashes is used")
     profile, case_names, seeds, ranks, backends, sections = resolve_selection(manifest, args)
     validate_manifest(manifest)
+    cases = {
+        case_name: common.profile_case(manifest, args.profile, case_name)
+        for case_name in case_names
+    }
 
     reference = args.reference.resolve()
     candidate = args.candidate.resolve()
@@ -563,9 +619,23 @@ def main() -> int:
     except mpi_environment.EnvironmentError as error:
         raise baseline.BaselineError(str(error)) from error
 
+    case_definitions = {
+        case_name: {
+            "atoms": case["atoms"],
+            "cells": case["cells"],
+            "model_sha256": {
+                str(seed): case["model_sha256"][str(seed)] for seed in seeds
+            },
+            "domain_mode_by_rank": {
+                str(rank): expected_domain_mode(case, rank) for rank in ranks
+            },
+        }
+        for case_name, case in cases.items()
+    }
     run_contract = {
         "profile": args.profile,
         "profile_parameters": dict(profile),
+        "case_definitions": case_definitions,
         "cases": case_names,
         "seeds": seeds,
         "ranks": ranks,
@@ -589,6 +659,16 @@ def main() -> int:
         for rank_count in ranks
     ]
     expected_configs = set(expected_config_order)
+    domain_mode_counts = {
+        mode: sum(
+            expected_domain_mode(cases[case_name], rank_count) == mode
+            for case_name, _seed, _backend, rank_count in expected_config_order
+        )
+        for mode in DOMAIN_MODE_ORDER
+    }
+    active_domain_modes = [
+        mode for mode in DOMAIN_MODE_ORDER if domain_mode_counts[mode] > 0
+    ]
     restart_transitions = [(min(ranks), max(ranks))]
     if min(ranks) != max(ranks):
         restart_transitions.append((max(ranks), min(ranks)))
@@ -596,7 +676,7 @@ def main() -> int:
         (case_name, backend, source_ranks, destination_ranks)
         for case_name in case_names
         if "restart" in sections
-        and manifest["cases"][case_name].get("coverage", "physics") == "physics"
+        and cases[case_name].get("coverage", "physics") == "physics"
         for backend in backends
         for source_ranks, destination_ranks in restart_transitions
     ]
@@ -633,6 +713,9 @@ def main() -> int:
         f"pending_configs={len(expected_configs) - len(completed_configs)} "
         f"cases={','.join(case_names)} seeds={','.join(str(value) for value in seeds)} "
         f"ranks={','.join(str(value) for value in ranks)} backends={','.join(backends)} "
+        f"domain_modes={','.join(active_domain_modes)} "
+        f"m1_configs={domain_mode_counts['m1-fallback']} "
+        f"m2a_configs={domain_mode_counts['m2a']} "
         f"sections={','.join(sections)} retries={args.retries} work_root={work_root}",
         flush=True,
     )
@@ -644,10 +727,13 @@ def main() -> int:
         "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "profile": args.profile,
         "profile_parameters": dict(profile),
+        "case_definitions": case_definitions,
         "cases": case_names,
         "seeds": seeds,
         "ranks": ranks,
         "backends": backends,
+        "domain_modes": active_domain_modes,
+        "domain_mode_config_counts": domain_mode_counts,
         "sections": sections,
         "reference": str(reference),
         "reference_sha256": baseline.sha256(reference),
@@ -663,7 +749,7 @@ def main() -> int:
     collector = baseline.DiffCollector(baseline.load_manifest()["tolerances"], enforce=True)
     try:
         for case_name in case_names:
-            case = manifest["cases"][case_name]
+            case = cases[case_name]
             potential_text = common.generate_potential(case)
             common.validate_generated_potential(case, potential_text)
             physics_case = case.get("coverage", "physics") == "physics"
@@ -671,6 +757,7 @@ def main() -> int:
                 "atoms": case["atoms"],
                 "time_step_fs": case["time_step_fs"],
                 "coverage": case.get("coverage", "physics"),
+                "domain_mode_by_config": {},
                 "strict_differential": {},
                 "reference_metrics": {},
                 "candidate_metrics": {},
@@ -757,183 +844,190 @@ def main() -> int:
                     reference_nvt_metrics_by_seed[seed] = reference_nvt_metrics
                     case_report["nvt_reference_metrics"][str(seed)] = reference_nvt_metrics
 
-                for backend in backends:
-                    for rank_count in ranks:
-                        config = f"{backend}-r{rank_count}"
-                        config_root = seed_root / config
-                        config_key = (case_name, seed, backend, rank_count)
-                        revalidating = config_key in completed_configs
-                        print(
-                            "LONG_NVE_CONFIG status="
-                            f"{'revalidating' if revalidating else 'running'} "
-                            f"completed={len(completed_configs)} total={len(expected_configs)} "
-                            f"pending={len(expected_configs) - len(completed_configs)} "
-                            f"case={case_name} seed={seed} backend={backend} ranks={rank_count}",
-                            flush=True,
-                        )
-                        if dashboard is not None:
-                            dashboard.config_started(config_key, revalidating)
-                        env = candidate_environment(
-                            devices, rank_count, backend,
-                            int(profile["communication_log_interval"]),
-                        )
-                        actual_static = run_candidate_stage(
-                            candidate, mpiexec, rank_count, backend, model, common.static_run(),
-                            potential_text, config_root / "static", env, args.timeout,
-                            ("static.xyz", "thermo.out"),
+                for backend, rank_count, expected_mode in ordered_configurations(
+                    case, ranks, backends
+                ):
+                    config = f"{backend}-r{rank_count}"
+                    config_root = seed_root / config
+                    config_key = (case_name, seed, backend, rank_count)
+                    revalidating = config_key in completed_configs
+                    print(
+                        "LONG_NVE_CONFIG status="
+                        f"{'revalidating' if revalidating else 'running'} "
+                        f"completed={len(completed_configs)} total={len(expected_configs)} "
+                        f"pending={len(expected_configs) - len(completed_configs)} "
+                        f"case={case_name} seed={seed} backend={backend} "
+                        f"ranks={rank_count} domain_mode={expected_mode}",
+                        flush=True,
+                    )
+                    if dashboard is not None:
+                        dashboard.config_started(config_key, revalidating)
+                    env = candidate_environment(
+                        devices, rank_count, backend,
+                        int(profile["communication_log_interval"]),
+                    )
+                    actual_static = run_candidate_stage(
+                        candidate, mpiexec, rank_count, backend, expected_mode, model,
+                        common.static_run(), potential_text, config_root / "static", env,
+                        args.timeout,
+                        ("static.xyz", "thermo.out"),
+                        resume_stages, args.adopt_existing, args.retries,
+                    )
+                    common.compare_configuration_files(
+                        reference_static / "static.xyz", actual_static / "static.xyz", collector,
+                        f"static/{case_name}/seed-{seed}/{config}",
+                    )
+                    completed_strict_stages = ["static"]
+                    if reference_short is not None:
+                        actual_short = run_candidate_stage(
+                            candidate, mpiexec, rank_count, backend, expected_mode, model,
+                            common.short_run(
+                                float(case["time_step_fs"]), int(profile["short_steps"])
+                            ),
+                            potential_text, config_root / "short", env, args.timeout,
+                            ("short.xyz", "thermo.out"),
                             resume_stages, args.adopt_existing, args.retries,
                         )
-                        common.compare_configuration_files(
-                            reference_static / "static.xyz", actual_static / "static.xyz", collector,
-                            f"static/{case_name}/seed-{seed}/{config}",
+                        baseline.compare_xyz(
+                            reference_short / "short.xyz", actual_short / "short.xyz",
+                            {"kind": "xyz"}, collector,
+                            f"short/{case_name}/seed-{seed}/{config}/short.xyz",
                         )
-                        completed_strict_stages = ["static"]
-                        if reference_short is not None:
-                            actual_short = run_candidate_stage(
-                                candidate, mpiexec, rank_count, backend, model,
-                                common.short_run(
-                                    float(case["time_step_fs"]), int(profile["short_steps"])
-                                ),
-                                potential_text, config_root / "short", env, args.timeout,
-                                ("short.xyz", "thermo.out"),
-                                resume_stages, args.adopt_existing, args.retries,
-                            )
-                            baseline.compare_xyz(
-                                reference_short / "short.xyz", actual_short / "short.xyz",
-                                {"kind": "xyz"}, collector,
-                                f"short/{case_name}/seed-{seed}/{config}/short.xyz",
-                            )
-                            baseline.compare_thermo(
-                                reference_short / "thermo.out", actual_short / "thermo.out", collector,
-                                f"short/{case_name}/seed-{seed}/{config}/thermo.out",
-                            )
-                            completed_strict_stages.append("short")
-                        case_report["strict_differential"].setdefault(config, {})[
+                        baseline.compare_thermo(
+                            reference_short / "thermo.out", actual_short / "thermo.out", collector,
+                            f"short/{case_name}/seed-{seed}/{config}/thermo.out",
+                        )
+                        completed_strict_stages.append("short")
+                    case_report["strict_differential"].setdefault(config, {})[
+                        str(seed)
+                    ] = completed_strict_stages
+                    if reference_long is not None and reference_histogram is not None:
+                        actual_long = run_candidate_stage(
+                            candidate, mpiexec, rank_count, backend, expected_mode, model,
+                            common.long_run(
+                                float(case["time_step_fs"]), int(profile["steps"]),
+                                int(profile["thermo_interval"]),
+                                int(profile["trajectory_interval"]),
+                            ),
+                            potential_text, config_root / "long", env, args.timeout,
+                            ("trajectory.xyz", "thermo.out", "restart.xyz"),
+                            resume_stages, args.adopt_existing, args.retries,
+                        )
+                        actual_metrics, actual_histogram = append_trajectory_metrics(
+                            actual_static, actual_long, case
+                        )
+                        candidate_metrics_by_config.setdefault(config, {})[seed] = actual_metrics
+                        case_report["candidate_metrics"].setdefault(config, {})[
                             str(seed)
-                        ] = completed_strict_stages
-                        if reference_long is not None and reference_histogram is not None:
-                            actual_long = run_candidate_stage(
-                                candidate, mpiexec, rank_count, backend, model,
-                                common.long_run(
-                                    float(case["time_step_fs"]), int(profile["steps"]),
-                                    int(profile["thermo_interval"]),
-                                    int(profile["trajectory_interval"]),
-                                ),
-                                potential_text, config_root / "long", env, args.timeout,
-                                ("trajectory.xyz", "thermo.out", "restart.xyz"),
+                        ] = actual_metrics
+                        histogram_l1 = common.histogram_l1(
+                            reference_histogram, actual_histogram
+                        )
+                        case_report["pair_histogram_l1"].setdefault(config, {})[
+                            str(seed)
+                        ] = histogram_l1
+                        if histogram_l1 > float(
+                            manifest["acceptance"]["pair_histogram_l1_limit"]
+                        ):
+                            raise baseline.BaselineError(
+                                f"{case_name}/seed-{seed}/{config}: pair histogram L1 "
+                                f"{histogram_l1:.6e} exceeds limit"
+                            )
+                        if "replay" in sections:
+                            forward = replay_frames(
+                                reference_long / "trajectory.xyz", candidate,
+                                (str(mpiexec), "-n", str(rank_count)), potential_text,
+                                config_root / "replay-reference-in-candidate", env,
+                                args.timeout, collector,
+                                f"replay-reference/{case_name}/seed-{seed}/{config}",
+                                (rank_count, backend, expected_mode),
                                 resume_stages, args.adopt_existing, args.retries,
                             )
-                            actual_metrics, actual_histogram = append_trajectory_metrics(
-                                actual_static, actual_long, case
+                            reverse = replay_frames(
+                                actual_long / "trajectory.xyz", reference, (), potential_text,
+                                config_root / "replay-candidate-in-reference", reference_env,
+                                args.timeout, collector,
+                                f"replay-candidate/{case_name}/seed-{seed}/{config}", None,
+                                resume_stages, args.adopt_existing, args.retries,
                             )
-                            candidate_metrics_by_config.setdefault(config, {})[seed] = actual_metrics
-                            case_report["candidate_metrics"].setdefault(config, {})[
+                            case_report["replay_frames"].setdefault(config, {})[
                                 str(seed)
-                            ] = actual_metrics
-                            histogram_l1 = common.histogram_l1(
-                                reference_histogram, actual_histogram
-                            )
-                            case_report["pair_histogram_l1"].setdefault(config, {})[
-                                str(seed)
-                            ] = histogram_l1
-                            if histogram_l1 > float(
-                                manifest["acceptance"]["pair_histogram_l1_limit"]
-                            ):
-                                raise baseline.BaselineError(
-                                    f"{case_name}/seed-{seed}/{config}: pair histogram L1 "
-                                    f"{histogram_l1:.6e} exceeds limit"
-                                )
-                            if "replay" in sections:
-                                forward = replay_frames(
-                                    reference_long / "trajectory.xyz", candidate,
-                                    (str(mpiexec), "-n", str(rank_count)), potential_text,
-                                    config_root / "replay-reference-in-candidate", env,
-                                    args.timeout, collector,
-                                    f"replay-reference/{case_name}/seed-{seed}/{config}",
-                                    (rank_count, backend),
-                                    resume_stages, args.adopt_existing, args.retries,
-                                )
-                                reverse = replay_frames(
-                                    actual_long / "trajectory.xyz", reference, (), potential_text,
-                                    config_root / "replay-candidate-in-reference", reference_env,
-                                    args.timeout, collector,
-                                    f"replay-candidate/{case_name}/seed-{seed}/{config}", None,
-                                    resume_stages, args.adopt_existing, args.retries,
-                                )
-                                case_report["replay_frames"].setdefault(config, {})[
-                                    str(seed)
-                                ] = {
-                                    "reference_in_candidate": forward,
-                                    "candidate_in_reference": reverse,
-                                }
+                            ] = {
+                                "reference_in_candidate": forward,
+                                "candidate_in_reference": reverse,
+                            }
 
-                        if reference_nvt_metrics is not None and reference_nvt_rdf is not None:
-                            actual_nvt = run_candidate_stage(
-                                candidate,
-                                mpiexec,
-                                rank_count,
-                                backend,
-                                model,
-                                common.nvt_run(
-                                    float(case["time_step_fs"]),
-                                    int(profile["nvt_equilibration_steps"]),
-                                    int(profile["nvt_sampling_steps"]),
-                                    int(profile["nvt_thermo_interval"]),
-                                    int(profile["nvt_trajectory_interval"]),
-                                    float(case["nvt_temperature_K"]),
-                                    float(profile["nvt_temperature_coupling"]),
-                                ),
-                                potential_text,
-                                config_root / "nvt",
-                                env,
-                                args.timeout,
-                                ("nvt.xyz", "thermo.out"),
-                                resume_stages,
-                                args.adopt_existing,
-                                args.retries,
-                            )
-                            actual_nvt_metrics, actual_nvt_rdf = append_nvt_metrics(
-                                actual_nvt, case
-                            )
-                            candidate_nvt_metrics_by_config.setdefault(config, {})[
-                                seed
-                            ] = actual_nvt_metrics
-                            case_report["nvt_candidate_metrics"].setdefault(config, {})[
-                                str(seed)
-                            ] = actual_nvt_metrics
-                            nvt_rdf_l1 = common.rdf_l1(reference_nvt_rdf, actual_nvt_rdf)
-                            case_report["nvt_rdf_l1"].setdefault(config, {})[
-                                str(seed)
-                            ] = nvt_rdf_l1
-                            if nvt_rdf_l1 > float(
-                                manifest["statistical_acceptance"]["rdf_time_average_l1_limit"]
-                            ):
-                                raise baseline.BaselineError(
-                                    f"{case_name}/seed-{seed}/{config}: time-averaged RDF L1 "
-                                    f"{nvt_rdf_l1:.6e} exceeds limit"
-                                )
-                        write_json_atomic(
-                            config_root / CONFIG_COMPLETE_NAME,
-                            {
-                                "schema_version": 1,
-                                "status": "complete",
-                                "completed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-                                "case": case_name,
-                                "seed": seed,
-                                "backend": backend,
-                                "ranks": rank_count,
-                            },
+                    if reference_nvt_metrics is not None and reference_nvt_rdf is not None:
+                        actual_nvt = run_candidate_stage(
+                            candidate,
+                            mpiexec,
+                            rank_count,
+                            backend,
+                            expected_mode,
+                            model,
+                            common.nvt_run(
+                                float(case["time_step_fs"]),
+                                int(profile["nvt_equilibration_steps"]),
+                                int(profile["nvt_sampling_steps"]),
+                                int(profile["nvt_thermo_interval"]),
+                                int(profile["nvt_trajectory_interval"]),
+                                float(case["nvt_temperature_K"]),
+                                float(profile["nvt_temperature_coupling"]),
+                            ),
+                            potential_text,
+                            config_root / "nvt",
+                            env,
+                            args.timeout,
+                            ("nvt.xyz", "thermo.out"),
+                            resume_stages,
+                            args.adopt_existing,
+                            args.retries,
                         )
-                        completed_configs.add(config_key)
-                        print(
-                            f"LONG_NVE_CONFIG status=passed completed={len(completed_configs)} "
-                            f"total={len(expected_configs)} "
-                            f"pending={len(expected_configs) - len(completed_configs)} "
-                            f"case={case_name} seed={seed} backend={backend} ranks={rank_count}",
-                            flush=True,
+                        actual_nvt_metrics, actual_nvt_rdf = append_nvt_metrics(
+                            actual_nvt, case
                         )
-                        if dashboard is not None:
-                            dashboard.config_passed(config_key)
+                        candidate_nvt_metrics_by_config.setdefault(config, {})[
+                            seed
+                        ] = actual_nvt_metrics
+                        case_report["nvt_candidate_metrics"].setdefault(config, {})[
+                            str(seed)
+                        ] = actual_nvt_metrics
+                        nvt_rdf_l1 = common.rdf_l1(reference_nvt_rdf, actual_nvt_rdf)
+                        case_report["nvt_rdf_l1"].setdefault(config, {})[
+                            str(seed)
+                        ] = nvt_rdf_l1
+                        if nvt_rdf_l1 > float(
+                            manifest["statistical_acceptance"]["rdf_time_average_l1_limit"]
+                        ):
+                            raise baseline.BaselineError(
+                                f"{case_name}/seed-{seed}/{config}: time-averaged RDF L1 "
+                                f"{nvt_rdf_l1:.6e} exceeds limit"
+                            )
+                    write_json_atomic(
+                        config_root / CONFIG_COMPLETE_NAME,
+                        {
+                            "schema_version": 1,
+                            "status": "complete",
+                            "completed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                            "case": case_name,
+                            "seed": seed,
+                            "backend": backend,
+                            "ranks": rank_count,
+                            "domain_mode": expected_mode,
+                        },
+                    )
+                    case_report["domain_mode_by_config"][config] = expected_mode
+                    completed_configs.add(config_key)
+                    print(
+                        f"LONG_NVE_CONFIG status=passed completed={len(completed_configs)} "
+                        f"total={len(expected_configs)} "
+                        f"pending={len(expected_configs) - len(completed_configs)} "
+                        f"case={case_name} seed={seed} backend={backend} "
+                        f"ranks={rank_count} domain_mode={expected_mode}",
+                        flush=True,
+                    )
+                    if dashboard is not None:
+                        dashboard.config_passed(config_key)
 
             if "long" in sections and physics_case:
                 if dashboard is not None:

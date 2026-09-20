@@ -2,10 +2,12 @@
 
 类别：现行标准。
 
-更新日期：2026-09-15。
+更新日期：2026-09-18。
 
-本文档描述当前 single-rank 与 M1 空间所有权 MPI `dmg-md` 的数据面，并以现有代码为
-权威来源。
+本文档描述 single-rank、M1 空间所有权 replicated MPI 与 M2a rank-local
+domain `dmg-md` 的数据面，并以现有代码为权威来源。运行时在两种数据面之间
+按 `DMGMD_DOMAIN` eligibility 记录分派（见
+[replicated-mpi.md](./replicated-mpi.md)）。
 
 ## 1. 数据域约定
 
@@ -25,14 +27,14 @@ struct AtomCounts {
 
 各计数的含义为：
 
-| 计数 | 当前含义 | 可用于数组寻址 |
-| --- | --- | --- |
-| `global_count` | 全局原子数元数据 | 否 |
-| `owned_count` | reader 模型中的记录数；replicated prototype 当前为 N | 否 |
-| `ghost_count` | 本 rank 可寻址但不拥有的原子数 | 否，当前必须为 0 |
-| `local_count()` | `owned_count + ghost_count` | 是，所有每原子 SoA 的 stride |
+| 计数 | M1 replicated 路径 | M2a local-domain 路径 | 可用于数组寻址 |
+| --- | --- | --- | --- |
+| `global_count` | 全局原子数元数据 | 全局原子数元数据 | 否 |
+| `owned_count` | reader 模型中的记录数；M1 为 N | 本 rank 空间 owned 原子数 | 否 |
+| `ghost_count` | 当前必须为 0 | 本 rank 可寻址但不拥有的原子数 | 否 |
+| `local_count()` | `N`（replicated stride） | `owned + ghost` | 是，所有每原子 SoA 的 stride |
 
-当前 reader 初始化为：
+M1 路径的 reader 初始化为：
 
 ```text
 global_count = N
@@ -46,6 +48,17 @@ global_id    = [0, 1, ..., N - 1]
 （`include/dmgmd/spatial_ownership.hpp`）表示——P>1 时是沿最长边的等宽 fractional slab
 给出的**槽位子集**，P=1 时是 rank 0 的平凡全集映射；不得把 reader 的 `owned_count=N`
 误当成每 rank 都拥有 N 份物理输出，也不得把它误当成空间 owned 数量。
+
+M2a 路径下 reader 的完整模型在 bootstrap 时用于推导初始 owned 集
+（`include/dmgmd/domain_layout.hpp` 的 `DomainAtomRecord`）；此后 `LocalLayout` 是 device
+数据面的权威布局。完整 `HostAtoms` 当前仍在每个 rank 保留，作为静态 identity/输出格式
+元数据，因此 host 内存仍为 O(NP)；它不得重新成为 force/integration/thermo 数据面。
+local 槽位顺序为 `[0, owned)`（global_id 升序）| dependency
+ghosts | coordinate-only ghosts，ghost 段按 `(source face, source rank, global_id)`
+排序；`local_count` 是全部 SoA 与 NEP workspace 的唯一 stride，`global_count`
+只是元数据。每个槽位携带 global_id、owner/source rank、face 与 image shift。
+
+
 
 ## 2. Host 模型
 
@@ -189,9 +202,33 @@ MPI 空间所有权（`SpatialOwnership`）与 `AtomCounts::owned_count` 不混�
 （空 slab）合法，且 M1 明确支持 `N<P`。NEP scratch 保持全中心，是因为直接按 owned 设置 `N1/N2` 会缺失分片外
 `Fp` 和 reverse partial。详见 `replicated-mpi.md`。
 
-## 8. 初始化与输出合同
+## 8. M2a local-domain 数据面（现行）
 
-replicated runtime 入口要求：
+M2a（`src/domain_runtime.cu`）的 device 数组按上述 local 布局寻址：
+
+| buffer | 分配尺寸 | 有效域 |
+| --- | ---: | --- |
+| `global_id` / `type` | `local_count` | 全部 local 槽位（身份/typewise 过滤） |
+| `mass` / `charge` | `local_count` | owned 权威；ghost 槽位不参与积分/thermo/输出 |
+| `position` | `3 * local_count` | 全部 local（ghost 位置每步 24 B p2p 刷新） |
+| `velocity` | `3 * local_count` | owned 权威（correct_velocity 经 gather/scatter 维护） |
+| `force` / `potential` / `virial` | `3 / 1 / 9 * local_count` | owned 权威；ghost 槽位是 scratch（清零无害，永不 gather） |
+| `unwrapped` / `previous_position` | 按需 `3 * local_count` | owned（unwrapped 随迁移载荷传递） |
+| NEP `Fp/sum_fxyz/f12/NN/NL` workspace | `local_count` stride | descriptor 域 `[0, owned+dep)`；候选 `[0, local_count)` |
+
+表中的尺寸是**逻辑尺寸/stride**。为避免底层零字节 device allocation 的实现差异，
+`local_count==0` 时部分 `GPU_Vector` 物理 capacity 保留 1 个元素；NEP domain 接口另行显式
+接收逻辑 `local_count`，所有中心范围均为空，任何 kernel、D2H 或邻居重建都不得访问该填充
+元素。`local_count>0` 时物理 per-atom capacity 与逻辑 stride 相等。
+
+每原子输出 gather 使用 local-owned-prefix + global ID（root 按 input-slot 顺序恢复
+恰好 N 条记录），`global_count` 从不作为 device 数组 stride。布局在迁移或 halo
+membership 重建时整体重建（epoch++），NEP workspace 只在 `local_count` 变化时
+重新分配，但每次布局变化都强制 neighbor 重建并使全部缓存 view 失效。
+
+## 9. 初始化与输出合同（双路径）
+
+M1 replicated runtime 入口要求：
 
 ```text
 local_count == global_count
@@ -202,7 +239,13 @@ ghost_count == 0
 空间 owned 槽位，并在 rank 0 按 `global_id` 恢复顺序；thermo 只对 owned 槽位求 local sum
 后做全局归约。
 
+M2a local-domain 入口在 eligibility 判定后由 bootstrap 建立：初始 owned 集来自 wrapped
+输入坐标的 slab 归属，owned 位置的首次 wrap 使用共享的 device `wrap_positions` kernel
+（与 M1 首次 force 的 wrap 逐位一致，host 端复算会因 FMA 收缩差一个 ULP），unwrapped
+种子为 raw 输入坐标。输出/thermo 只承认 owned 前缀。
+
 single-rank 实现以及 Open MPI+UCX 环境下的 HostStaged/CudaAware 1/2/4-rank prototype 均已
 在沙箱外 GPU 上通过四组锁定 GPUMD golden；M1 空间所有权的 P=1 路径与 M0 逐字节一致，
-P>1 由 differential 与迁移矩阵验证。验证状态与命令见
+P>1 由 differential 与迁移矩阵验证；M2a 由大盒 domain 矩阵验证（实测 per-atom
+输出与 P=1 oracle 逐字节一致）。验证状态与命令见
 [current.md](../status/current.md)。

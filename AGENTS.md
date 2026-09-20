@@ -17,35 +17,41 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1；下一实施切口：M2a
+## 当前代码基线：M1 + M2a；下一实施切口：M2b（待审批）
 
-当前已实施的代码基线是 M1：一 MPI rank 对应一张 GPU；数据面仍是 replicated-full
-（每 rank 持有全部 N 个槽位，`ghost_count == 0`，ordinary NEP 仍对全部中心计算），
-但积分、thermo 与输出的权威已从连续下标区间改为**空间 slab 所有权**：
+当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
+调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
+eligibility 后在两条数据面之间分派：
 
-- P=1 完全退化为 M0 路径（全部原子归 rank 0，无迁移通信，输出逐字节一致）；
-- P>1 仅支持正交、三方向全周期 box，沿最长边（参考实现的确定性 tie 规则）切 P 个
-  等宽 fractional half-open slab；triclinic 或非周期方向必须明确报 unsupported；
-- 所有权是 **global_id 上的逻辑归属**（owner map + owned index list + mask，
-  `include/dmgmd/spatial_ownership.hpp`），不是数组槽位的物理迁移；原子跨 slab 时
-  由旧 owner 将最新 velocity/unwrapped 经 indexed Allgatherv 交给新 owner；
-- position 仍每步 indexed Allgatherv 恢复制态；默认 HostStaged，CudaAware 必须先通过
-  Open MPI capability query 和运行时数值自检；
-- 所有用户可见文件只由 rank 0 写；
-- 仍不实现 ghost、halo、点对点通信或 NEP 中心分片（M2 内容），也不发布性能结论；
-- 不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
+- **M1 replicated-full**（P=1 恒定，及不满足 M2a 判据的 P>1 输入）：每 rank 持有
+  全部 N 个槽位，积分/thermo/输出权威按空间 slab 所有权（global_id 逻辑归属 +
+  indexed collectives）迁移；P=1 与 M0 逐字节一致；小盒（如 24 Å fixture）因
+  `slab_width < d_coord` 自动走此路径，行为不变；
+- **M2a local-domain**（P>1、正交全周期、NEP large-box 判据、
+  `slab_width >= d_coord`）：rank-local owned/ghost 布局（owned | dependency
+  ghosts | coordinate-only ghosts，local_count 唯一 stride）、保守两跳位置 halo
+  （`d_dep = max R_force + skin`、`d_coord = max(R_force+R_dep) + 2*skin`，按
+  kernel 实际消费路径枚举，无法证明上界 fail closed）、p2p halo/迁移
+  （HostStaged/CudaAware 双后端、独立方向 tag、CudaAware 需通过 device-buffer
+  p2p 自检）、NEP 力中心 `[0, owned)` / 依赖中心 `[0, owned+dep)` / 候选
+  `[0, local_count)` 分片（global-ID 行排序，legacy P1/M1 路径不变）；
+- rank 0 输出 `DMGMD_DOMAIN mode=m2a|m1-fallback ...` 机器可读记录；triclinic/
+  非周期在 P>1 下保持 M1 的 unsupported 错误；单步位移超过一个盒长时 wrap 单次
+  调整语义不变（下游带判定用 MIC 距离）；
+- 所有用户可见文件只由 rank 0 写；不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
 - 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
 
-本阶段的实现、所有权、迁移时序、通信量和验证契约位于
-`docs/standards/replicated-mpi.md`。所有文档从 `docs/README.md` 进入：
+双路径的布局、半径、每步顺序、通信量与验证契约位于
+`docs/standards/replicated-mpi.md` 与 `docs/standards/data-layout.md`。所有文档从
+`docs/README.md` 进入：
 
 - `docs/standards/`：当前已经生效的产品、架构和测试合同；
 - `docs/status/`：带日期、revision、环境和命令的进度或实测备忘；
 - `docs/plans/`：尚未实施或待审批的方案、风险和待办。
 
-ghost/halo、本地数组压缩与 NEP 中心分片仍不是当前 runtime 能力。维护者已批准
-`docs/plans/domain-decomposition.md` 中的 M2a 进入实现；在其代码和验收门完成前仍必须描述为
-待实施，M2b 及之后仍待后续审批。
+M2a 已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
+nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行，不发布性能结论。M2b（Fp/partial 分阶段交换）、3D 分解、
+triclinic/非周期 local-domain 仍待后续审批。
 
 ## GPUMD 复现边界（强制）
 

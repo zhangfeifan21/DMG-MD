@@ -2,116 +2,150 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-09-17。
+更新日期：2026-09-20。
 
-代码基线：`10903db`（M0 + M1，`local indexed atoms implemented`）。本页的 M1 描述以该
-revision 为准；M2a 已获准进入实现，但此基线尚未包含 M2a 代码。
+代码基线：工作树基于 `f8f7982`（其上为 `10903db` = M0+M1）之上的 M2a 实现
+（未提交；`git status` 为已修改未提交的工作树，`git diff --check` 干净）。本页
+的 M2a 描述以该工作树为准。
 
 ## 当前结论
 
-`dmg-md` 已完成 single-rank 路径和一 MPI rank 一 GPU 的 replicated-data MPI runtime。
-当前每个 rank 仍保存完整坐标和类型，并执行完整 ordinary NEP scratch；积分、thermo、输出
-记录和 rank 0 I/O 按空间 slab 所有权唯一归属（M1）：P=1 为平凡映射，
-P>1 沿最长边等宽 fractional slab，原子跨 slab 时做 global_id 上的逻辑所有权迁移。
+`dmg-md` 已完成 single-rank 路径、一 MPI rank 一 GPU 的 replicated-data MPI
+runtime（M1）与 M2a local-domain 路径：
 
-尚未实现 ghost/halo、本地数组压缩或 phase-level NEP 中心并行（M2a 内容）。因此当前多 GPU
-结果是正确性原型，不是可发布的 scaling 结果。
+- M1：数据面 replicated-full，积分/thermo/输出权威按空间 slab 所有权归属，
+  迁移为 global_id 上的逻辑移交（P=1 恒走此路径，输出与 M0 逐字节一致）；
+- M2a（2026-09-18 新增）：满足 eligibility（P>1、正交全周期、NEP large-box
+  判据、`slab_width >= d_coord`）的输入进入 rank-local owned/ghost 布局 +
+  保守两跳位置 halo + p2p halo/迁移 + NEP 中心/依赖域分片；其余 P>1 输入
+  自动回退 M1 replicated-full（`DMGMD_DOMAIN mode=m1-fallback`），小盒继续可运行；
+- M2b（Fp/partial 分阶段交换）与 M3（多节点硬化）仍未实施。
 
-## 已实现能力
+M2a 的 10000-step nightly profile 已于 2026-09-18 手动执行并通过验证：覆盖 7 个
+case、seed 0、1/2/4 rank、HostStaged/CudaAware 共 42 个配置，其中 2/4 rank 的
+M2a 配置共 28 个，全部通过。100000-step release 矩阵尚未执行，因此仍不发布
+性能或 scaling 结论。
 
-- 构建和运行固定使用 `../env/md-mpi.sh` 提供的 Open MPI+UCX/CUDA 栈；
-- shared local rank 绑定唯一 GPU，并校验同节点 CUDA UUID 不重复；
-- 默认 HostStaged，CudaAware 需同时通过 `MPIX_Query_cuda_support()` 和四类 device-buffer
-  collective 数值自检；
-- GPUMD 最小数值核心位于 `src/gpumd_compat/`，构建和运行不依赖
-  `../gpumd-reference`；
-- 支持 NEP4、NEP5、对应 ZBL/typewise/flexible 分支，以及 NVE、`nvt_ber`、
-  `correct_velocity`、thermo/XYZ/restart 和多段 run；
-- `model.xyz` 和 `run.in` 先完成兼容解析与 fail-fast 校验，再初始化 GPU；
-- position 每步 indexed Allgatherv（M1：按 owned index list 打包、按 global_id/slot
-  scatter plan 还原），ownership map hash 每步 Allreduce 校验（P>1），迁移步用旧
-  ownership 恢复最新 velocity/unwrapped，owned thermo Allreduce，velocity 不再每步复制
-  （M0），输出由 rank 0 按 global ID 恢复稳定顺序；
-- runtime 输出 `DMGMD_COMM`、center coverage、MPI/GPU 环境记录和
-  `DMGMD_TIMING phase=run/total`；
-- long-NVE runner 支持 stage 哈希 checkpoint、失败分类、干净重试、保留失败尝试和断点续跑。
+## 已实现能力（M2a 增量）
 
-现行合同分别见：
+- potential 只解析一次：deferred-workspace NEP 构造 + `allocate_workspace`
+  （M1 fallback 用 global N、M2a 用 local_count 分配，不保留 global-N GPU scratch）；
+- `include/dmgmd/domain_layout.hpp`（纯 CPU、无 MPI/CUDA）：typewise
+  `R_force/R_dep -> d_dep/d_coord` 推导（radial-first filter、angular list、
+  ZBL 消费 angular list 的语义忠实保留；非有限 cutoff fail closed）、eligibility
+  与 fallback reason、local layout（owned | dependency ghosts | coordinate-only
+  ghosts，`(face, source, gid)` 排序）、MIC 带发送列表（含 P=2 同 peer 去重）、
+  迁移路由（一步跨任意多 slab）、malformed plan 拒绝；
+- `MpiRuntime` p2p：`MPI_Isend/Irecv/Waitall` 双后端（左右独立 tag/buffer，
+  P=2 同 peer 安全；零 count 合法）、CudaAware 新增真实 device-buffer p2p
+  Send/Recv 自检（失败回退 HostStaged）、HostStaged membership/count p2p、
+  Alltoall/Alltoallv/Allgather 计数交换、owned-prefix gather（带 gid）与
+  correct_velocity scatter；
+- `src/domain_runtime.cu`：M2a 每步顺序（correct_velocity -> adaptive dt ->
+  VV1 -> wrap -> direct migration -> halo refresh/rebuild -> 全局 rebuild OR ->
+  域分片 NEP -> VV2 -> thermo -> thermostat -> 输出）、neighbor.out 经 MPI_MAX
+  仅 rank 0 写单记录、多段 run 延续 domain state；
+- `gpumd_compat` 参数化：`Potential::ND1/ND2`、`Neighbor` 中心/候选域分离 +
+  global-ID 行排序 + 行容量守卫 + `invalidate_rebuild_reference`、gid 键
+  many-body 反向边二分、`NEP::compute_domain`（`[0, owned)` 力中心、
+  `[0, owned+dep)` 依赖中心、`[0, local_count)` 候选、空区间 launch 前短路）。
 
-- [输入输出兼容矩阵](../standards/compatibility-matrix.md)；
-- [数据布局](../standards/data-layout.md)；
-- [replicated MPI 协议](../standards/replicated-mpi.md)；
-- [Golden Test 标准](../standards/golden-test-standard.md)。
+## 已记录的验证结果（2026-09-18，M2a 验收与 nightly）
 
-## 已记录的验证结果
+环境：`source ../env/md-mpi.sh`（Open MPI 5.0.10 + UCX 1.22.0 + CUDA），
+4× RTX 4090（`nvidia-smi` UUID GPU-a4cdc2a3… / GPU-411245be…），
+候选 `./build/dmg-md`（本工作树 Release 构建，`cmake -S . -B build
+-DCMAKE_BUILD_TYPE=Release && cmake --build build -j`）。
 
-### CPU 与短程 differential
+执行与最终结果（无放宽容差）：
 
-2026-09-09 的记录包括：
+| 命令 | 结果 |
+| --- | --- |
+| `ctest --test-dir build --output-on-failure` | 5 passed + 1 skipped（沙箱无 GPU；含 `dmgmd.domain_layout`） |
+| `./build/tests/dmgmd_domain_neighbor_cuda_tests`（沙箱外） | PASS（非零 `center_begin` ELL 行寻址） |
+| `python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3` | PASS（含 `cuda_aware_p2p_self_test=passed` 新门） |
+| `python3 tests/mpi/run_mpi_differential.py --candidate ./build/dmg-md --devices 0,1,2,3` | 1/2/4 rank × HostStaged/CudaAware 六组全 PASS；24 Å fixture 断言 `mode=m1-fallback` |
+| `python3 tests/mpi/run_mpi_migration.py --candidate ./build/dmg-md --devices 0,1,2,3` | 全矩阵 PASS（含 unsupported-box 门、字节精确匹配）；断言 `mode=m1-fallback` |
+| `python3 tests/mpi/run_mpi_domain.py --candidate ./build/dmg-md --devices 0,1,2,3` | 9 cases × HostStaged/CudaAware × 2/4 rank 共 36 组全 PASS |
+| `scripts/run_long_nve_nightly.sh` | 手动执行并 PASS；7 cases × seed 0 × 1/2/4 rank × HostStaged/CudaAware 共 42 个配置全通过，其中 M2a 2/4 rank 共 28 个配置 |
+| `python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0` | 4/4 committed single-rank golden PASS |
 
-- CTest 4/4；
-- committed baseline 4/4；
-- DMG-MD single-rank candidate baseline 4/4；
-- 1/2/4 rank × HostStaged/CudaAware 共六组 MPI differential 全部通过；
-- `src/gpumd_compat/` 切换后，force/energy/virial 差异仍在浮点噪声量级。
+`run_mpi_domain.py` 的覆盖（`tests/mpi/run_mpi_domain.py` 为第一事实源）：
 
-baseline 的环境、命令、case 和校准证据见 [baseline-results.md](./baseline-results.md)。
+- 64×24×24 大盒（nep_C.txt：rc_radial=7、rc_angular=4 ⇒ d_dep=8、d_coord=16；
+  P=2 slab 32 Å、P=4 slab 16 Å），同输入 P=1 为 oracle；
+- 断言 `DMGMD_DOMAIN mode=m2a`（fallback 不算覆盖）、三原子两跳链（k 距
+  rank0 slab 8.5 Å ∈ (d_dep, d_coord]，证明 coordinate-only ghost 闭包）；
+- 两原子静止用例令 P=4 rank 2 连续 1000 步保持逻辑 `local_count=0`；force call
+  0/1000 的 `neighbor.out` 与 P=1 逐字节一致，第 1000 步额外两个 MPI_MAX 的
+  collective 次数及 input/output `16P` 字节精确匹配；
+- NEP5、mixed typewise cutoff、flexible ZBL、typewise ZBL 两步 large-box 用例在
+  2/4 rank × HostStaged/CudaAware 下对 P=1 oracle 全通过；
+- 迁移 transitions 与逐步 dump 坐标重算完全一致（内部相邻、周期首尾、一步跨
+  多 slab、暂时空 slab、N<P）；restart 跨 2/4 rank 恢复；
+- per-atom energy/force/virial、thermo、短轨迹对 P=1 oracle 在 committed 容差内
+  （实测 576 原子 × 10 帧全部原子行**逐字节一致**，仅 dump_xyz 帧头
+  energy/virial/stress 求和存在 R16 归约顺序噪声，最大 1.7e-18 量级）；
+- 每步通信记录逐字段精确匹配模型：普通步 collective_calls=3、mpi_in/out=80P，
+  无任何 N-scaled collective；per-rank `DMGMD_DOMAIN_COMM` 的
+  halo/migration/control 字节与 `DMGMD_DOMAIN_LAYOUT` 推导值精确相等
+  （24 B/步/原子刷新 + 40 B membership/重建步 + 4 B/face count + 迁移记录
+  80/104 B/原子）。
 
-### 长程 suite
+大盒 M2a smoke/profile（576 原子、500 步、4 rank HostStaged）：
+`DMGMD_TIMING phase=run steps=500 atoms=576 ranks=4 seconds_max=0.733
+global_atom_steps_per_second=392782`；325 个 layout epoch（迁移+skin 重建），
+`DMGMD_DOMAIN mode=m2a axis=x d_dep=8 d_coord=16 slab_width=16`。
 
-已记录通过：
+M2a nightly（2026-09-18 手动执行）使用 profile 专属长轴大盒，执行 NVE/NVT、短程
+严格比较、构型回放与跨 rank restart；7 个 case 的 42 个配置全部通过，M2a 的
+2/4-rank HostStaged/CudaAware 配置 28/28 全部命中 `mode=m2a` 并通过验证。结果报告为
+`dmgmd-nightly-20260918-171122/report.json`，candidate SHA-256 为
+`07c8f0a0d4b9305cfd3f506ad7172960dbe2b72f02edf5589b73eae4fb2506dc`。
 
-- 三个物理 fixture 的 smoke 切片；
-- C case 的 1↔2 rank restart 和 CudaAware smoke；
-- 4096-atom C、seed 0、1 rank、HostStaged 的 100000-step `long` section；
-- 四个 potential 兼容变体和 C 体系的 NVT 扩展 smoke。
-
-尚未完整执行 nightly，以及 release 的三体系、5 个 seed、1/2/4/8 rank、双后端全矩阵。
-定义但未完整执行的矩阵不得写成已通过。
+CPU 单测（`tests/domain_layout_tests.cpp`，`ctest -R dmgmd.domain_layout`）：
+typewise 半径、eligibility/fallback reason、slab 边界（s=0/s=1/恰在边界）、
+mixed-cutoff float 舍入上界、P=2 同 peer 去重、真正 `local_count=0`、空 rank/N<P、
+确定性槽位序、malformed exchange/migration plan 拒绝、一步跨多 slab 路由、membership
+记录布局。独立 CUDA 单测覆盖非零 `center_begin` 的 ELL 行选择与 global-ID 排序。
 
 ## 已知缺口
 
-- R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双物理节点
-  （互不可见 TMPDIR）验收也尚未执行，见 [multi-node-io.md](../plans/multi-node-io.md)；
-- M1（空间 slab 所有权 + global_id 逻辑迁移）已提交为 `10903db`；此前记录的迁移矩阵、
-  differential 与 long-NVE smoke 不等于尚未执行的完整 nightly/release；
-  M2a（ghost/halo、本地布局、NEP 中心分片、点对点通信）已批准但尚未实现，M2b/M3 仍是计划，见
-  [域分解计划](../plans/domain-decomposition.md)；M0 已实施（见下）；
-- malformed potential corpus、若干 cutoff/ZBL 边界和 future command 语义仍待验证，见
+- M2a profile 专属大盒 nightly 已于 2026-09-18 手动执行并通过（7 个 case、42 个配置，
+  其中 M2a 2/4 rank 共 28 个配置）；100000-step release 矩阵仍待执行，compatibility
+  变体按合同只执行静态/短轨迹；
+- R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双
+  物理（互不可见 TMPDIR）节点验收也尚未执行，见
+  [multi-node-io.md](../plans/multi-node-io.md)；
+- M2b（Fp/partial 分阶段交换）与 M3（3D 分解、triclinic/非周期 local-domain、
+  多节点 rank-slab 布局、scaling 基准）仍是计划；
+- M2a 的 debug 构建不变量断言（risk-and-backlog §5 全表）未实现为每步 assert，
+  由 CPU 单测 + layout 记录 + 精确字节模型间接覆盖；
+- M2a device 数据面为 local，但每 rank 仍保留完整 `HostAtoms` identity/输出元数据，
+  因此 host 内存仍为 O(NP)；后续大 N 输出元数据分片前不宣称端到端内存 scaling；
+- malformed potential corpus、若干 cutoff/ZBL 边界语义仍待验证，见
   [风险与待办](../plans/risk-and-backlog.md)；
-- replicated-full 阶段禁止从 `DMGMD_TIMING` 或正确性作业 wall time 推导性能结论。
+- replicated/M2a 阶段均不发布多卡 speedup 或 scaling 结论。
 
 ## 最近变更
 
-2026-09-15 M0（删除每步 velocity Allgatherv）已实施并验收：
+2026-09-18 M2a 已实施并验收（本工作树，未提交）：
 
-- 修改 `src/runtime.cu`：删除 `run_segment` 段末的每步 velocity Allgatherv；
-  correct_velocity 触发步（`step % interval == 0`）在调用 `correct_device_velocity`
-  之前补一次 velocity Allgatherv 恢复复制态，修正后的 Bcast 重新复制完整数组；
-- 同步修订 `tests/mpi/run_mpi_differential.py` 的 `collective_calls` 下限断言
-  （3→2，普通步只剩 position Allgatherv + thermo Allreduce）与
-  `docs/standards/replicated-mpi.md` 的每步顺序和字节表；
-- 验证环境：`../env/md-mpi.sh`（Open MPI 5.0.10 + UCX 1.22.0），4× RTX 4090，
-  `source ../env/md-mpi.sh` 后：
-  - `ctest --test-dir build`：4/4 通过；
-  - `python3 tests/mpi/run_mpi_differential.py --candidate ./build/dmg-md --devices
-    0,1,2,3`：1/2/4 rank × HostStaged/CudaAware 六组全 PASS，容差未放宽，
-    NVE excursion/slope 与基线一致；
-  - pre/post 二进制 A/B（同一 GPU 矩阵、同一输入）：committed 四个 baseline case
-    全部输出（含 multi_nvt_restart 的 initial+resume 段）120 个文件、以及自建
-    correct_velocity 输入（25 步、interval 10、NVE/NVT 两体系）48 个文件，
-    pre/post 逐字节一致（`cmp`，0 差异）；
-  - `DMGMD_COMM` 字节核算与修订后标准逐字段吻合：普通步 MPI input `24N+64P`、
-    output `24NP+64P`（输出步另加 `152N` gather）；correct_velocity 触发步
-    input `72N+64P`、output `72NP+64P`；HostStaged 普通步 D2H/H2D 各减
-    `24N`/`24NP`（实例 N=8、P=2：D2H 1728→1536、H2D 896→512 B）。
-    基线二进制为修改前构建（`f1480c9` 工作树，`/tmp/dmg-md-preM0`）。
+- 新增 `include/dmgmd/domain_layout.hpp`（纯 CPU 布局/半径/eligibility/计划，
+  带完整 CPU 单测）、`src/domain_runtime.cu`（M2a 运行时）、
+  `src/runtime_internal.hpp`（两路径共享 kernel/formatter/RankIoIsolation）、
+  `tests/domain_layout_tests.cpp`、`tests/mpi/run_mpi_domain.py`；
+- `src/runtime.cu` 重构为模式调度器 + M1 fallback（行为不变，经 differential/
+  migration 全矩阵回归验证）；`src/mpi_runtime.cu` 扩展 p2p/类别记账/自检；
+  `src/gpumd_compat/{potential,neighbor,nep}.{cu,cuh}` 增加 ND 域、gid 排序、
+  deferred workspace 与 `compute_domain`（legacy 路径与数值未改动）；
+- `tests/mpi/check_environment.py` 增加 p2p 自检门；
+  `run_mpi_differential.py`/`run_mpi_migration.py` 增加 `mode=m1-fallback` 断言。
 
-2026-09-14 新增：
+同日审计整改：domain compute/rebuild 显式接收逻辑 `local_count` 并与非零 allocation
+capacity 分离；修正非零中心 ELL row offset；`neighbor.out` 改为在本次 typewise 表生成
+后采样并记账周期 MPI_MAX；typewise 半径复现 float pair-average 舍入并保守取上界；验收
+矩阵加入真正空域 1000-step 与 NEP5/typewise/ZBL 大盒用例。
 
-- `DMGMD_TIMING` 的 run-segment 与 total 汇总；
-- long-NVE stage checkpoint、输出哈希核验与 `--resume-work`；
-- 默认一次干净重试、失败尝试归档和 CUDA OOM 等失败分类；
-- 对上述编排逻辑的 CPU 单元测试。
-
-这些功能改变长作业的可恢复性和诊断信息，不改变物理验收容差，也没有引入性能通过门槛。
+2026-09-15 M0（删除每步 velocity Allgatherv）已实施并验收（详见 Git 历史与
+2026-09-15 的记录方式；基线二进制 A/B 逐字节一致）。M1（`10903db`）见 Git 历史。
