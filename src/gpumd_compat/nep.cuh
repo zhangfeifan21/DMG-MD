@@ -180,10 +180,9 @@ public:
     const GPU_Vector<unsigned long long>& global_id,
     const bool force_rebuild);
 
-  // (Re)allocates every per-atom NEP workspace and the neighbor scratch for
-  // num_atoms atoms, invalidating the neighbor rebuild reference. Safe to
-  // call repeatedly as the local layout changes; the potential parameters
-  // themselves are never re-parsed.
+  // Updates every logical per-atom NEP workspace size/stride and invalidates
+  // the neighbor rebuild reference. Physical capacity is reused when large
+  // enough; the potential parameters themselves are never re-parsed.
   void allocate_workspace(const int num_atoms);
 
   // True when the domain Verlet cache must be rebuilt before the next

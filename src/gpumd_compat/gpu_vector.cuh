@@ -48,6 +48,11 @@ Adaptations for this replica are listed at the bottom of this header block.
 #include "error.cuh"
 #include "gpu_macro.cuh"
 
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+
 namespace gpumd_compat {
 
 #pragma once
@@ -69,6 +74,21 @@ enum class Memory_Type {
   managed     // managed memory, also called unified memory
 };
 
+// DMG-MD diagnostic counter: successful GPU_Vector device/managed
+// allocations in this process. It counts allocations rather than resize
+// calls so M2a can distinguish logical layout updates from capacity growth
+// without adding synchronization.
+inline std::uint64_t& gpu_vector_allocation_counter()
+{
+  static std::uint64_t count = 0;
+  return count;
+}
+
+inline std::uint64_t gpu_vector_allocation_count()
+{
+  return gpu_vector_allocation_counter();
+}
+
 // RAII device-memory vector with host<->device copies and a fill kernel;
 // the container behind every replicated kernel's buffers and the DMG-MD
 // runtime's device arrays (reference gpu_vector.cuh:37).
@@ -81,14 +101,20 @@ public:
   GPU_Vector()
   {
     size_ = 0;
+    capacity_ = 0;
     memory_ = 0;
     memory_type_ = Memory_Type::global;
+    data_ = nullptr;
     allocated_ = false;
   }
 
   // only allocate memory
   GPU_Vector(const size_t size, const Memory_Type memory_type = Memory_Type::global)
   {
+    size_ = 0;
+    capacity_ = 0;
+    memory_ = 0;
+    data_ = nullptr;
     allocated_ = false;
     resize(size, memory_type);
   }
@@ -96,6 +122,10 @@ public:
   // allocate memory and initialize
   GPU_Vector(const size_t size, const T value, const Memory_Type memory_type = Memory_Type::global)
   {
+    size_ = 0;
+    capacity_ = 0;
+    memory_ = 0;
+    data_ = nullptr;
     allocated_ = false;
     resize(size, value, memory_type);
   }
@@ -113,11 +143,13 @@ public:
   void resize(const size_t size, const Memory_Type memory_type = Memory_Type::global)
   {
     size_ = size;
+    capacity_ = size;
     memory_ = size_ * sizeof(T);
     memory_type_ = memory_type;
     if (allocated_) {
       CHECK(gpuFree(data_));
       allocated_ = false;
+      data_ = nullptr;
     }
     if (memory_type_ == Memory_Type::global) {
       CHECK(gpuMalloc((void**)&data_, memory_));
@@ -126,17 +158,20 @@ public:
       CHECK(gpuMallocManaged((void**)&data_, memory_));
       allocated_ = true;
     }
+    ++gpu_vector_allocation_counter();
   }
 
   // allocate memory and initialize
   void resize(const size_t size, const T value, const Memory_Type memory_type = Memory_Type::global)
   {
     size_ = size;
+    capacity_ = size;
     memory_ = size_ * sizeof(T);
     memory_type_ = memory_type;
     if (allocated_) {
       CHECK(gpuFree(data_));
       allocated_ = false;
+      data_ = nullptr;
     }
     if (memory_type == Memory_Type::global) {
       CHECK(gpuMalloc((void**)&data_, memory_));
@@ -145,7 +180,32 @@ public:
       CHECK(gpuMallocManaged((void**)&data_, memory_));
       allocated_ = true;
     }
+    ++gpu_vector_allocation_counter();
     fill(value);
+  }
+
+  // DMG-MD M2a capacity-aware resize. Unlike the GPUMD-compatible resize()
+  // above, this retains a sufficiently large allocation while always
+  // updating the logical size (and therefore size()/copy/fill semantics).
+  // Growth intentionally does not preserve contents, matching resize().
+  void resize_reuse(const size_t size, const Memory_Type memory_type = Memory_Type::global)
+  {
+    if (memory_type == memory_type_ && size <= capacity_) {
+      size_ = size;
+      memory_ = size_ * sizeof(T);
+      return;
+    }
+    reallocate_reuse(size, memory_type);
+  }
+
+  // Initialization is never skipped when capacity is reused.
+  void resize_reuse(
+    const size_t size,
+    const T value,
+    const Memory_Type memory_type = Memory_Type::global)
+  {
+    resize_reuse(size, memory_type);
+    if (size_ != 0) fill(value);
   }
 
   // copy data from host with the default size
@@ -234,12 +294,49 @@ public:
 
   // some getters
   size_t size() const { return size_; }
+  size_t capacity() const { return capacity_; }
   T const* data() const { return data_; }
   T* data() { return data_; }
 
 private:
+  void reallocate_reuse(const size_t size, const Memory_Type memory_type)
+  {
+    const size_t max_elements = std::numeric_limits<size_t>::max() / sizeof(T);
+    if (size > max_elements) {
+      throw std::length_error("GPU_Vector capacity exceeds the addressable byte range");
+    }
+    const auto with_headroom = [max_elements](const size_t base) {
+      const size_t extra = base / 4 + 1;
+      return base > max_elements - extra ? max_elements : base + extra;
+    };
+    const size_t next_capacity =
+      size == 0 ? 0 : std::max(with_headroom(capacity_), with_headroom(size));
+    if (allocated_) {
+      CHECK(gpuFree(data_));
+      allocated_ = false;
+      data_ = nullptr;
+    }
+    size_ = size;
+    memory_ = size_ * sizeof(T);
+    memory_type_ = memory_type;
+    if (size == 0) {
+      capacity_ = 0;
+      return;
+    }
+    capacity_ = next_capacity;
+    const size_t allocation_memory = capacity_ * sizeof(T);
+    if (memory_type_ == Memory_Type::global) {
+      CHECK(gpuMalloc((void**)&data_, allocation_memory));
+    } else {
+      CHECK(gpuMallocManaged((void**)&data_, allocation_memory));
+    }
+    allocated_ = true;
+    ++gpu_vector_allocation_counter();
+  }
+
   bool allocated_;          // true for allocated memory
   size_t size_;             // number of elements
+  size_t capacity_;         // allocated elements; may exceed logical size_
   size_t memory_;           // memory in bytes
   Memory_Type memory_type_; // global or unified memory
   T* data_;                 // data pointer

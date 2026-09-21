@@ -159,6 +159,11 @@ halo selection = physical cutoff relative to triclinic rank faces
 
 ## 7. 未决事项
 
+性能实施路线（2026-09-21 批准）按以下顺序推进：第一阶段日志降噪与 GPU capacity 复用
+已完成实现与验收；第二阶段减少重建并分别测量普通步/重建步；第三阶段实现并比较 M2b 与
+MatPL 式 ghost 力回传。通信计算重叠、3D 分解、动态负载均衡、triclinic/非周期扩展均不在
+前三阶段内。第一阶段不改变 M2a 迁移触发、两跳 halo、force assembly 或统计频率。
+
 旧未决问题文档中的初始仓库快照、已经确认的第一切口决策和已经实现的功能不再保留在
 工作树中；这些历史可从 Git 和 [架构决策](../standards/architecture-decisions.md) 查询。以下只
 登记仍会影响当前兼容性或未来实现的事项。

@@ -405,6 +405,7 @@ def main() -> int:
                 env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
                 env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
                 env["DMGMD_COMM_BACKEND"] = backend_name
+                env["DMGMD_COMM_LOG_INTERVAL"] = "1"
                 run_root = work_root / backend_name / f"ranks-{ranks}"
                 result_dirs = baseline.execute_suite(
                     executable,

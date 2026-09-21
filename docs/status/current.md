@@ -2,11 +2,23 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-09-20。
+更新日期：2026-09-21。
 
-代码基线：工作树基于 `f8f7982`（其上为 `10903db` = M0+M1）之上的 M2a 实现
-（未提交；`git status` 为已修改未提交的工作树，`git diff --check` 干净）。本页
-的 M2a 描述以该工作树为准。
+本轮第一阶段修改前的 M2a 基线为 clean revision
+`27e07d92b84f0e02d08d99c400c52b795175341f`。Release 配置为
+`CMAKE_BUILD_TYPE=Release`、CUDA architectures `75;80;86;89;90`；修改前
+`build/dmg-md` SHA-256 为
+`07c8f0a0d4b9305cfd3f506ad7172960dbe2b72f02edf5589b73eae4fb2506dc`，与
+2026-09-18 nightly 报告记录的 candidate 相同（已核对报告内
+`candidate_sha256` 一致、42/42 配置通过、其中 m2a 28 个）。该报告位于本工作树
+gitignored 目录 `dmgmd-nightly-20260918-171122/report.json`。修改前工作树无 dirty diff。
+
+锁定输入身份：`tests/baseline/manifest.json` SHA-256
+`da3d7f30bd612a34b8f343bdf9c477f1a45dee8fe3a1ae0bf317e02e57ec27c5`；
+`nep_C.txt` / `nep_water.txt` / `nep_BaTiO3_zbl.txt` 分别为
+`add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623`、
+`8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3`、
+`d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02`。
 
 ## 当前结论
 
@@ -25,6 +37,61 @@ M2a 的 10000-step nightly profile 已于 2026-09-18 手动执行并通过验证
 case、seed 0、1/2/4 rank、HostStaged/CudaAware 共 42 个配置，其中 2/4 rank 的
 M2a 配置共 28 个，全部通过。100000-step release 矩阵尚未执行，因此仍不发布
 性能或 scaling 结论。
+
+## 第一阶段：日志与 GPU 分配（2026-09-21）
+
+本轮保持 M2a 迁移与保守两跳 halo 算法、逻辑 `local_count` stride、kernel 顺序和数值
+输出语义不变，实施了：
+
+- `DMGMD_DOMAIN_LAYOUT` / `DMGMD_DOMAIN_MIGRATION` 改为
+  `DMGMD_DOMAIN_DIAGNOSTICS=1` 显式诊断；逐步通信日志默认间隔由 1 调整为 1000，依赖
+  详细记录的测试显式设置开关/间隔；
+- 每个 run 段末保留 rank-local `DMGMD_DOMAIN_SUMMARY`，分别统计 migration step、
+  rebuild step、layout upload、workspace logical update、capacity growth event 与实际
+  `GPU_Vector` allocation；计数不新增逐步 collective；
+- `GPU_Vector` 保留原 `resize` 行为，新增 logical size 与 allocation capacity 分离的
+  `resize_reuse`；M2a Atom/NEP/Neighbor workspace 容量足够时复用，扩容留 25% 余量，
+  带 value 的 resize 仍初始化整个逻辑区；force/PE/virial 每次 layout upload 继续清零；
+- 测试新增默认安静模式、显式诊断模式、段末计数、相同 Atom/face-index logical shape 的
+  重复 upload 零分配及
+  CUDA 容器 size/capacity/初始化覆盖。原有空域、迁移、restart、P1/M1 fallback 和通信
+  字节解析断言未删除；
+- 审计修正（2026-09-21）：`tests/long_nve/run_long_nve.py` 的 candidate 环境补设
+  `DMGMD_DOMAIN_DIAGNOSTICS=1`（reference 环境清除该变量）。m2a stage 验证解析 per-rank
+  step-0 `DMGMD_DOMAIN_LAYOUT` 记录，而该记录只在诊断开启时输出；此前的 smoke 复验只跑
+  1 rank（全部 m1-fallback）未暴露该缺口，nightly 的 2/4-rank m2a stage 会因此失败。
+  `tests/long_nve/test_long_nve.py` 新增环境合同单测。
+
+修改后已实际执行（均先 `source ../env/md-mpi.sh`；下表为 2026-09-21 在最终源码重建后
+的复验结果，覆盖了最后一次 `neighbor.cu` find_cell_list 容量复用修改之后的状态）：
+
+| 命令 | 当前结果 |
+| --- | --- |
+| `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j` | PASS |
+| `ctest --test-dir build --output-on-failure` | 6 passed / 0 failed（含 `dmgmd.domain_neighbor_cuda` 与 `dmgmd.long_nve_analysis` 23 项单测） |
+| `python3 -m py_compile tests/mpi/run_mpi_domain.py tests/mpi/run_mpi_migration.py tests/mpi/run_mpi_differential.py tests/long_nve/run_long_nve.py tests/long_nve/test_long_nve.py` | PASS |
+| `python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3` | PASS（Open MPI 5.0.10、UCX 1.22.0、cuda_copy/cuda_ipc、4-rank CudaAware probe） |
+| `./build/tests/dmgmd_domain_neighbor_cuda_tests` | PASS（容量复用/初始化/计数 + 非零 center ELL） |
+| `python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0` | 4/4 PASS（无容差变更） |
+| `python3 tests/mpi/run_mpi_domain.py --candidate ./build/dmg-md --devices 0,1,2,3` | PASS：默认安静探针 + 36 组 2/4-rank 双后端诊断矩阵 |
+| `python3 tests/mpi/run_mpi_differential.py --candidate ./build/dmg-md --devices 0,1,2,3` | PASS：1/2/4 rank × 双后端 |
+| `python3 tests/mpi/run_mpi_migration.py --candidate ./build/dmg-md --devices 0,1,2,3` | PASS：unsupported/空域/N<P/迁移/restart 全矩阵 |
+| `scripts/run_long_nve_profile.sh --profile smoke` | PASS：7/7（1-rank m1-fallback；报告 `dmgmd-smoke-20260921-104047` 与复跑 `dmgmd-smoke-20260921-105403`） |
+
+修改后最终 candidate SHA-256 为
+`34d4a6585aa5b2fb2aced46771276a42f7ef0e808a7216af6efa7fb64ed797ab`（含最后一次
+`neighbor.cu` find_cell_list 容量复用修改；早一轮记录的
+`9202afe655c88246c73bc1e2462c028592ce04abd82848626eac4593228ec7b4` 对应修改该文件之前
+的源码，其矩阵结果已被上表在同一最终源码上的复验取代）。4-rank 诊断矩阵显示：静态
+lattice/chain/empty/NEP 变体的 run 段 `layout_uploads_max=0`、
+`capacity_growth_events_max=0`；crossings 的 8 次 layout upload 只有 3 次
+capacity-growth event（`gpu_allocations_max=25`），resume 的 6 次 upload 只有 3 次 growth
+（`gpu_allocations_max=34`）。`gpu_allocations` 还包含段首 Neighbor reference、overflow
+flag 与 migration flag 等一次性 `GPU_Vector` 分配，所以静态段为 5–7 而不是 0；layout 专属
+是否扩容以 `capacity_growth_events` 和详细 layout 的 `gpu_allocations` 为准。
+
+第一阶段据此完成实现与验收。本节不把 2026-09-18 correctness nightly 计时或本轮 smoke
+wall time 当作无 I/O 性能收益结论；普通步/重建步成本拆分留给第二阶段。
 
 ## 已实现能力（M2a 增量）
 
@@ -128,6 +195,15 @@ mixed-cutoff float 舍入上界、P=2 同 peer 去重、真正 `local_count=0`�
 - replicated/M2a 阶段均不发布多卡 speedup 或 scaling 结论。
 
 ## 最近变更
+
+2026-09-21 第一阶段日志降噪与 GPU capacity 复用已实施并通过上述验收：默认关闭 M2a
+逐次 layout/migration 与 flush，通信日志默认低频；测试通过环境变量显式恢复逐步诊断；
+Atom/NEP/Neighbor 使用独立 logical size/capacity，布局与数值合同未变。同日完成收尾审计：
+在最后一次 `neighbor.cu` 容量复用修改后的最终源码（candidate
+`34d4a658…`）上复跑了全部验收矩阵；修正 `run_long_nve.py` candidate 环境缺失
+`DMGMD_DOMAIN_DIAGNOSTICS=1` 的缺口（nightly m2a stage 验证依赖 step-0 layout 记录，
+smoke 只跑 1 rank 未暴露）。第二阶段入口是减少重建并分别测量普通步/重建步，不在本轮
+开始 M2b。
 
 2026-09-18 M2a 已实施并验收（本工作树，未提交）：
 

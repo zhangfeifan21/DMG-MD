@@ -87,8 +87,10 @@ HostStaged/CudaAware（36 组），每个 case 先运行同输入 P=1 M1 oracle�
 1000 步、force call 0/1000 的 `neighbor.out` 逐字节一致与周期 MPI_MAX 精确记账、
 迁移/restart、NEP5、mixed typewise cutoff、flexible ZBL、typewise ZBL。每步 collective、
 三类 p2p 字节、布局计数及逐原子 energy/force/virial/轨迹均按 P=1 oracle 和现行协议断言。
-非零 `center_begin` 的 ELL 行寻址另由 `dmgmd.domain_neighbor_cuda` 覆盖；无 GPU 的普通
-CTest 环境返回 skip，GPU 验收环境必须实际运行通过。
+默认安静/显式诊断日志、段末分配摘要、相同完整 logical shape 的 layout upload 零重新分配也由
+该 runner 覆盖。非零 `center_begin` 的 ELL 行寻址及 `GPU_Vector` logical size/capacity
+分离（复用初始化与扩容计数）另由 `dmgmd.domain_neighbor_cuda` 覆盖；无 GPU 的普通 CTest
+环境返回 skip，GPU 验收环境必须实际运行通过。
 
 ### 2.4 长程 NVE/NVT suite
 

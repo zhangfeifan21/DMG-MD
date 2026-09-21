@@ -83,7 +83,9 @@ std::string required_environment(const char* name)
 std::uint64_t positive_environment_interval(const char* name)
 {
   const char* text = std::getenv(name);
-  if (text == nullptr || text[0] == '\0') return 1;
+  // Keep default runtime output low-frequency. Tests or investigations that
+  // parse every communication record opt in explicitly with interval=1.
+  if (text == nullptr || text[0] == '\0') return 1000;
   try {
     for (const unsigned char value : std::string(text)) {
       if (!std::isdigit(value)) throw std::invalid_argument("not a positive integer");

@@ -157,11 +157,11 @@ HostStaged。因此 capability query 只是安全前置条件，不会替代数�
 
 ## 每步通信量
 
-rank 0 默认每步输出一行 `DMGMD_COMM`。设置正整数 `DMGMD_COMM_LOG_INTERVAL=K` 后只记录
-step 为 K 的倍数的采样行；每一行仍是该单步的量，不是 K 步聚合值。所有 rank 必须看到相同
-设置，否则启动失败。短 MPI differential 使用默认 K=1；长 NVE suite 使用 K=10 或 100
-控制 100000-step stdout 规模。记录的是 collective API 的全局 input/output buffer 字节，而
-不是 MPI 私有算法的物理 wire traffic。
+rank 0 按 `DMGMD_COMM_LOG_INTERVAL=K` 输出 `DMGMD_COMM`，默认 K=1000；只记录 step 为
+K 的倍数的采样行，每一行仍是该单步的量，不是 K 步聚合值。所有 rank 必须看到相同设置，
+否则启动失败。短 MPI differential/migration/domain 测试需要逐步解析时显式设置 K=1；长
+NVE suite 使用 profile 指定的 K=10 或 100 控制 stdout 规模。记录的是 collective API 的
+全局 input/output buffer 字节，而不是 MPI 私有算法的物理 wire traffic。
 
 M1 的 owned 集合是槽位的任意子集，因此所有 owned collective 都是 **indexed** 语义：CUDA
 pack kernel 按 `device_owned_indices` 从 replicated SoA 打包为 AoS，`MPI_Allgatherv`/
@@ -395,6 +395,15 @@ buffer，P=2 同 peer 安全；P=1 无操作；零 count 合法）。CudaAware �
 | `migration_send/recv_bytes_local` | local | Alltoallv 迁移记录（无 group 时 80 B/原子，unwrapped 启用时 104 B） |
 | `control_send/recv_bytes_local` | local | face count handshake（8 B/轮）、Alltoall/Allgather of counts |
 
+默认 `DMGMD_COMM_LOG_INTERVAL=1000`，因此普通短 run 不再逐步输出通信记录；需要逐步
+精确记账的测试显式设置为 `1`。M2a 的逐次 `DMGMD_DOMAIN_LAYOUT` 与
+`DMGMD_DOMAIN_MIGRATION` 默认关闭，设置 `DMGMD_DOMAIN_DIAGNOSTICS=1` 后恢复，字段与
+rank 语义不变。无论详细诊断是否开启，每个 run 段末每 rank 输出一条
+`DMGMD_DOMAIN_SUMMARY`，记录该段的 migration/rebuild 步数、layout upload、workspace
+逻辑更新、capacity growth event、GPU allocation 次数；这些计数为 rank-local，不新增
+逐步 collective。详细 layout 记录中的 `gpu_allocations` 是本次 Atom+NEP+Neighbor layout
+更新实际触发的 `GPU_Vector` 分配次数。
+
 普通 M2a 步不含任何 N-scaled collective（position Allgatherv 不存在于此协议）；
 输出步增加 gid gather（8N）+ 各字段 gather（8 B/atom/component，root 侧恢复
 input-slot 顺序）；correct_velocity 触发步增加 80N 的 gather/scatter。除下述周期记录外，
@@ -424,6 +433,9 @@ slab 32/16 Å）：
   P=1 oracle（恒为 M1 路径）在 committed 容差内（实测全部原子行逐字节一致，
   仅帧头 stress/virial 求和存在 R16 归约顺序噪声）；
 - 每步通信记录逐字段精确匹配上表模型，含 per-rank p2p 类别与周期记录 collective；
+- 默认安静模式不产生逐次 layout/migration/communication 记录但保留段末摘要；诊断模式
+  显式开启原有解析断言，并验证 Atom stride 与四个 face-index logical size 均相同的重复
+  layout upload 不发生 GPU 分配；
 - owned global ID 全局恰好一次、ghost 不进积分/thermo/输出。
 
 既有 `run_mpi_differential.py` 与 `run_mpi_migration.py` 对其 24 Å 小盒

@@ -25,11 +25,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -237,6 +239,7 @@ struct DomainDeviceAtoms {
   GPU_Vector<double> virial;
   GPU_Vector<double> unwrapped;
   GPU_Vector<double> previous_position;
+  GPU_Vector<double> thermo;
   GPU_Vector<int> send_slots[2];  // per face: owned slots of the send list
   GPU_Vector<int> recv_slots[2];  // per face: ghost slot per stream index
   GPU_Vector<int> migration_flag;  // 1-int device scratch
@@ -254,10 +257,18 @@ struct DomainState {
   LocalLayout layout;
   ExchangePlan plan;
   std::uint64_t epoch = 0;
+  bool detailed_logging = false;
   DomainDeviceAtoms device;
   // Workspace bookkeeping: the NEP workspaces are re-sized only when
   // local_count changes; every layout change still forces a Verlet rebuild.
   int workspace_count = -1;
+  std::uint64_t migration_steps = 0;
+  std::uint64_t rebuild_steps = 0;
+  std::uint64_t layout_uploads = 0;
+  std::uint64_t workspace_updates = 0;
+  std::uint64_t capacity_growth_events = 0;
+  std::uint64_t last_layout_gpu_allocations = 0;
+  std::uint64_t allocation_origin = 0;
   // Steps executed so far. An unwrapped-tracking enable before the first run
   // keeps the raw input coordinates as the seed (the M1 path seeds unwrapped
   // from its still-unwrapped device copy at that point); a later enable
@@ -280,6 +291,16 @@ struct DomainState {
            group_method_count * sizeof(std::int32_t);
   }
 };
+
+[[nodiscard]] bool domain_diagnostics_enabled()
+{
+  const char* value = std::getenv("DMGMD_DOMAIN_DIAGNOSTICS");
+  if (value == nullptr || value[0] == '\0' || std::strcmp(value, "0") == 0) {
+    return false;
+  }
+  if (std::strcmp(value, "1") == 0) return true;
+  throw std::runtime_error("DMGMD_DOMAIN_DIAGNOSTICS must be 0 or 1");
+}
 
 // Slot of a global ID inside the identity permutation (identity.global_id
 // is a permutation of [0, N); the map below is built once per use site).
@@ -338,15 +359,15 @@ void upload_domain_layout(
   for (std::size_t index = 0; index < layout.coordinate_ghosts.size(); ++index) {
     place_ghost(layout.coordinate_ghosts[index], layout.dependency_end() + index);
   }
-  device.global_id.resize(std::max<std::size_t>(local, 1));
-  device.type.resize(std::max<std::size_t>(local, 1));
-  device.mass.resize(std::max<std::size_t>(local, 1));
-  device.charge.resize(std::max<std::size_t>(local, 1));
-  device.position.resize(std::max<std::size_t>(3 * local, 1));
-  device.velocity.resize(std::max<std::size_t>(3 * local, 1));
-  device.force.resize(std::max<std::size_t>(3 * local, 1), 0.0);
-  device.potential.resize(std::max<std::size_t>(local, 1), 0.0);
-  device.virial.resize(std::max<std::size_t>(9 * local, 1), 0.0);
+  device.global_id.resize_reuse(std::max<std::size_t>(local, 1));
+  device.type.resize_reuse(std::max<std::size_t>(local, 1));
+  device.mass.resize_reuse(std::max<std::size_t>(local, 1));
+  device.charge.resize_reuse(std::max<std::size_t>(local, 1));
+  device.position.resize_reuse(std::max<std::size_t>(3 * local, 1));
+  device.velocity.resize_reuse(std::max<std::size_t>(3 * local, 1));
+  device.force.resize_reuse(std::max<std::size_t>(3 * local, 1), 0.0);
+  device.potential.resize_reuse(std::max<std::size_t>(local, 1), 0.0);
+  device.virial.resize_reuse(std::max<std::size_t>(9 * local, 1), 0.0);
   if (local != 0) {
     device.global_id.copy_from_host(gid.data(), local);
     device.type.copy_from_host(type.data(), local);
@@ -356,21 +377,21 @@ void upload_domain_layout(
     device.velocity.copy_from_host(velocity.data(), 3 * local);
   }
   if (track_unwrapped) {
-    device.unwrapped.resize(std::max<std::size_t>(3 * local, 1));
-    device.previous_position.resize(std::max<std::size_t>(3 * local, 1));
+    device.unwrapped.resize_reuse(std::max<std::size_t>(3 * local, 1));
+    device.previous_position.resize_reuse(std::max<std::size_t>(3 * local, 1));
     if (local != 0) {
       device.unwrapped.copy_from_host(unwrapped.data(), 3 * local);
       device.previous_position.copy_from_host(position.data(), 3 * local);
     }
   } else {
-    device.unwrapped.resize(0);
-    device.previous_position.resize(0);
+    device.unwrapped.resize_reuse(0);
+    device.previous_position.resize_reuse(0);
   }
   for (int face = 0; face < 2; ++face) {
     const std::size_t send_count = plan.face[face].send_slots.size();
     const std::size_t recv_count = plan.face[face].recv_slots.size();
-    device.send_slots[face].resize(std::max<std::size_t>(send_count, 1));
-    device.recv_slots[face].resize(std::max<std::size_t>(recv_count, 1));
+    device.send_slots[face].resize_reuse(std::max<std::size_t>(send_count, 1));
+    device.recv_slots[face].resize_reuse(std::max<std::size_t>(recv_count, 1));
     if (send_count != 0) {
       device.send_slots[face].copy_from_host(plan.face[face].send_slots.data(), send_count);
     }
@@ -427,11 +448,13 @@ void ensure_workspace(NEP& nep, DomainState& state)
     // addresses this padding.
     nep.allocate_workspace(std::max(local, 1));
     state.workspace_count = local;
+    ++state.workspace_updates;
   }
 }
 
 void log_domain_layout(const DomainState& state, std::uint64_t step)
 {
+  if (!state.detailed_logging) return;
   std::size_t dep_left = 0, dep_right = 0, coord_left = 0, coord_right = 0;
   for (const GhostSlotInfo& ghost : state.layout.dependency_ghosts) {
     if (ghost.face == kFaceLeft) ++dep_left; else ++dep_right;
@@ -445,8 +468,10 @@ void log_domain_layout(const DomainState& state, std::uint64_t step)
             << " coord_left=" << coord_left << " coord_right=" << coord_right
             << " local_count=" << state.layout.local_count()
             << " send_left=" << state.plan.face[kFaceLeft].send_slots.size()
-            << " send_right=" << state.plan.face[kFaceRight].send_slots.size() << '\n';
-  std::cout.flush();
+            << " send_right=" << state.plan.face[kFaceRight].send_slots.size()
+            << " recv_left=" << state.plan.face[kFaceLeft].recv_slots.size()
+            << " recv_right=" << state.plan.face[kFaceRight].recv_slots.size()
+            << " gpu_allocations=" << state.last_layout_gpu_allocations << '\n';
 }
 
 // Rebuilds the ghost membership through the two face exchanges (count
@@ -541,8 +566,16 @@ void exchange_halo_membership(
   validate_exchange_plan(
       state.plan, state.layout.owned_count(), state.layout.local_count(),
       state.rank, state.world_size);
+  const std::uint64_t allocations_before =
+      gpumd_compat::gpu_vector_allocation_count();
   upload_domain_layout(state.layout, state.plan, state.track_unwrapped, state.device);
   ensure_workspace(nep, state);
+  ++state.layout_uploads;
+  state.last_layout_gpu_allocations =
+      gpumd_compat::gpu_vector_allocation_count() - allocations_before;
+  if (state.last_layout_gpu_allocations != 0) {
+    ++state.capacity_growth_events;
+  }
   ++state.epoch;
   log_domain_layout(state, step);
 }
@@ -571,6 +604,7 @@ void log_domain_migration(
     std::uint64_t step,
     const std::vector<std::pair<std::uint64_t, int>>& incoming)
 {
+  if (!state.detailed_logging) return;
   std::string transitions;
   constexpr std::size_t kMaxLoggedTransitions = 64;
   bool truncated = false;
@@ -588,7 +622,6 @@ void log_domain_migration(
             << " epoch=" << state.epoch << " migrated_in=" << incoming.size()
             << " transitions=\"" << transitions << "\""
             << (truncated ? " truncated=true" : " truncated=false") << '\n';
-  std::cout.flush();
 }
 
 // Direct migration (plan section 8): refreshes the owned dynamics, computes
@@ -744,6 +777,7 @@ void do_migration(
     }
   }
   log_domain_migration(state, step, incoming);
+  ++state.migration_steps;
   exchange_halo_membership(
       state, std::move(next_owned), nep, box, mpi, communication, step);
 }
@@ -1015,6 +1049,7 @@ HostSnapshot gather_domain_snapshot(
 }
 
 void run_domain_segment(
+    std::uint64_t sequence,
     int steps,
     double base_time_step,
     const std::optional<double>& maximum_distance,
@@ -1029,6 +1064,13 @@ void run_domain_segment(
     DomainState& state,
     MpiRuntime& mpi)
 {
+  const std::uint64_t migration_start = state.migration_steps;
+  const std::uint64_t rebuild_start = state.rebuild_steps;
+  const std::uint64_t layout_start = state.layout_uploads;
+  const std::uint64_t workspace_start = state.workspace_updates;
+  const std::uint64_t growth_start = state.capacity_growth_events;
+  const std::uint64_t allocation_start =
+      gpumd_compat::gpu_vector_allocation_count();
   int thermo_count = 0;
   int restart_count = 0;
   for (const Measurement& measurement : measurements) {
@@ -1054,7 +1096,6 @@ void run_domain_segment(
     }
   }
 
-  GPU_Vector<double> device_thermo(8);
   // Initial force before the first step: the local layout, halo and NEP
   // workspace are already in place; its records (neighbor.out) land in the
   // uncounted startup volume.
@@ -1105,7 +1146,9 @@ void run_domain_segment(
       int foreign = 0;
       const int owned = checked_int(state.owned_count(), "owned_count");
       const int local = checked_int(state.local_count(), "local_count");
-      if (state.device.migration_flag.size() == 0) state.device.migration_flag.resize(1);
+      if (state.device.migration_flag.size() == 0) {
+        state.device.migration_flag.resize_reuse(1);
+      }
       if (owned > 0) {
         int zero = 0;
         state.device.migration_flag.copy_from_host(&zero, 1);
@@ -1144,6 +1187,7 @@ void run_domain_segment(
         std::vector<DomainAtomRecord> owned = state.layout.owned;
         exchange_halo_membership(
             state, std::move(owned), nep, box, mpi, communication, global_step + 1);
+        ++state.rebuild_steps;
         force_rebuild = true;
       }
     }
@@ -1154,7 +1198,7 @@ void run_domain_segment(
     launch_domain_verlet(state, false, time_step);
     // 10. Thermo: owned local sums + global Allreduce.
     const ThermoState thermo =
-        compute_domain_thermo(state, box, identity, device_thermo, mpi, communication);
+        compute_domain_thermo(state, box, identity, state.device.thermo, mpi, communication);
     // 11. Thermostat over the owned prefix.
     if (ensemble.kind == EnsembleKind::nvt_ber) {
       const double fraction = static_cast<double>(step) / static_cast<double>(steps);
@@ -1211,6 +1255,22 @@ void run_domain_segment(
     mpi.log_step_communication(global_step, communication);
     mpi.log_step_domain_communication(global_step, communication);
   }
+  std::ostringstream summary;
+  summary << "DMGMD_DOMAIN_SUMMARY rank=" << state.rank
+          << " sequence=" << sequence << " steps=" << steps
+          << " migration_steps=" << (state.migration_steps - migration_start)
+          << " rebuild_steps=" << (state.rebuild_steps - rebuild_start)
+          << " layout_uploads=" << (state.layout_uploads - layout_start)
+          << " workspace_updates=" << (state.workspace_updates - workspace_start)
+          << " capacity_growth_events="
+          << (state.capacity_growth_events - growth_start)
+          << " gpu_allocations="
+          << (gpumd_compat::gpu_vector_allocation_count() - allocation_start)
+          << " gpu_allocations_cumulative="
+          << (gpumd_compat::gpu_vector_allocation_count() - state.allocation_origin)
+          << '\n';
+  std::cout << summary.str();
+  std::cout.flush();
 }
 
 }  // namespace
@@ -1241,6 +1301,16 @@ void run_local_domain(
   state.d_dep = eligibility.d_dep;
   state.d_coord = eligibility.d_coord;
   state.group_method_count = identity.group_labels.size();
+  state.detailed_logging = detail::domain_diagnostics_enabled();
+  mpi.assert_same_fingerprint(
+      state.detailed_logging ? 1 : 0, "domain diagnostics configuration");
+  state.allocation_origin = gpumd_compat::gpu_vector_allocation_count();
+  state.device.thermo.resize_reuse(8);
+  if (mpi.is_root()) {
+    std::cout << "DMGMD_DOMAIN_DIAGNOSTICS detailed="
+              << (state.detailed_logging ? "on" : "off")
+              << " summary=run-segment\n";
+  }
 
   // Ownership is computed from the raw input coordinates (slab ownership
   // applies the same single wrap adjustment as the wrap kernel, exactly like
@@ -1466,8 +1536,8 @@ void run_local_domain(
           // sized before the dynamics download reads them.
           state.track_unwrapped = true;
           if (state.local_count() != 0) {
-            state.device.unwrapped.resize(3 * state.local_count());
-            state.device.previous_position.resize(3 * state.local_count());
+            state.device.unwrapped.resize_reuse(3 * state.local_count());
+            state.device.previous_position.resize_reuse(3 * state.local_count());
           }
           // The raw input coordinates are the pre-run seed (the M1 path
           // enables unwrapped tracking before its first wrap); capture them
@@ -1485,8 +1555,14 @@ void run_local_domain(
                 state.executed_steps != 0 ? state.layout.owned[index].position
                                           : seed[index];
           }
+          const std::uint64_t allocations_before =
+              gpumd_compat::gpu_vector_allocation_count();
           detail::upload_domain_layout(
               state.layout, state.plan, state.track_unwrapped, state.device);
+          ++state.layout_uploads;
+          if (gpumd_compat::gpu_vector_allocation_count() != allocations_before) {
+            ++state.capacity_growth_events;
+          }
         }
         measurements.emplace_back(*dump);
       } else if (const auto* dump = std::get_if<DumpRestartCommand>(&command.data)) {
@@ -1498,7 +1574,7 @@ void run_local_domain(
         mpi.barrier();
         const auto segment_started = std::chrono::steady_clock::now();
         detail::run_domain_segment(
-            run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
+            run_sequence, run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
             measurements, global_time, global_step, box, identity, nep, state, mpi);
         detail::check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
         const double segment_seconds = std::chrono::duration<double>(

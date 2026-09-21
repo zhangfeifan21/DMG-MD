@@ -358,13 +358,21 @@ def execute(
     backend: str,
     devices: List[str],
     timeout: int,
-    communication_interval: int = 1,
+    communication_interval: Optional[int] = 1,
+    domain_diagnostics: bool = True,
 ) -> Dict[str, Any]:
     env = os.environ.copy()
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
-    env["DMGMD_COMM_LOG_INTERVAL"] = str(communication_interval)
+    if communication_interval is None:
+        env.pop("DMGMD_COMM_LOG_INTERVAL", None)
+    else:
+        env["DMGMD_COMM_LOG_INTERVAL"] = str(communication_interval)
+    if domain_diagnostics:
+        env["DMGMD_DOMAIN_DIAGNOSTICS"] = "1"
+    else:
+        env.pop("DMGMD_DOMAIN_DIAGNOSTICS", None)
     completed = subprocess.run(
         [str(mpiexec), "-n", str(ranks), str(executable)],
         cwd=stage_dir,
@@ -390,6 +398,7 @@ class StepIndex:
         self.case = case
         self.layouts: Dict[int, List[Dict[str, Any]]] = {}  # rank -> records
         self.migrations: Dict[int, List[Dict[str, Any]]] = {}
+        self.summaries: Dict[int, List[Dict[str, Any]]] = {}
         for line in stdout.splitlines():
             if line.startswith("DMGMD_DOMAIN_LAYOUT "):
                 fields = key_values(line)
@@ -399,6 +408,10 @@ class StepIndex:
                 fields = key_values(line)
                 rank = int(fields["rank"])
                 self.migrations.setdefault(rank, []).append(fields)
+            elif line.startswith("DMGMD_DOMAIN_SUMMARY "):
+                fields = key_values(line)
+                rank = int(fields["rank"])
+                self.summaries.setdefault(rank, []).append(fields)
         for rank in range(ranks):
             records = self.layouts.get(rank, [])
             if len(records) != len(self.layouts.get(0, [])):
@@ -505,6 +518,25 @@ def verify_domain_records(
                 f"{label}: center proof {key}={center.get(key)!r}, expected {value!r}")
 
     index = StepIndex(stdout, case, ranks)
+    for rank in range(ranks):
+        summaries = index.summaries.get(rank, [])
+        if not summaries:
+            raise baseline.BaselineError(f"{label}: rank {rank} lacks a run summary")
+        for summary in summaries:
+            for key in (
+                "migration_steps", "rebuild_steps", "layout_uploads",
+                "workspace_updates", "capacity_growth_events", "gpu_allocations",
+                "gpu_allocations_cumulative",
+            ):
+                if int(summary[key]) < 0:
+                    raise baseline.BaselineError(
+                        f"{label}: negative {key} in rank {rank} summary")
+            if int(summary["workspace_updates"]) > int(summary["layout_uploads"]):
+                raise baseline.BaselineError(
+                    f"{label}: workspace updates exceed layout uploads")
+            if int(summary["capacity_growth_events"]) > int(summary["layout_uploads"]):
+                raise baseline.BaselineError(
+                    f"{label}: capacity growth events exceed layout uploads")
     # Every rank must report one initial layout at step 0 with owned counts
     # summing to N.
     owned_total = 0
@@ -525,6 +557,14 @@ def verify_domain_records(
             if local != parts:
                 raise baseline.BaselineError(
                     f"{label}: layout parts {parts} != local_count {local}: {record}")
+        for previous, current in zip(
+                index.layouts.get(rank, []), index.layouts.get(rank, [])[1:]):
+            shape_fields = (
+                "local_count", "send_left", "send_right", "recv_left", "recv_right")
+            if (all(int(previous[key]) == int(current[key]) for key in shape_fields)
+                    and int(current["gpu_allocations"]) != 0):
+                raise baseline.BaselineError(
+                    f"{label}: identical-shape layout upload reallocated GPU storage: {current}")
 
     neighbor = (stage_dir / "neighbor.out").read_text(encoding="utf-8").splitlines()
     expected_calls = neighbor_record_call_indices(case.run)
@@ -1056,6 +1096,34 @@ def main() -> int:
                     f"{case.name}: P=1 must stay on the M1 path (mode=m1-fallback)")
             references[case.name] = reference_root
 
+        # Default runtime mode must be quiet on the hot path: no per-layout,
+        # per-migration or per-step communication records. Rank-local segment
+        # summaries remain available without enabling diagnostics.
+        quiet_ranks = min(args.ranks)
+        quiet_dir = work_root / "default-quiet" / f"ranks-{quiet_ranks}"
+        stage_case(chain, quiet_dir, potential)
+        quiet = execute(
+            executable, mpiexec, quiet_dir, quiet_ranks, "HostStaged", devices,
+            args.timeout, communication_interval=None, domain_diagnostics=False,
+        )
+        if quiet["returncode"] != 0 or quiet["stderr"]:
+            raise baseline.BaselineError(
+                f"default quiet-mode run failed: {quiet['stderr'][-1500:]}")
+        quiet_lines = quiet["stdout"].splitlines()
+        if any(line.startswith(("DMGMD_DOMAIN_LAYOUT ", "DMGMD_DOMAIN_MIGRATION ",
+                                "DMGMD_COMM step=", "DMGMD_DOMAIN_COMM "))
+               for line in quiet_lines):
+            raise baseline.BaselineError(
+                "default quiet mode emitted a hot-path diagnostic record")
+        settings = [line for line in quiet_lines
+                    if line.startswith("DMGMD_DOMAIN_DIAGNOSTICS ")]
+        summaries = [line for line in quiet_lines
+                     if line.startswith("DMGMD_DOMAIN_SUMMARY ")]
+        if (len(settings) != 1 or key_values(settings[0]).get("detailed") != "off"
+                or len(summaries) != quiet_ranks):
+            raise baseline.BaselineError(
+                "default quiet mode lacks its setting record or rank summaries")
+
         # The restart written by the deterministic P=1 crossings run feeds the
         # cross-rank resume matrix.
         restart_model = (references["crossings"] / "restart.xyz").read_text(encoding="utf-8")
@@ -1098,9 +1166,24 @@ def main() -> int:
                     epochs = max(
                         len(index.layouts.get(rank, [])) for rank in range(ranks))
                     migrated = len(index.migration_steps())
+                    layout_uploads = max(
+                        sum(int(record["layout_uploads"])
+                            for record in index.summaries.get(rank, []))
+                        for rank in range(ranks))
+                    capacity_growths = max(
+                        sum(int(record["capacity_growth_events"])
+                            for record in index.summaries.get(rank, []))
+                        for rank in range(ranks))
+                    gpu_allocations = max(
+                        sum(int(record["gpu_allocations"])
+                            for record in index.summaries.get(rank, []))
+                        for rank in range(ranks))
                     print(
                         f"PASS {case.name:10s} {backend:10s} ranks={ranks}: "
-                        f"layout_epochs={epochs} migration_steps={migrated}"
+                        f"layout_epochs={epochs} migration_steps={migrated} "
+                        f"layout_uploads_max={layout_uploads} "
+                        f"capacity_growth_events_max={capacity_growths} "
+                        f"gpu_allocations_max={gpu_allocations}"
                     )
         print(
             f"PASS: M2a domain matrix ranks={args.ranks} backends={backends} "

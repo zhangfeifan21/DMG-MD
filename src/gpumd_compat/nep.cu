@@ -419,21 +419,22 @@ NEP::NEP(const char* file_potential, const int num_atoms)
 
 // Sizes every per-atom NEP workspace and the neighbor scratch for
 // num_atoms atoms (global N on the M1 fallback path, local_count on the M2a
-// domain path). Repeated calls (the local layout changed) reallocate every
-// buffer and invalidate the neighbor rebuild reference, so no cached view or
-// row can survive a stride change (risk R27).
+// domain path). Repeated calls update every logical size/stride and invalidate
+// the neighbor rebuild reference. M2a storage retains sufficient physical
+// capacity, so a small local_count fluctuation does not imply
+// cudaFree/cudaMalloc; kernels still receive the exact logical stride (R27).
 void NEP::allocate_workspace(const int num_atoms)
 {
-  nep_data.f12x.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
-  nep_data.f12y.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
-  nep_data.f12z.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
+  nep_data.f12x.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
+  nep_data.f12y.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
+  nep_data.f12z.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
   neighbor.initialize(rc, num_atoms, paramb.MN_radial);
-  nep_data.NN_radial.resize(num_atoms);
-  nep_data.NL_radial.resize(static_cast<size_t>(num_atoms) * paramb.MN_radial);
-  nep_data.NN_angular.resize(num_atoms);
-  nep_data.NL_angular.resize(static_cast<size_t>(num_atoms) * paramb.MN_angular);
-  nep_data.Fp.resize(static_cast<size_t>(num_atoms) * annmb.dim);
-  nep_data.sum_fxyz.resize(
+  nep_data.NN_radial.resize_reuse(num_atoms);
+  nep_data.NL_radial.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_radial);
+  nep_data.NN_angular.resize_reuse(num_atoms);
+  nep_data.NL_angular.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
+  nep_data.Fp.resize_reuse(static_cast<size_t>(num_atoms) * annmb.dim);
+  nep_data.sum_fxyz.resize_reuse(
     static_cast<size_t>(num_atoms) * (paramb.n_max_angular + 1) * ((paramb.L_max + 1) * (paramb.L_max + 1) - 1));
   nep_data.cpu_NN_radial.resize(num_atoms);
   nep_data.cpu_NN_angular.resize(num_atoms);

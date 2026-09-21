@@ -286,6 +286,7 @@ def execute(
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
+    env["DMGMD_COMM_LOG_INTERVAL"] = "1"
     command = [str(mpiexec), "-n", str(ranks), str(executable)]
     completed = subprocess.run(
         command,

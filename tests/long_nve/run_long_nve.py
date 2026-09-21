@@ -284,6 +284,7 @@ def reference_environment(device: str) -> Dict[str, str]:
     env["CUDA_VISIBLE_DEVICES"] = device
     env.pop("DMGMD_COMM_BACKEND", None)
     env.pop("DMGMD_COMM_LOG_INTERVAL", None)
+    env.pop("DMGMD_DOMAIN_DIAGNOSTICS", None)
     return env
 
 
@@ -295,6 +296,9 @@ def candidate_environment(
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
     env["DMGMD_COMM_LOG_INTERVAL"] = str(log_interval)
+    # The m2a stage validation parses per-rank DMGMD_DOMAIN_LAYOUT records,
+    # which the runtime only emits with diagnostics explicitly enabled.
+    env["DMGMD_DOMAIN_DIAGNOSTICS"] = "1"
     return env
 
 

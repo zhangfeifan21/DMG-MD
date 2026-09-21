@@ -2,7 +2,7 @@
 
 类别：现行标准。
 
-更新日期：2026-09-18。
+更新日期：2026-09-21。
 
 本文档描述 single-rank、M1 空间所有权 replicated MPI 与 M2a rank-local
 domain `dmg-md` 的数据面，并以现有代码为权威来源。运行时在两种数据面之间
@@ -219,12 +219,16 @@ M2a（`src/domain_runtime.cu`）的 device 数组按上述 local 布局寻址：
 表中的尺寸是**逻辑尺寸/stride**。为避免底层零字节 device allocation 的实现差异，
 `local_count==0` 时部分 `GPU_Vector` 物理 capacity 保留 1 个元素；NEP domain 接口另行显式
 接收逻辑 `local_count`，所有中心范围均为空，任何 kernel、D2H 或邻居重建都不得访问该填充
-元素。`local_count>0` 时物理 per-atom capacity 与逻辑 stride 相等。
+元素。物理 allocation capacity 可以大于表中的逻辑尺寸：M2a Atom、NEP 与 Neighbor
+workspace 在容量足够时只更新 `GPU_Vector::size()`，扩容时保留 25% 余量。capacity 不是
+kernel stride；所有 SoA 分量偏移、ELL 行跨度、默认长度 copy/fill 仍以逻辑 size 或显式
+`local_count` 计算，禁止读取余量。
 
 每原子输出 gather 使用 local-owned-prefix + global ID（root 按 input-slot 顺序恢复
 恰好 N 条记录），`global_count` 从不作为 device 数组 stride。布局在迁移或 halo
 membership 重建时整体重建（epoch++），NEP workspace 只在 `local_count` 变化时
-重新分配，但每次布局变化都强制 neighbor 重建并使全部缓存 view 失效。
+更新逻辑尺寸；只有超出 capacity 才发生物理扩容。每次布局变化仍强制 neighbor 重建并使
+全部缓存 view 失效，force/PE/virial 的整个逻辑区在 layout upload 时重新清零。
 
 ## 9. 初始化与输出合同（双路径）
 

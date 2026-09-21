@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -77,6 +78,40 @@ void check_nonzero_center_begin()
           "center 2 row must be sorted by candidate global ID");
 }
 
+void check_gpu_vector_capacity_reuse()
+{
+  GPU_Vector<int> values;
+  const std::uint64_t allocations_before =
+      gpumd_compat::gpu_vector_allocation_count();
+  values.resize_reuse(8, 3);
+  require(values.size() == 8 && values.capacity() >= 8,
+          "capacity-aware resize must retain an exact logical size");
+  require(gpumd_compat::gpu_vector_allocation_count() == allocations_before + 1,
+          "first capacity-aware resize must allocate once");
+  int* const storage = values.data();
+  const std::size_t capacity = values.capacity();
+
+  values.resize_reuse(4, 7);
+  require(values.data() == storage && values.size() == 4 && values.capacity() == capacity,
+          "shrinking logical size must reuse physical storage");
+  require(gpumd_compat::gpu_vector_allocation_count() == allocations_before + 1,
+          "reused storage must not increment the allocation counter");
+  std::vector<int> host(4, 0);
+  values.copy_to_host(host.data());
+  require(host == std::vector<int>(4, 7),
+          "initialized resize must fill the complete reused logical range");
+
+  values.resize_reuse(capacity + 1);
+  require(values.size() == capacity + 1 && values.capacity() >= values.size(),
+          "growth must preserve exact logical size and add sufficient capacity");
+  require(gpumd_compat::gpu_vector_allocation_count() == allocations_before + 2,
+          "capacity growth must increment the allocation counter once");
+  int* const grown_storage = values.data();
+  values.resize_reuse(0);
+  require(values.size() == 0 && values.data() == grown_storage,
+          "logical clear must retain reusable physical storage");
+}
+
 }  // namespace
 
 int main()
@@ -88,6 +123,7 @@ int main()
     return 77;
   }
   try {
+    check_gpu_vector_capacity_reuse();
     check_nonzero_center_begin();
     std::cout << "domain_neighbor_cuda_tests: all checks passed\n";
   } catch (const std::exception& error) {

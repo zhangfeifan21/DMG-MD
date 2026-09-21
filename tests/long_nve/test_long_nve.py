@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import long_nve_common as common
@@ -324,6 +325,26 @@ class LongNveTests(unittest.TestCase):
                 runner.validate_candidate_stage(m1, 2, "HostStaged", "m2a")
             with self.assertRaises(common.baseline.BaselineError):
                 runner.validate_candidate_stage(m2a, 2, "HostStaged", "m1-fallback")
+
+    def test_candidate_environments_enable_parsed_diagnostics(self) -> None:
+        # The m2a stage validation parses per-rank DMGMD_DOMAIN_LAYOUT
+        # records, so candidate stages must explicitly enable domain
+        # diagnostics (the runtime default is quiet); the reference never
+        # receives candidate-only variables.
+        reference_env = dict(os.environ)
+        reference_env["DMGMD_COMM_LOG_INTERVAL"] = "7"
+        reference_env["DMGMD_DOMAIN_DIAGNOSTICS"] = "1"
+        with unittest.mock.patch.dict(os.environ, reference_env):
+            cleaned = runner.reference_environment("3")
+        self.assertNotIn("DMGMD_COMM_LOG_INTERVAL", cleaned)
+        self.assertNotIn("DMGMD_DOMAIN_DIAGNOSTICS", cleaned)
+        candidate_env = dict(os.environ)
+        candidate_env["DMGMD_COMM_LOG_INTERVAL"] = "7"
+        candidate_env["DMGMD_DOMAIN_DIAGNOSTICS"] = "0"
+        with unittest.mock.patch.dict(os.environ, candidate_env):
+            staged = runner.candidate_environment(["0", "1"], 2, "HostStaged", 10)
+        self.assertEqual(staged["DMGMD_COMM_LOG_INTERVAL"], "10")
+        self.assertEqual(staged["DMGMD_DOMAIN_DIAGNOSTICS"], "1")
 
     def test_generated_models_have_zero_mass_weighted_momentum(self) -> None:
         case = self.manifest["cases"]["dense_water"]

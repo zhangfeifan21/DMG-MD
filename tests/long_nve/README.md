@@ -215,5 +215,7 @@ restart 不保存 global time 且使用文本量化，本测试不要求它与�
 
 运行器没有 wall-time、atom-steps/s、speedup 或 scaling 判据。M1 每张 GPU 执行完整 NEP，
 M2a 按 owned/dependency center 执行 local-domain NEP；本长测对两条路径都只验证正确性。
-`DMGMD_COMM_LOG_INTERVAL` 由 profile 设置为 10 或 100，减少长程 stdout；默认 runtime 行为
-仍是每步记录，现有短 MPI differential 不受影响。
+`DMGMD_COMM_LOG_INTERVAL` 由 profile 设置为 10 或 100；runtime 默认值为 1000。需要逐步
+解析的短 MPI 测试显式设置为 1，不依赖默认值。candidate stage 的运行环境始终显式设置
+`DMGMD_DOMAIN_DIAGNOSTICS=1`：m2a 验证要解析每 rank 的 step-0 `DMGMD_DOMAIN_LAYOUT`
+记录，而该记录在默认安静模式下不输出；reference 环境不携带任何 DMGMD 专属变量。

@@ -239,8 +239,8 @@ public:
     const int num_candidates,
     const bool force_rebuild);
 
-  // Drops the rebuild reference positions so the next domain build is forced
-  // even when the local stride is unchanged. Must be called whenever the
+  // Drops the logical rebuild reference positions while retaining capacity,
+  // so the next domain build is forced even when the local stride is unchanged. Must be called whenever the
   // meaning of a local slot changes (migration, ghost membership rebuild,
   // NEP workspace reallocation).
   void invalidate_rebuild_reference();

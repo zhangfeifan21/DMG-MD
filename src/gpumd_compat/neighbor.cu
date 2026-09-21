@@ -328,8 +328,11 @@ void find_cell_list(  const double rc,
 
   // number of cells is allowed to be larger than the number of atoms
   if (N_cells > cell_count.size()) {
-    cell_count.resize(N_cells);
-    cell_count_sum.resize(N_cells);
+    // M2a may alternate the logical scratch size between local_count during
+    // workspace initialization and N_cells during the build. Capacity reuse
+    // avoids a free/allocate pair on every otherwise unchanged rebuild.
+    cell_count.resize_reuse(N_cells);
+    cell_count_sum.resize_reuse(N_cells);
   }
 
   CHECK(gpuMemset(cell_count.data(), 0, sizeof(int) * N_cells));
@@ -633,22 +636,22 @@ void Neighbor::find_neighbor_domain(
   if (NN.size() != static_cast<size_t>(N) || x0.size() != static_cast<size_t>(N)) {
     // First use for this stride, or the layout was rebuilt with a different
     // local_count: every cached row and reference position is invalid.
-    NN.resize(N);
-    NL.resize(static_cast<size_t>(N) * row_capacity_);
-    cell_count.resize(static_cast<size_t>(N));
-    cell_count_sum.resize(static_cast<size_t>(N));
-    cell_contents.resize(static_cast<size_t>(N));
-    x0.resize(0);
-    y0.resize(0);
-    z0.resize(0);
+    NN.resize_reuse(N);
+    NL.resize_reuse(static_cast<size_t>(N) * row_capacity_);
+    cell_count.resize_reuse(static_cast<size_t>(N));
+    cell_count_sum.resize_reuse(static_cast<size_t>(N));
+    cell_contents.resize_reuse(static_cast<size_t>(N));
+    x0.resize_reuse(0);
+    y0.resize_reuse(0);
+    z0.resize_reuse(0);
   }
   if (center_end <= center_begin) {
     // Empty center range: no rows exist, but the reference positions must stay
     // current so the displacement check below stays meaningful on this rank.
     if (x0.size() == 0) {
-      x0.resize(N);
-      y0.resize(N);
-      z0.resize(N);
+      x0.resize_reuse(N);
+      y0.resize_reuse(N);
+      z0.resize_reuse(N);
     }
     gpu_update_xyz0<<<(N - 1) / 128 + 1, 128>>>(N, x, y, z, x0.data(), y0.data(), z0.data());
     GPU_CHECK_KERNEL
@@ -711,9 +714,9 @@ void Neighbor::find_neighbor_domain(
   // The rebuild reference must cover every local slot of the new layout;
   // the stride-change branch above only invalidates it.
   if (x0.size() != static_cast<size_t>(N)) {
-    x0.resize(N);
-    y0.resize(N);
-    z0.resize(N);
+    x0.resize_reuse(N);
+    y0.resize_reuse(N);
+    z0.resize_reuse(N);
   }
 
   // Sort only the dependency-center rows, by global ID (slot indices stored
@@ -738,18 +741,18 @@ void Neighbor::initialize(const double rc, const int num_atoms, const int num_ne
   const double rc_plus_skin = rc + skin;
   const int MN = num_neighbors * rc_plus_skin * rc_plus_skin * rc_plus_skin / (rc * rc * rc);
   row_capacity_ = static_cast<size_t>(MN);
-  NN.resize(num_atoms);
-  NL.resize(static_cast<size_t>(num_atoms) * MN);
-  cell_count.resize(num_atoms);
-  cell_count_sum.resize(num_atoms);
-  cell_contents.resize(num_atoms);
+  NN.resize_reuse(num_atoms);
+  NL.resize_reuse(static_cast<size_t>(num_atoms) * MN);
+  cell_count.resize_reuse(num_atoms);
+  cell_count_sum.resize_reuse(num_atoms);
+  cell_contents.resize_reuse(num_atoms);
 }
 
 void Neighbor::invalidate_rebuild_reference(void)
 {
-  x0.resize(0);
-  y0.resize(0);
-  z0.resize(0);
+  x0.resize_reuse(0);
+  y0.resize_reuse(0);
+  z0.resize_reuse(0);
 }
 
 }  // namespace gpumd_compat
