@@ -30,3 +30,8 @@ add_test(
   NAME dmgmd.long_nve_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/long_nve/test_long_nve.py
 )
+
+add_test(
+  NAME dmgmd.benchmark_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_benchmark.py
+)

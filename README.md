@@ -160,6 +160,19 @@ scripts/run_long_nve_nightly.sh
 实现协议、中心分片完整性结论和逐步通信量公式见
 [replicated-mpi.md](docs/standards/replicated-mpi.md)。
 
+## 性能测试与迁移部署
+
+独立 benchmark 支持 GPUMD 与 DMG-MD 的 1/2/4/8 卡对比、强/弱扩展、百万级样例，
+含 GPU 占用检查、预热排除、重复统计与 JSON/CSV 报告。它不代替长程正确性验收。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_benchmark.py --profile standard --dry-run
+```
+
+- [性能测试方案与运行说明](tests/benchmark/README.md)
+- [其他服务器快速部署](docs/operations/deployment.md)
+
 ## VS Code / clangd
 
 测试源码依赖 CMake target 提供的 C++17、include 路径和 compile definitions。请先运行一次

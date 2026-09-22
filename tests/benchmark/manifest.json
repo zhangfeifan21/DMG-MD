@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "reference_commit": "9d23496e41319b9e2af5221a7df6285387401d1e",
+  "seed": 0,
+  "order_seed": 20260922,
+  "ranks": [1, 2, 4, 8],
+  "backends": ["HostStaged", "CudaAware"],
+  "profiles": {
+    "smoke": {"warmup": 2, "steps": 5, "repeats": 1, "min_seconds": 0, "cases": ["carbon_smoke"]},
+    "pilot": {"warmup": 50, "steps": 100, "repeats": 1, "min_seconds": 0, "cases": ["carbon_200k", "carbon_1m", "water_400k"]},
+    "standard": {"warmup": 200, "steps": 1000, "repeats": 3, "min_seconds": 10, "cases": ["carbon_200k", "carbon_1m", "carbon_3m", "water_400k", "water_1m", "carbon_weak"]},
+    "capacity": {"warmup": 200, "steps": 1000, "repeats": 3, "min_seconds": 10, "cases": ["carbon_cube_4m", "carbon_weak_large"]}
+  },
+  "cases": {
+    "carbon_smoke": {"fixture": "carbon_crystal", "scaling": "strong", "cells": [8, 96, 8]},
+    "carbon_200k": {"fixture": "carbon_crystal", "scaling": "strong", "cells": [16, 96, 16]},
+    "carbon_1m": {"fixture": "carbon_crystal", "scaling": "strong", "cells": [32, 128, 32]},
+    "carbon_3m": {"fixture": "carbon_crystal", "scaling": "strong", "cells": [48, 160, 48]},
+    "water_400k": {"fixture": "dense_water", "scaling": "strong", "cells": [32, 128, 32]},
+    "water_1m": {"fixture": "dense_water", "scaling": "strong", "cells": [48, 160, 48]},
+    "carbon_weak": {"fixture": "carbon_crystal", "scaling": "weak", "cells": [32, 40, 32]},
+    "carbon_cube_4m": {"fixture": "carbon_crystal", "scaling": "strong", "cells": [80, 82, 80]},
+    "carbon_weak_large": {"fixture": "carbon_crystal", "scaling": "weak", "cells": [40, 48, 40]}
+  }
+}

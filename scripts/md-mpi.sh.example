@@ -1,0 +1,21 @@
+# Copy to ../env/md-mpi.sh on the TARGET server; edit the four paths below.
+# Source this file in every build/run shell. Do not execute it as a subprocess.
+export CUDA_HOME=/usr/local/cuda
+export UCX_HOME="$HOME/software/ucx-cuda"
+export OMPI_HOME="$HOME/software/openmpi-cuda"
+# This is the Ubuntu external PMIx layout on the original server, NOT universal.
+export PMIX_MCA_mca_base_component_path=/usr/lib/x86_64-linux-gnu/pmix2/lib/pmix
+
+for md_stack_dir in "$CUDA_HOME" "$UCX_HOME" "$OMPI_HOME" "$PMIX_MCA_mca_base_component_path"; do
+    if [[ ! -d "$md_stack_dir" ]]; then
+        printf 'Missing MD stack directory: %s\n' "$md_stack_dir" >&2
+        return 1
+    fi
+done
+unset md_stack_dir
+export PATH="$OMPI_HOME/bin:$UCX_HOME/bin:$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$OMPI_HOME/lib:$UCX_HOME/lib:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+export OMPI_MCA_mca_base_component_path="$OMPI_HOME/lib/openmpi"
+export OMPI_MCA_pml=ucx
+export OMPI_MCA_coll=^hcoll
+export UCX_WARN_UNUSED_ENV_VARS=n

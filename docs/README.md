@@ -25,11 +25,17 @@
 这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
 
 - [当前实现进度](./status/current.md)
+- [Benchmark 功能验证（2026-09-22）](./status/benchmark-validation.md)
 - [GPUMD/DMG-MD baseline 实测结果](./status/baseline-results.md)
 - [第二阶段统一重建与分步计时成本报告](./status/stage2-cost-report.md)
 
 “测试已定义”不等于“当前 revision 已执行通过”。新的通过结论必须在此类文档中记录日期、
 代码 revision、环境、精确命令和结果。
+
+## 操作手册与测试入口
+
+- [单节点多 GPU benchmark：样例、测量口径与操作](../tests/benchmark/README.md)
+- [DMG-MD / GPUMD 跨服务器部署](./operations/deployment.md)
 
 ## 待实施计划
 
