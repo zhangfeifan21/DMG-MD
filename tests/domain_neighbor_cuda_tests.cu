@@ -56,7 +56,8 @@ void check_nonzero_center_begin()
   neighbor.initialize(7.0, count, 16);
   Box box = make_box();
   neighbor.find_neighbor_domain(
-      7.0, box, type, position, gid, 1, 3, count, true);
+      7.0, box, type, position, gid, 1, 3, count,
+      gpumd_compat::DomainNeighborAction::must_rebuild, 7);
 
   std::vector<int> nn(count, 0);
   std::vector<int> nl(neighbor.NL.size(), -1);
@@ -76,6 +77,40 @@ void check_nonzero_center_begin()
           "center 1 row must be sorted by candidate global ID");
   require(row(2) == std::vector<int>({3, 1, 0}),
           "center 2 row must be sorted by candidate global ID");
+
+  // The runtime owns the displacement decision. Moving a candidate far away
+  // and explicitly confirming reuse must leave the cached rows untouched.
+  std::vector<double> moved = host_position;
+  moved[3] = 30.0;
+  position.copy_from_host(moved.data());
+  neighbor.find_neighbor_domain(
+      7.0, box, type, position, gid, 1, 3, count,
+      gpumd_compat::DomainNeighborAction::confirmed_reuse, 7);
+  std::vector<int> reused(count, 0);
+  neighbor.NN.copy_to_host(reused.data());
+  require(reused == nn, "confirmed reuse must not rebuild cached rows");
+
+  bool stale_epoch_rejected = false;
+  try {
+    neighbor.find_neighbor_domain(
+        7.0, box, type, position, gid, 1, 3, count,
+        gpumd_compat::DomainNeighborAction::confirmed_reuse, 8);
+  } catch (const std::logic_error&) {
+    stale_epoch_rejected = true;
+  }
+  require(stale_epoch_rejected, "confirmed reuse with a stale layout epoch must fail");
+
+  Neighbor missing_cache;
+  missing_cache.initialize(7.0, count, 16);
+  bool rejected = false;
+  try {
+    missing_cache.find_neighbor_domain(
+        7.0, box, type, position, gid, 1, 3, count,
+        gpumd_compat::DomainNeighborAction::confirmed_reuse, 7);
+  } catch (const std::logic_error&) {
+    rejected = true;
+  }
+  require(rejected, "confirmed reuse without a reference cache must fail");
 }
 
 void check_gpu_vector_capacity_reuse()

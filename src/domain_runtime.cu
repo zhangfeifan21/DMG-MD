@@ -29,6 +29,8 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <iomanip>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -59,7 +61,8 @@ __global__ void velocity_verlet_range(
     const double* mass,
     double* position,
     double* velocity,
-    const double* force)
+    const double* force,
+    double* epoch_displacement)
 {
   const int atom = blockIdx.x * blockDim.x + threadIdx.x;
   if (atom >= owned_count) {
@@ -74,9 +77,15 @@ __global__ void velocity_verlet_range(
   velocity[stride + atom] = vy;
   velocity[2 * stride + atom] = vz;
   if (first_half) {
-    position[atom] += vx * time_step;
-    position[stride + atom] += vy * time_step;
-    position[2 * stride + atom] += vz * time_step;
+    const double dx = vx * time_step;
+    const double dy = vy * time_step;
+    const double dz = vz * time_step;
+    position[atom] += dx;
+    position[stride + atom] += dy;
+    position[2 * stride + atom] += dz;
+    epoch_displacement[atom] += dx;
+    epoch_displacement[stride + atom] += dy;
+    epoch_displacement[2 * stride + atom] += dz;
   }
 }
 
@@ -163,19 +172,35 @@ __global__ void scale_owned_velocity_range(
   velocity[2 * stride + atom] *= factor;
 }
 
-// Migration decision: counts owned atoms whose wrapped position maps to a
-// different slab. A coordinate beyond one box length writes the sentinel
-// -1000000 instead of counting; the host propagates it through the global
-// max so every rank fails symmetrically before any migration collective.
-__global__ void count_foreign_owned(
+enum DomainDecisionReason : std::uint32_t {
+  kOwnerRoutingNeeded = 1u << 0,
+  kContinuityInvalid = 1u << 1,
+  kDisplacementLimit = 1u << 2,
+};
+
+enum class DomainDecisionState : std::uint8_t {
+  undetermined = 0,
+  confirmed_reuse = 1,
+  must_rebuild = 2,
+};
+
+// One pass over the unique manager copies. The continuous displacement was
+// accumulated before wrap by velocity_verlet_range, so periodic crossings
+// and boundary round trips cannot cancel through MIC. Non-negative finite
+// doubles have monotonically ordered bit representations, allowing atomicMax.
+__global__ void inspect_domain_cache(
     int owned_count,
     int stride,
     Box box,
     int axis,
     int rank,
     int world_size,
+    double time_step,
     const double* position,
-    int* count)
+    const double* velocity,
+    const double* epoch_displacement,
+    unsigned long long* maximum_squared_bits,
+    unsigned int* reasons)
 {
   const int atom = blockIdx.x * blockDim.x + threadIdx.x;
   if (atom >= owned_count) {
@@ -186,20 +211,36 @@ __global__ void count_foreign_owned(
   const double z = position[2 * stride + atom];
   const int row = 3 * axis;
   double s = box.cpu_h[9 + row] * x + box.cpu_h[10 + row] * y + box.cpu_h[11 + row] * z;
-  if (s < 0.0) {
-    s += 1.0;
-  } else if (s > 1.0) {
-    s -= 1.0;
+  // position has already passed through the pinned single-wrap kernel. A
+  // still-outside fractional value therefore exceeds the supported routing
+  // contract and must not be silently normalized a second time.
+  const double dx = epoch_displacement[atom];
+  const double dy = epoch_displacement[stride + atom];
+  const double dz = epoch_displacement[2 * stride + atom];
+  const double displacement_squared = dx * dx + dy * dy + dz * dz;
+  bool routeable = isfinite(displacement_squared) && (s >= 0.0 && s <= 1.0);
+  const double step_dx = velocity[atom] * time_step;
+  const double step_dy = velocity[stride + atom] * time_step;
+  const double step_dz = velocity[2 * stride + atom] * time_step;
+  for (int dimension = 0; dimension < 3; ++dimension) {
+    const int inverse_row = 9 + 3 * dimension;
+    const double fractional_step =
+        box.cpu_h[inverse_row] * step_dx +
+        box.cpu_h[inverse_row + 1] * step_dy +
+        box.cpu_h[inverse_row + 2] * step_dz;
+    routeable = routeable && isfinite(fractional_step) &&
+                fabs(fractional_step) <= 1.0;
   }
-  if (!(s >= 0.0 && s <= 1.0)) {
-    *count = -1000000;
+  if (!routeable) {
+    atomicOr(reasons, static_cast<unsigned int>(kContinuityInvalid));
     return;
   }
+  atomicMax(maximum_squared_bits, __double_as_longlong(displacement_squared));
   int slab = static_cast<int>(s * world_size);
   if (slab >= world_size) slab = world_size - 1;
   if (slab < 0) slab = 0;
   if (slab != rank) {
-    atomicAdd(count, 1);
+    atomicOr(reasons, static_cast<unsigned int>(kOwnerRoutingNeeded));
   }
 }
 
@@ -239,10 +280,12 @@ struct DomainDeviceAtoms {
   GPU_Vector<double> virial;
   GPU_Vector<double> unwrapped;
   GPU_Vector<double> previous_position;
+  GPU_Vector<double> epoch_displacement;
   GPU_Vector<double> thermo;
   GPU_Vector<int> send_slots[2];  // per face: owned slots of the send list
   GPU_Vector<int> recv_slots[2];  // per face: ghost slot per stream index
-  GPU_Vector<int> migration_flag;  // 1-int device scratch
+  GPU_Vector<unsigned long long> decision_max_squared;
+  GPU_Vector<unsigned int> decision_reasons;
 };
 
 struct DomainState {
@@ -257,7 +300,12 @@ struct DomainState {
   LocalLayout layout;
   ExchangePlan plan;
   std::uint64_t epoch = 0;
+  std::uint64_t mapping_epoch = 0;
+  std::uint64_t refreshed_epoch = 0;
+  DomainDecisionState decision_state = DomainDecisionState::undetermined;
+  bool neighbor_cache_valid = false;
   bool detailed_logging = false;
+  bool timing_enabled = false;
   DomainDeviceAtoms device;
   // Workspace bookkeeping: the NEP workspaces are re-sized only when
   // local_count changes; every layout change still forces a Verlet rebuild.
@@ -292,6 +340,231 @@ struct DomainState {
   }
 };
 
+enum class TimedStepClass : int { ordinary = 0, rebuild = 1 };
+
+enum TimingField : int {
+  kCount, kStepWall, kDecision, kMigration, kMembershipLayout,
+  kAllocationUpload, kHaloPackDevice, kHaloTransferWait, kHaloUnpackDevice,
+  kCellNeighborDevice, kNepDevice, kIntegrationDevice, kThermoDevice,
+  kIntegrationHost, kThermoHost,
+  kScientificOutputHost, kMpiWait, kRemainingHost, kTimingFieldCount
+};
+
+struct SegmentTiming {
+  static constexpr int kHistogramBuckets = 12;
+  std::array<std::array<double, kTimingFieldCount>, 2> values{};
+  std::array<double, 2> step_min{{std::numeric_limits<double>::infinity(),
+                                  std::numeric_limits<double>::infinity()}};
+  std::array<double, 2> step_max{{0.0, 0.0}};
+  std::array<std::array<double, kHistogramBuckets>, 2> step_histogram{};
+  std::uint64_t displacement_rebuilds = 0;
+  std::uint64_t routing_rebuilds = 0;
+  double step_loop_wall = 0.0;
+  double setup_host = 0.0;
+  double setup_cell_neighbor_device = 0.0;
+  double setup_nep_device = 0.0;
+};
+
+[[nodiscard]] int timing_histogram_bucket(double seconds)
+{
+  // Powers of four from 1 us through roughly four seconds; the final bucket
+  // also contains larger values. This is a bounded rank-step distribution,
+  // not a claim of an exact percentile estimator.
+  double upper = 1.0e-6;
+  for (int bucket = 0; bucket < SegmentTiming::kHistogramBuckets - 1; ++bucket) {
+    if (seconds < upper) return bucket;
+    upper *= 4.0;
+  }
+  return SegmentTiming::kHistogramBuckets - 1;
+}
+
+[[nodiscard]] bool domain_timing_enabled()
+{
+  const char* value = std::getenv("DMGMD_DOMAIN_TIMING");
+  if (value == nullptr || value[0] == '\0' || std::strcmp(value, "0") == 0) {
+    return false;
+  }
+  if (std::strcmp(value, "1") == 0) return true;
+  throw std::runtime_error("DMGMD_DOMAIN_TIMING must be 0 or 1");
+}
+
+void add_seconds(
+    SegmentTiming& timing, TimedStepClass step_class, TimingField field, double seconds)
+{
+  timing.values[static_cast<int>(step_class)][field] += seconds;
+}
+
+[[nodiscard]] double elapsed_since(
+    const std::chrono::steady_clock::time_point& start)
+{
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
+[[nodiscard]] std::chrono::steady_clock::time_point begin_detailed_timing(
+    bool enabled)
+{
+  return enabled ? std::chrono::steady_clock::now()
+                 : std::chrono::steady_clock::time_point{};
+}
+
+[[nodiscard]] double event_seconds(cudaEvent_t begin, cudaEvent_t end)
+{
+  float milliseconds = 0.0f;
+  check_cuda(cudaEventElapsedTime(&milliseconds, begin, end),
+             "read domain timing event");
+  return static_cast<double>(milliseconds) * 1.0e-3;
+}
+
+void create_opaque_event(void*& handle, const char* operation)
+{
+  cudaEvent_t event = nullptr;
+  check_cuda(cudaEventCreate(&event), operation);
+  handle = reinterpret_cast<void*>(event);
+}
+
+void destroy_opaque_event(void* handle, const char* operation)
+{
+  check_cuda(cudaEventDestroy(reinterpret_cast<cudaEvent_t>(handle)), operation);
+}
+
+void log_segment_timing(
+    const SegmentTiming& timing, std::uint64_t sequence, MpiRuntime& mpi)
+{
+  constexpr int extra_count = 10 + 2 * SegmentTiming::kHistogramBuckets;
+  constexpr int count = 2 * kTimingFieldCount + extra_count;
+  std::array<double, count> local{};
+  std::array<double, count> sums{};
+  std::array<double, count> minima{};
+  std::array<double, count> maxima{};
+  int cursor = 0;
+  for (int step_class = 0; step_class < 2; ++step_class) {
+    for (int field = 0; field < kTimingFieldCount; ++field) {
+      local[cursor++] = timing.values[step_class][field];
+    }
+  }
+  for (int step_class = 0; step_class < 2; ++step_class) {
+    const double minimum = timing.step_min[step_class];
+    local[cursor++] = std::isfinite(minimum) ? -minimum :
+                      -std::numeric_limits<double>::infinity();
+    local[cursor++] = timing.step_max[step_class];
+  }
+  local[cursor++] = static_cast<double>(timing.displacement_rebuilds);
+  local[cursor++] = static_cast<double>(timing.routing_rebuilds);
+  local[cursor++] = timing.step_loop_wall;
+  local[cursor++] = timing.setup_host;
+  local[cursor++] = timing.setup_cell_neighbor_device;
+  local[cursor++] = timing.setup_nep_device;
+  for (int step_class = 0; step_class < 2; ++step_class) {
+    for (double bucket_count : timing.step_histogram[step_class]) {
+      local[cursor++] = bucket_count;
+    }
+  }
+  mpi.reduce_sum_min_max_doubles(
+      local.data(), sums.data(), minima.data(), maxima.data(), count);
+  if (!mpi.is_root()) return;
+  const char* names[2] = {"ordinary", "rebuild"};
+  const int ranks = mpi.world_size();
+  for (int step_class = 0; step_class < 2; ++step_class) {
+    const int base = step_class * kTimingFieldCount;
+    const double step_count = maxima[base + kCount];
+    const auto mean = [&](TimingField field) {
+      return sums[base + field] / static_cast<double>(ranks);
+    };
+    const auto average_per_step = [&](TimingField field) {
+      return step_count > 0.0 ? mean(field) / step_count : 0.0;
+    };
+    const auto stage = [&](TimingField field, const char* name) {
+      std::cout << ' ' << name << "_seconds_per_step_rank_mean="
+                << average_per_step(field)
+                << ' ' << name << "_seconds_rank_min_total="
+                << minima[base + field]
+                << ' ' << name << "_seconds_rank_max_total="
+                << maxima[base + field];
+    };
+    const int extrema_base = 2 * kTimingFieldCount + step_class * 2;
+    std::cout << std::fixed << std::setprecision(9)
+              << "DMGMD_DOMAIN_TIMING sequence=" << sequence
+              << " class=" << names[step_class]
+              << " count=" << static_cast<std::uint64_t>(step_count)
+              << " step_seconds_rank_mean=" << average_per_step(kStepWall)
+              << " step_seconds_rank_min_total=" << minima[base + kStepWall]
+              << " step_seconds_rank_max_total=" << maxima[base + kStepWall]
+              << " step_seconds_observed_min="
+              << (step_count > 0.0 ? -maxima[extrema_base] : 0.0)
+              << " step_seconds_observed_max="
+              << (step_count > 0.0 ? maxima[extrema_base + 1] : 0.0);
+    stage(kDecision, "decision");
+    stage(kMigration, "migration");
+    stage(kMembershipLayout, "membership_layout");
+    stage(kAllocationUpload, "allocation_upload");
+    stage(kHaloPackDevice, "halo_pack_device");
+    stage(kHaloTransferWait, "halo_transfer_wait");
+    stage(kHaloUnpackDevice, "halo_unpack_device");
+    stage(kCellNeighborDevice, "cell_neighbor_device");
+    stage(kNepDevice, "nep_device");
+    stage(kIntegrationDevice, "integration_device");
+    stage(kThermoDevice, "thermo_device");
+    stage(kIntegrationHost, "integration_host");
+    stage(kThermoHost, "thermo_host");
+    stage(kScientificOutputHost, "scientific_output_host");
+    stage(kMpiWait, "mpi_wait");
+    stage(kRemainingHost, "remaining_host");
+    std::cout << '\n';
+  }
+  const int reason_base = 2 * kTimingFieldCount + 4;
+  std::cout << "DMGMD_DOMAIN_REBUILD_REASONS sequence=" << sequence
+            << " displacement=" << static_cast<std::uint64_t>(maxima[reason_base])
+            << " routing=" << static_cast<std::uint64_t>(maxima[reason_base + 1])
+            << '\n';
+  std::cout << "DMGMD_DOMAIN_TIMING_SEGMENT sequence=" << sequence
+            << " step_loop_seconds_rank_mean="
+            << sums[reason_base + 2] / static_cast<double>(ranks)
+            << " step_loop_seconds_rank_min=" << minima[reason_base + 2]
+            << " step_loop_seconds_rank_max=" << maxima[reason_base + 2]
+            << '\n';
+  const int setup_base = reason_base + 3;
+  std::cout << "DMGMD_DOMAIN_TIMING_SETUP sequence=" << sequence
+            << " count=1"
+            << " host_seconds_rank_mean="
+            << sums[setup_base] / static_cast<double>(ranks)
+            << " host_seconds_rank_min=" << minima[setup_base]
+            << " host_seconds_rank_max=" << maxima[setup_base]
+            << " cell_neighbor_device_seconds_rank_mean="
+            << sums[setup_base + 1] / static_cast<double>(ranks)
+            << " cell_neighbor_device_seconds_rank_min=" << minima[setup_base + 1]
+            << " cell_neighbor_device_seconds_rank_max=" << maxima[setup_base + 1]
+            << " nep_device_seconds_rank_mean="
+            << sums[setup_base + 2] / static_cast<double>(ranks)
+            << " nep_device_seconds_rank_min=" << minima[setup_base + 2]
+            << " nep_device_seconds_rank_max=" << maxima[setup_base + 2]
+            << '\n';
+  const int histogram_base = setup_base + 3;
+  for (int step_class = 0; step_class < 2; ++step_class) {
+    std::cout << "DMGMD_DOMAIN_TIMING_HISTOGRAM sequence=" << sequence
+              << " class=" << names[step_class]
+              << " unit=seconds bounds=";
+    double upper = 1.0e-6;
+    for (int bucket = 0; bucket < SegmentTiming::kHistogramBuckets; ++bucket) {
+      if (bucket != 0) std::cout << ',';
+      if (bucket == SegmentTiming::kHistogramBuckets - 1) {
+        std::cout << "inf";
+      } else {
+        std::cout << upper;
+        upper *= 4.0;
+      }
+    }
+    std::cout << " counts=";
+    const int offset = histogram_base +
+                       step_class * SegmentTiming::kHistogramBuckets;
+    for (int bucket = 0; bucket < SegmentTiming::kHistogramBuckets; ++bucket) {
+      if (bucket != 0) std::cout << ',';
+      std::cout << static_cast<std::uint64_t>(sums[offset + bucket]);
+    }
+    std::cout << '\n';
+  }
+  std::cout.flush();
+}
+
 [[nodiscard]] bool domain_diagnostics_enabled()
 {
   const char* value = std::getenv("DMGMD_DOMAIN_DIAGNOSTICS");
@@ -321,7 +594,8 @@ void upload_domain_layout(
     const LocalLayout& layout,
     const ExchangePlan& plan,
     bool track_unwrapped,
-    DomainDeviceAtoms& device)
+    DomainDeviceAtoms& device,
+    bool reset_epoch_displacement)
 {
   const std::size_t local = layout.local_count();
   const std::size_t owned = layout.owned_count();
@@ -368,6 +642,12 @@ void upload_domain_layout(
   device.force.resize_reuse(std::max<std::size_t>(3 * local, 1), 0.0);
   device.potential.resize_reuse(std::max<std::size_t>(local, 1), 0.0);
   device.virial.resize_reuse(std::max<std::size_t>(9 * local, 1), 0.0);
+  if (reset_epoch_displacement) {
+    device.epoch_displacement.resize_reuse(
+        std::max<std::size_t>(3 * local, 1), 0.0);
+  } else if (device.epoch_displacement.size() != std::max<std::size_t>(3 * local, 1)) {
+    throw std::logic_error("epoch displacement shape changed without a rebuild");
+  }
   if (local != 0) {
     device.global_id.copy_from_host(gid.data(), local);
     device.type.copy_from_host(type.data(), local);
@@ -487,8 +767,10 @@ void exchange_halo_membership(
     const Box& box,
     MpiRuntime& mpi,
     CommunicationVolume& communication,
-    std::uint64_t step)
+    std::uint64_t step,
+    SegmentTiming* timing = nullptr)
 {
+  const auto membership_started = begin_detailed_timing(timing != nullptr);
   static_cast<void>(box);
   // Tentative layout with empty ghosts: only used to derive the send lists
   // from the current owned positions.
@@ -566,24 +848,45 @@ void exchange_halo_membership(
   validate_exchange_plan(
       state.plan, state.layout.owned_count(), state.layout.local_count(),
       state.rank, state.world_size);
+  if (timing != nullptr) {
+    add_seconds(*timing, TimedStepClass::rebuild, kMembershipLayout,
+                elapsed_since(membership_started));
+  }
+  const auto upload_started = begin_detailed_timing(timing != nullptr);
   const std::uint64_t allocations_before =
       gpumd_compat::gpu_vector_allocation_count();
-  upload_domain_layout(state.layout, state.plan, state.track_unwrapped, state.device);
+  upload_domain_layout(
+      state.layout, state.plan, state.track_unwrapped, state.device, true);
   ensure_workspace(nep, state);
+  state.neighbor_cache_valid = false;
   ++state.layout_uploads;
   state.last_layout_gpu_allocations =
       gpumd_compat::gpu_vector_allocation_count() - allocations_before;
   if (state.last_layout_gpu_allocations != 0) {
     ++state.capacity_growth_events;
   }
+  if (timing != nullptr) {
+    add_seconds(*timing, TimedStepClass::rebuild, kAllocationUpload,
+                elapsed_since(upload_started));
+  }
   ++state.epoch;
+  state.mapping_epoch = state.epoch;
+  state.refreshed_epoch = state.epoch;
   log_domain_layout(state, step);
 }
 
 // Per-step ghost position refresh (halo class, 24 bytes per atom) through the
 // cached face plan; membership itself is only re-evaluated at rebuilds.
-void refresh_ghost_positions(DomainState& state, MpiRuntime& mpi, CommunicationVolume& communication)
+void refresh_ghost_positions(
+    DomainState& state, MpiRuntime& mpi, CommunicationVolume& communication,
+    P2pTimingEvents* timing = nullptr)
 {
+  if (state.decision_state != DomainDecisionState::confirmed_reuse) {
+    throw std::logic_error("ghost refresh requires a confirmed reuse decision");
+  }
+  if (state.mapping_epoch != state.epoch) {
+    throw std::logic_error("ghost refresh uses a stale communication mapping");
+  }
   const int left_peer = state.plan.face[kFaceLeft].peer;
   const int right_peer = state.plan.face[kFaceRight].peer;
   const int send_left = checked_int(state.plan.face[kFaceLeft].send_slots.size(), "send left");
@@ -596,7 +899,8 @@ void refresh_ghost_positions(DomainState& state, MpiRuntime& mpi, CommunicationV
       state.device.send_slots[kFaceRight].data(), send_right,
       state.device.recv_slots[kFaceLeft].data(), recv_left,
       state.device.recv_slots[kFaceRight].data(), recv_right,
-      left_peer, right_peer, communication);
+      left_peer, right_peer, communication, timing);
+  state.refreshed_epoch = state.mapping_epoch;
 }
 
 void log_domain_migration(
@@ -635,8 +939,10 @@ void do_migration(
     const Box& box,
     MpiRuntime& mpi,
     CommunicationVolume& communication,
-    std::uint64_t step)
+    std::uint64_t step,
+    SegmentTiming* timing = nullptr)
 {
+  const auto migration_started = begin_detailed_timing(timing != nullptr);
   static_cast<void>(box);
   download_owned_dynamics(state);
   const std::size_t owned = state.owned_count();
@@ -776,18 +1082,49 @@ void do_migration(
       throw std::runtime_error("migration produced a duplicate owned global ID");
     }
   }
+  // Initial ownership is an exact global-ID partition. Each transaction
+  // partitions every old slot into either staying or exactly one destination,
+  // and MPI receives exactly the advertised records. The global count plus
+  // local duplicate checks therefore preserves the exact unique set without
+  // an O(N) bitmap collective at every rebuild.
+  // MPI_Alltoall advertises every outgoing slot exactly once and the receive
+  // parser consumes exactly those counts. Summing new_count = old_count -
+  // sent + received over ranks cancels the routed terms, preserving the
+  // already-proven global count without another collective.
   log_domain_migration(state, step, incoming);
   ++state.migration_steps;
+  if (timing != nullptr) {
+    add_seconds(*timing, TimedStepClass::rebuild, kMigration,
+                elapsed_since(migration_started));
+  }
   exchange_halo_membership(
-      state, std::move(next_owned), nep, box, mpi, communication, step);
+      state, std::move(next_owned), nep, box, mpi, communication, step, timing);
 }
 
 // ---------------------------------------------------------------------------
 // Per-step helpers.
 // ---------------------------------------------------------------------------
 
-void launch_domain_force(DomainState& state, Box& box, NEP& nep, bool force_rebuild)
+void launch_domain_force(
+    DomainState& state, Box& box, NEP& nep,
+    gpumd_compat::DomainNeighborAction neighbor_action)
 {
+  if (state.mapping_epoch != state.epoch || state.refreshed_epoch != state.epoch) {
+    throw std::logic_error("domain force uses a stale layout or halo mapping");
+  }
+  if (neighbor_action == gpumd_compat::DomainNeighborAction::confirmed_reuse &&
+      !state.neighbor_cache_valid) {
+    throw std::logic_error("domain force reuse was not confirmed by a valid cache");
+  }
+  if (state.executed_steps != 0 || state.decision_state != DomainDecisionState::undetermined) {
+    const DomainDecisionState expected =
+        neighbor_action == gpumd_compat::DomainNeighborAction::confirmed_reuse
+            ? DomainDecisionState::confirmed_reuse
+            : DomainDecisionState::must_rebuild;
+    if (state.decision_state != expected) {
+      throw std::logic_error("domain force action disagrees with the resolved cache decision");
+    }
+  }
   const int local = checked_int(state.local_count(), "local_count");
   const int owned = checked_int(state.owned_count(), "owned_count");
   const int dep = checked_int(state.layout.dep_ghost_count(), "dependency ghosts");
@@ -806,7 +1143,9 @@ void launch_domain_force(DomainState& state, Box& box, NEP& nep, bool force_rebu
   nep.ND2 = owned > 0 ? owned + dep : 0;
   nep.compute_domain(
       box, local, state.device.type, state.device.position, state.device.potential,
-      state.device.force, state.device.virial, state.device.global_id, force_rebuild);
+      state.device.force, state.device.virial, state.device.global_id, neighbor_action,
+      state.epoch);
+  state.neighbor_cache_valid = true;
 }
 
 void launch_domain_verlet(DomainState& state, bool first_half, double time_step)
@@ -817,7 +1156,7 @@ void launch_domain_verlet(DomainState& state, bool first_half, double time_step)
   velocity_verlet_range<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
       first_half, owned, stride, time_step, state.device.mass.data(),
       state.device.position.data(), state.device.velocity.data(),
-      state.device.force.data());
+      state.device.force.data(), state.device.epoch_displacement.data());
   if (first_half && state.track_unwrapped) {
     update_unwrapped_range<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
         owned, stride, state.device.position.data(),
@@ -833,7 +1172,8 @@ ThermoState compute_domain_thermo(
     const HostAtoms& identity,
     GPU_Vector<double>& device_thermo,
     MpiRuntime& mpi,
-    CommunicationVolume& communication)
+    CommunicationVolume& communication,
+    const std::array<cudaEvent_t, 4>* timing_events = nullptr)
 {
   const int owned = checked_int(state.owned_count(), "owned_count");
   const int stride = checked_int(state.local_count(), "local_count");
@@ -842,11 +1182,23 @@ ThermoState compute_domain_thermo(
       state.device.velocity.data(), state.device.virial.data(),
       device_thermo.data());
   check_cuda(cudaGetLastError(), "launch owned thermo reduction");
+  if (timing_events != nullptr) {
+    check_cuda(cudaEventRecord((*timing_events)[1]),
+               "record local thermo reduction end");
+  }
   mpi.allreduce_sum_device(device_thermo.data(), 8, communication);
+  if (timing_events != nullptr) {
+    check_cuda(cudaEventRecord((*timing_events)[2]),
+               "record thermo normalization start");
+  }
   normalize_global_thermo<<<1, 8>>>(
       checked_int(identity.counts.global_count, "global_count"),
       box.get_volume(), device_thermo.data());
   check_cuda(cudaGetLastError(), "normalize global thermo");
+  if (timing_events != nullptr) {
+    check_cuda(cudaEventRecord((*timing_events)[3]),
+               "record thermo normalization end");
+  }
   ThermoState result;
   device_thermo.copy_to_host(result.values.data());
   return result;
@@ -1096,15 +1448,62 @@ void run_domain_segment(
     }
   }
 
-  // Initial force before the first step: the local layout, halo and NEP
-  // workspace are already in place; its records (neighbor.out) land in the
-  // uncounted startup volume.
-  {
-    launch_domain_force(state, box, nep, true);
+  SegmentTiming segment_timing;
+  std::array<cudaEvent_t, 4> setup_nep_events{nullptr, nullptr, nullptr, nullptr};
+  std::array<cudaEvent_t, 4> nep_events{nullptr, nullptr, nullptr, nullptr};
+  std::array<cudaEvent_t, 6> integration_events{
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+  std::array<cudaEvent_t, 4> thermo_events{nullptr, nullptr, nullptr, nullptr};
+  P2pTimingEvents halo_events;
+  std::optional<TimedStepClass> pending_thermostat_timing;
+  if (state.timing_enabled) {
+    for (cudaEvent_t& event : setup_nep_events) {
+      check_cuda(cudaEventCreate(&event), "create setup NEP timing event");
+    }
+    for (cudaEvent_t& event : nep_events) {
+      check_cuda(cudaEventCreate(&event), "create NEP timing event");
+    }
+    for (cudaEvent_t& event : integration_events) {
+      check_cuda(cudaEventCreate(&event), "create integration timing event");
+    }
+    for (cudaEvent_t& event : thermo_events) {
+      check_cuda(cudaEventCreate(&event), "create thermo timing event");
+    }
+    create_opaque_event(halo_events.pack_begin, "create halo timing event");
+    create_opaque_event(halo_events.pack_end, "create halo timing event");
+    create_opaque_event(halo_events.unpack_begin, "create halo timing event");
+    create_opaque_event(halo_events.unpack_end, "create halo timing event");
+    nep.domain_timing_marker = [&setup_nep_events](int marker) {
+      check_cuda(cudaEventRecord(setup_nep_events.at(static_cast<std::size_t>(marker))),
+                 "record setup NEP timing marker");
+    };
   }
+  // Preserve the GPUMD-compatible segment-initial force call, but only the
+  // bootstrap call builds rows. Consecutive run segments reuse the already
+  // proven neighbor cache instead of forcing a redundant rebuild.
+  const auto setup_started = begin_detailed_timing(state.timing_enabled);
+  state.decision_state = state.neighbor_cache_valid
+                             ? DomainDecisionState::confirmed_reuse
+                             : DomainDecisionState::must_rebuild;
+  launch_domain_force(
+      state, box, nep, state.neighbor_cache_valid
+                           ? gpumd_compat::DomainNeighborAction::confirmed_reuse
+                           : gpumd_compat::DomainNeighborAction::must_rebuild);
+  if (state.timing_enabled) {
+    segment_timing.setup_host = elapsed_since(setup_started);
+    nep.domain_timing_marker = [&nep_events](int marker) {
+      check_cuda(cudaEventRecord(nep_events.at(static_cast<std::size_t>(marker))),
+                 "record NEP timing marker");
+    };
+  }
+  const auto step_loop_started = begin_detailed_timing(state.timing_enabled);
   for (int step = 0; step < steps; ++step) {
+    const auto step_started = begin_detailed_timing(state.timing_enabled);
+    double accounted_host = 0.0;
     CommunicationVolume communication;
+    communication.measure_mpi_wait = state.timing_enabled;
     state.current_volume = &communication;
+    const auto integration_first_started = begin_detailed_timing(state.timing_enabled);
     // 1. correct_velocity trigger: gather to the root, CPU correction over
     // the global order, scatter back to the current owners.
     if (velocity_correction && step % velocity_correction->interval == 0) {
@@ -1127,6 +1526,10 @@ void run_domain_segment(
       }
     }
     // 3. VV first half over the owned prefix.
+    if (state.timing_enabled) {
+      check_cuda(cudaEventRecord(integration_events[0]),
+                 "record first integration start");
+    }
     launch_domain_verlet(state, true, time_step);
     // 4. Wrap the owned prefix into the global box.
     {
@@ -1138,68 +1541,142 @@ void run_domain_segment(
         check_cuda(cudaGetLastError(), "wrap owned positions");
       }
     }
-    // 5. Direct migration decision: a global max over the per-rank foreign
-    // counts (2.0 encodes the un-routable sentinel so every rank fails
-    // symmetrically before any migration collective).
-    double migration_flag = 0.0;
+    if (state.timing_enabled) {
+      check_cuda(cudaEventRecord(integration_events[1]),
+                 "record first integration end");
+    }
+    const double integration_first_seconds =
+        state.timing_enabled ? elapsed_since(integration_first_started) : 0.0;
+    // 5. One globally consistent cache decision. A geometric slab crossing
+    // alone only marks the eventual route; manager ownership remains fixed
+    // until the displacement cache itself must be rebuilt.
+    const auto decision_started = begin_detailed_timing(state.timing_enabled);
+    state.decision_state = DomainDecisionState::undetermined;
+    double local_max_squared = 0.0;
+    std::uint32_t local_reasons = 0;
     {
-      int foreign = 0;
       const int owned = checked_int(state.owned_count(), "owned_count");
       const int local = checked_int(state.local_count(), "local_count");
-      if (state.device.migration_flag.size() == 0) {
-        state.device.migration_flag.resize_reuse(1);
-      }
+      state.device.decision_max_squared.resize_reuse(1, 0ULL);
+      state.device.decision_reasons.resize_reuse(1, 0U);
       if (owned > 0) {
-        int zero = 0;
-        state.device.migration_flag.copy_from_host(&zero, 1);
-        count_foreign_owned<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+        inspect_domain_cache<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
             owned, local, box, state.axis, state.rank, state.world_size,
-            state.device.position.data(), state.device.migration_flag.data());
-        check_cuda(cudaGetLastError(), "count foreign owned atoms");
-        state.device.migration_flag.copy_to_host(&foreign, 1);
-      }
-      migration_flag = foreign < 0 ? 2.0 : (foreign > 0 ? 1.0 : 0.0);
-      migration_flag = mpi.allreduce_max_host(migration_flag, communication);
-      if (migration_flag >= 2.0) {
-        throw std::runtime_error(
-            "an owned atom displaced more than one box length in a single step");
+            time_step, state.device.position.data(), state.device.velocity.data(),
+            state.device.epoch_displacement.data(),
+            state.device.decision_max_squared.data(),
+            state.device.decision_reasons.data());
+        check_cuda(cudaGetLastError(), "inspect domain cache validity");
+        unsigned long long max_bits = 0;
+        unsigned int reasons = 0;
+        state.device.decision_max_squared.copy_to_host(&max_bits, 1);
+        state.device.decision_reasons.copy_to_host(&reasons, 1);
+        std::memcpy(&local_max_squared, &max_bits, sizeof(local_max_squared));
+        local_reasons = reasons;
       }
     }
-    bool force_rebuild = false;
-    if (migration_flag > 0.0) {
-      do_migration(state, nep, box, mpi, communication, global_step + 1);
-      force_rebuild = true;  // migration invalidates every cached row
-    } else {
-      // 6. Halo position refresh through the cached face plan.
-      refresh_ghost_positions(state, mpi, communication);
-      // 7. Global neighbor-rebuild OR: every rank checks the displacement of
-      // its local slots (ghosts were just refreshed; a ghost's displacement
-      // duplicates its source's owned displacement on the owner rank), and
-      // a single max reduction makes the rebuild decision uniform.
-      bool local_rebuild = nep.neighbor_needs_rebuild(
-          box, state.device.position, checked_int(state.local_count(), "local_count"));
-      double rebuild_flag = local_rebuild ? 1.0 : 0.0;
-      rebuild_flag = mpi.allreduce_max_host(rebuild_flag, communication);
-      if (rebuild_flag > 0.0) {
-        // Halo membership is tied to the global neighbor rebuild: the ghost
-        // sets are re-derived with fresh positions before the Verlet rows.
+    const double global_max_squared =
+        mpi.allreduce_max_host(local_max_squared, communication);
+    constexpr double displacement_limit_squared =
+        0.25 * kNeighborSkin * kNeighborSkin;
+    if (global_max_squared > displacement_limit_squared) {
+      local_reasons |= kDisplacementLimit;
+    }
+    const std::uint32_t global_reasons =
+        mpi.allreduce_or_u32(local_reasons, communication);
+    if ((global_reasons & kContinuityInvalid) != 0) {
+      throw std::runtime_error(
+          "an owned atom has a non-finite or unsupported multi-box displacement");
+    }
+    const bool rebuild = (global_reasons & kDisplacementLimit) != 0;
+    state.decision_state = rebuild ? DomainDecisionState::must_rebuild
+                                   : DomainDecisionState::confirmed_reuse;
+    const TimedStepClass step_class =
+        rebuild ? TimedStepClass::rebuild : TimedStepClass::ordinary;
+    if (state.timing_enabled) {
+      const double seconds = elapsed_since(decision_started);
+      add_seconds(segment_timing, step_class, kIntegrationHost,
+                  integration_first_seconds);
+      accounted_host += integration_first_seconds;
+      add_seconds(segment_timing, step_class, kDecision, seconds);
+      accounted_host += seconds;
+    }
+    gpumd_compat::DomainNeighborAction neighbor_action =
+        gpumd_compat::DomainNeighborAction::confirmed_reuse;
+    if (rebuild) {
+      const auto rebuild_started = begin_detailed_timing(state.timing_enabled);
+      if (state.timing_enabled) ++segment_timing.displacement_rebuilds;
+      if ((global_reasons & kOwnerRoutingNeeded) != 0) {
+        if (state.timing_enabled) ++segment_timing.routing_rebuilds;
+        do_migration(state, nep, box, mpi, communication, global_step + 1,
+                     state.timing_enabled ? &segment_timing : nullptr);
+      } else {
         download_owned_dynamics(state);
         std::vector<DomainAtomRecord> owned = state.layout.owned;
         exchange_halo_membership(
-            state, std::move(owned), nep, box, mpi, communication, global_step + 1);
-        ++state.rebuild_steps;
-        force_rebuild = true;
+            state, std::move(owned), nep, box, mpi, communication, global_step + 1,
+            state.timing_enabled ? &segment_timing : nullptr);
+      }
+      ++state.rebuild_steps;
+      neighbor_action = gpumd_compat::DomainNeighborAction::must_rebuild;
+      if (state.timing_enabled) accounted_host += elapsed_since(rebuild_started);
+    } else {
+      // 6. Ordinary step: manager/layout/mapping stay fixed and only ghost
+      // coordinates are refreshed through the cached face plan.
+      halo_events.transfer_wait_seconds = 0.0;
+      refresh_ghost_positions(
+          state, mpi, communication, state.timing_enabled ? &halo_events : nullptr);
+      if (state.timing_enabled) {
+        add_seconds(segment_timing, step_class, kHaloTransferWait,
+                    halo_events.transfer_wait_seconds);
+        accounted_host += halo_events.transfer_wait_seconds;
       }
     }
     // 8. Domain NEP: dependency-center neighbor/descriptor/partial, owned
     // radial force / many-body / ZBL, all with the local stride.
-    launch_domain_force(state, box, nep, force_rebuild);
+    launch_domain_force(state, box, nep, neighbor_action);
     // 9. VV second half over the owned prefix.
+    const auto integration_second_started = begin_detailed_timing(state.timing_enabled);
+    if (state.timing_enabled) {
+      check_cuda(cudaEventRecord(integration_events[2]),
+                 "record second integration start");
+    }
     launch_domain_verlet(state, false, time_step);
+    if (state.timing_enabled) {
+      check_cuda(cudaEventRecord(integration_events[3]),
+                 "record second integration end");
+      check_cuda(cudaEventRecord(thermo_events[0]), "record thermo start");
+    }
     // 10. Thermo: owned local sums + global Allreduce.
+    const double integration_second_seconds =
+        state.timing_enabled ? elapsed_since(integration_second_started) : 0.0;
+    if (state.timing_enabled) {
+      add_seconds(segment_timing, step_class, kIntegrationHost,
+                  integration_second_seconds);
+      accounted_host += integration_second_seconds;
+    }
+    const auto thermo_started = begin_detailed_timing(state.timing_enabled);
     const ThermoState thermo =
-        compute_domain_thermo(state, box, identity, state.device.thermo, mpi, communication);
+        compute_domain_thermo(state, box, identity, state.device.thermo, mpi, communication,
+                              state.timing_enabled ? &thermo_events : nullptr);
+    if (state.timing_enabled) {
+      const double seconds = elapsed_since(thermo_started);
+      add_seconds(segment_timing, step_class, kThermoHost, seconds);
+      accounted_host += seconds;
+    }
     // 11. Thermostat over the owned prefix.
+    const auto thermostat_started = begin_detailed_timing(state.timing_enabled);
+    if (state.timing_enabled) {
+      // The current thermo D2H is a natural readiness point for the preceding
+      // step's thermostat. Resolve it before reusing the event pair; no
+      // diagnostic-only per-step synchronization is introduced.
+      if (pending_thermostat_timing) {
+        add_seconds(segment_timing, *pending_thermostat_timing, kIntegrationDevice,
+                    event_seconds(integration_events[4], integration_events[5]));
+      }
+      check_cuda(cudaEventRecord(integration_events[4]),
+                 "record thermostat start");
+    }
     if (ensemble.kind == EnsembleKind::nvt_ber) {
       const double fraction = static_cast<double>(step) / static_cast<double>(steps);
       const double target = ensemble.initial_temperature +
@@ -1216,7 +1693,36 @@ void run_domain_segment(
         check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
       }
     }
+    if (state.timing_enabled) {
+      check_cuda(cudaEventRecord(integration_events[5]),
+                 "record thermostat end");
+      pending_thermostat_timing = step_class;
+    }
+    if (state.timing_enabled) {
+      const double seconds = elapsed_since(thermostat_started);
+      add_seconds(segment_timing, step_class, kIntegrationHost, seconds);
+      accounted_host += seconds;
+      add_seconds(segment_timing, step_class, kCellNeighborDevice,
+                  event_seconds(nep_events[0], nep_events[1]));
+      add_seconds(segment_timing, step_class, kNepDevice,
+                  event_seconds(nep_events[2], nep_events[3]));
+      add_seconds(segment_timing, step_class, kIntegrationDevice,
+                  event_seconds(integration_events[0], integration_events[1]) +
+                      event_seconds(integration_events[2], integration_events[3]));
+      add_seconds(segment_timing, step_class, kThermoDevice,
+                  event_seconds(thermo_events[0], thermo_events[1]) +
+                      event_seconds(thermo_events[2], thermo_events[3]));
+      if (!rebuild) {
+        add_seconds(segment_timing, step_class, kHaloPackDevice,
+                    event_seconds(reinterpret_cast<cudaEvent_t>(halo_events.pack_begin),
+                                  reinterpret_cast<cudaEvent_t>(halo_events.pack_end)));
+        add_seconds(segment_timing, step_class, kHaloUnpackDevice,
+                    event_seconds(reinterpret_cast<cudaEvent_t>(halo_events.unpack_begin),
+                                  reinterpret_cast<cudaEvent_t>(halo_events.unpack_end)));
+      }
+    }
     // 12. Outputs.
+    const auto output_started = begin_detailed_timing(state.timing_enabled);
     bool need_snapshot = false;
     for (const Measurement& measurement : measurements) {
       if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
@@ -1249,11 +1755,69 @@ void run_domain_segment(
         }
       }
     }
+    if (state.timing_enabled) {
+      const double seconds = elapsed_since(output_started);
+      add_seconds(segment_timing, step_class, kScientificOutputHost, seconds);
+      accounted_host += seconds;
+    }
     state.current_volume = nullptr;
     ++global_step;
     ++state.executed_steps;
     mpi.log_step_communication(global_step, communication);
     mpi.log_step_domain_communication(global_step, communication);
+    if (state.timing_enabled) {
+      const double step_seconds = elapsed_since(step_started);
+      const int class_index = static_cast<int>(step_class);
+      segment_timing.values[static_cast<int>(step_class)][kCount] += 1.0;
+      segment_timing.step_min[class_index] =
+          std::min(segment_timing.step_min[class_index], step_seconds);
+      segment_timing.step_max[class_index] =
+          std::max(segment_timing.step_max[class_index], step_seconds);
+      ++segment_timing.step_histogram[class_index]
+                                      [timing_histogram_bucket(step_seconds)];
+      add_seconds(segment_timing, step_class, kStepWall, step_seconds);
+      add_seconds(segment_timing, step_class, kMpiWait,
+                  communication.mpi_wait_seconds_local);
+      const double remaining = step_seconds - accounted_host;
+      if (remaining < -1.0e-9) {
+        throw std::logic_error("domain timing host intervals overlap");
+      }
+      add_seconds(segment_timing, step_class, kRemainingHost,
+                  std::max(0.0, remaining));
+    }
+  }
+  if (state.timing_enabled) {
+    // The production caller already synchronizes at this segment boundary.
+    // Resolve the final deferred event here so the timing reduction sees a
+    // complete ledger, without synchronizing after individual kernels.
+    check_cuda(cudaDeviceSynchronize(), "resolve domain timing events at segment end");
+    if (pending_thermostat_timing) {
+      add_seconds(segment_timing, *pending_thermostat_timing, kIntegrationDevice,
+                  event_seconds(integration_events[4], integration_events[5]));
+    }
+    segment_timing.setup_cell_neighbor_device =
+        event_seconds(setup_nep_events[0], setup_nep_events[1]);
+    segment_timing.setup_nep_device =
+        event_seconds(setup_nep_events[2], setup_nep_events[3]);
+    segment_timing.step_loop_wall = elapsed_since(step_loop_started);
+    nep.domain_timing_marker = {};
+    log_segment_timing(segment_timing, sequence, mpi);
+    for (cudaEvent_t event : nep_events) {
+      check_cuda(cudaEventDestroy(event), "destroy NEP timing event");
+    }
+    for (cudaEvent_t event : setup_nep_events) {
+      check_cuda(cudaEventDestroy(event), "destroy setup NEP timing event");
+    }
+    for (cudaEvent_t event : integration_events) {
+      check_cuda(cudaEventDestroy(event), "destroy integration timing event");
+    }
+    for (cudaEvent_t event : thermo_events) {
+      check_cuda(cudaEventDestroy(event), "destroy thermo timing event");
+    }
+    destroy_opaque_event(halo_events.pack_begin, "destroy halo timing event");
+    destroy_opaque_event(halo_events.pack_end, "destroy halo timing event");
+    destroy_opaque_event(halo_events.unpack_begin, "destroy halo timing event");
+    destroy_opaque_event(halo_events.unpack_end, "destroy halo timing event");
   }
   std::ostringstream summary;
   summary << "DMGMD_DOMAIN_SUMMARY rank=" << state.rank
@@ -1302,14 +1866,18 @@ void run_local_domain(
   state.d_coord = eligibility.d_coord;
   state.group_method_count = identity.group_labels.size();
   state.detailed_logging = detail::domain_diagnostics_enabled();
+  state.timing_enabled = detail::domain_timing_enabled();
   mpi.assert_same_fingerprint(
       state.detailed_logging ? 1 : 0, "domain diagnostics configuration");
+  mpi.assert_same_fingerprint(
+      state.timing_enabled ? 1 : 0, "domain timing configuration");
   state.allocation_origin = gpumd_compat::gpu_vector_allocation_count();
   state.device.thermo.resize_reuse(8);
   if (mpi.is_root()) {
     std::cout << "DMGMD_DOMAIN_DIAGNOSTICS detailed="
               << (state.detailed_logging ? "on" : "off")
-              << " summary=run-segment\n";
+              << " summary=run-segment timing="
+              << (state.timing_enabled ? "on" : "off") << '\n';
   }
 
   // Ownership is computed from the raw input coordinates (slab ownership
@@ -1558,7 +2126,7 @@ void run_local_domain(
           const std::uint64_t allocations_before =
               gpumd_compat::gpu_vector_allocation_count();
           detail::upload_domain_layout(
-              state.layout, state.plan, state.track_unwrapped, state.device);
+              state.layout, state.plan, state.track_unwrapped, state.device, false);
           ++state.layout_uploads;
           if (gpumd_compat::gpu_vector_allocation_count() != allocations_before) {
             ++state.capacity_growth_events;

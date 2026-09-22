@@ -86,6 +86,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--report", type=Path)
     parser.add_argument("--keep-work", action="store_true")
+    timing_group = parser.add_mutually_exclusive_group()
+    timing_group.add_argument(
+        "--performance", action="store_true",
+        help="disable detailed domain logs and emit communication accounting once per stage",
+    )
+    timing_group.add_argument(
+        "--domain-timing", action="store_true",
+        help="enable diagnostic M2a ordinary/rebuild phase timing",
+    )
     parser.add_argument(
         "--resume-work", type=Path,
         help="resume a retained work directory and reuse verified stage checkpoints",
@@ -285,28 +294,37 @@ def reference_environment(device: str) -> Dict[str, str]:
     env.pop("DMGMD_COMM_BACKEND", None)
     env.pop("DMGMD_COMM_LOG_INTERVAL", None)
     env.pop("DMGMD_DOMAIN_DIAGNOSTICS", None)
+    env.pop("DMGMD_DOMAIN_TIMING", None)
     return env
 
 
 def candidate_environment(
-    devices: Sequence[str], ranks: int, backend: str, log_interval: int
+    devices: Sequence[str], ranks: int, backend: str, log_interval: int,
+    domain_timing: bool = False,
+    performance: bool = False,
 ) -> Dict[str, str]:
     env = os.environ.copy()
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
     env["DMGMD_COMM_LOG_INTERVAL"] = str(log_interval)
-    # The m2a stage validation parses per-rank DMGMD_DOMAIN_LAYOUT records,
-    # which the runtime only emits with diagnostics explicitly enabled.
-    env["DMGMD_DOMAIN_DIAGNOSTICS"] = "1"
+    # Correctness mode parses per-rank DMGMD_DOMAIN_LAYOUT records. Performance
+    # mode keeps only summary/timing records and one communication sample.
+    env["DMGMD_DOMAIN_DIAGNOSTICS"] = "0" if performance else "1"
+    if domain_timing:
+        env["DMGMD_DOMAIN_TIMING"] = "1"
+    else:
+        env.pop("DMGMD_DOMAIN_TIMING", None)
     return env
 
 
 def validate_candidate_stage(
-    stage: Path, ranks: int, backend: str, expected_mode: str
+    stage: Path, ranks: int, backend: str, expected_mode: str,
+    require_domain_layouts: bool = True,
 ) -> None:
     mpi_differential.validate_runtime_record(
-        stage, ranks, backend, expected_domain_mode=expected_mode
+        stage, ranks, backend, expected_domain_mode=expected_mode,
+        require_domain_layouts=require_domain_layouts,
     )
     stdout = (stage / "execution.stdout").read_text(encoding="utf-8")
     timings = [line for line in stdout.splitlines() if line.startswith("DMGMD_TIMING ")]
@@ -385,8 +403,11 @@ def run_candidate_stage(
         for line in run.splitlines()
         if line.split() and line.split()[0] == "run"
     )
-    requested_interval = int(stage_env["DMGMD_COMM_LOG_INTERVAL"])
-    stage_env["DMGMD_COMM_LOG_INTERVAL"] = str(min(requested_interval, total_steps))
+    if stage_env.get("DMGMD_DOMAIN_DIAGNOSTICS") == "0":
+        stage_env["DMGMD_COMM_LOG_INTERVAL"] = str(total_steps)
+    else:
+        requested_interval = int(stage_env["DMGMD_COMM_LOG_INTERVAL"])
+        stage_env["DMGMD_COMM_LOG_INTERVAL"] = str(min(requested_interval, total_steps))
     result = common.execute_md(
         executable,
         (str(mpiexec), "-n", str(ranks)),
@@ -401,7 +422,10 @@ def run_candidate_stage(
         adopt_existing=adopt_existing,
         retries=retries,
     )
-    validate_candidate_stage(result, ranks, backend, expected_mode)
+    validate_candidate_stage(
+        result, ranks, backend, expected_mode,
+        require_domain_layouts=stage_env["DMGMD_DOMAIN_DIAGNOSTICS"] == "1",
+    )
     return result
 
 
@@ -501,6 +525,8 @@ def restart_transition(
     resume: bool,
     adopt_existing: bool,
     retries: int,
+    domain_timing: bool,
+    performance: bool,
 ) -> Dict[str, Any]:
     half_steps = int(profile["steps"]) // 2
     thermo_interval = int(profile["thermo_interval"])
@@ -532,7 +558,9 @@ def restart_transition(
     )
 
     source_env = candidate_environment(
-        devices, source_ranks, backend, int(profile["communication_log_interval"])
+        devices, source_ranks, backend, int(profile["communication_log_interval"]),
+        domain_timing,
+        performance,
     )
     source_mode = expected_domain_mode(case, source_ranks)
     destination_mode = expected_domain_mode(case, destination_ranks)
@@ -548,7 +576,9 @@ def restart_transition(
         f"restart/{case['name']}/{backend}/r{source_ranks}-to-r{destination_ranks}",
     )
     destination_env = candidate_environment(
-        devices, destination_ranks, backend, int(profile["communication_log_interval"])
+        devices, destination_ranks, backend, int(profile["communication_log_interval"]),
+        domain_timing,
+        performance,
     )
     actual_static = run_candidate_stage(
         candidate, mpiexec, destination_ranks, backend, destination_mode, actual_restart_model,
@@ -652,6 +682,8 @@ def main() -> int:
         "mpiexec": str(mpiexec),
         "devices": devices,
         "stage_retries": args.retries,
+        "domain_timing": args.domain_timing,
+        "performance": args.performance,
     }
     work_root, resumed = initialize_work_root(args, run_contract)
     resume_stages = resumed
@@ -747,6 +779,8 @@ def main() -> int:
         "resumed": resumed,
         "adopted_existing": bool(args.adopt_existing),
         "stage_retries": args.retries,
+        "domain_timing": args.domain_timing,
+        "performance": args.performance,
         "results": {},
     }
     reference_env = reference_environment(devices[0])
@@ -869,6 +903,8 @@ def main() -> int:
                     env = candidate_environment(
                         devices, rank_count, backend,
                         int(profile["communication_log_interval"]),
+                        args.domain_timing,
+                        args.performance,
                     )
                     actual_static = run_candidate_stage(
                         candidate, mpiexec, rank_count, backend, expected_mode, model,
@@ -1095,6 +1131,8 @@ def main() -> int:
                             case, profile,
                             transition_root, args.timeout, collector,
                             resume_stages, args.adopt_existing, args.retries,
+                            args.domain_timing,
+                            args.performance,
                         )
                         result["backend"] = backend
                         result["seed"] = restart_seed

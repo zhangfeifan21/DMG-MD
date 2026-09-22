@@ -321,6 +321,32 @@ class LongNveTests(unittest.TestCase):
             m2a = write_stage(root, "m2a")
             runner.validate_candidate_stage(m1, 2, "HostStaged", "m1-fallback")
             runner.validate_candidate_stage(m2a, 2, "HostStaged", "m2a")
+            performance = root / "m2a-performance"
+            performance.mkdir()
+            performance_stdout = "\n".join(
+                line
+                for line in (m2a / "execution.stdout").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if not line.startswith("DMGMD_DOMAIN_LAYOUT " )
+            ) + "\n"
+            (performance / "execution.stdout").write_text(
+                performance_stdout, encoding="utf-8"
+            )
+            (performance / "run.in").write_text("run 1\n", encoding="utf-8")
+            runner.validate_candidate_stage(
+                performance, 2, "HostStaged", "m2a",
+                require_domain_layouts=False,
+            )
+            with self.assertRaises(common.baseline.BaselineError):
+                runner.validate_candidate_stage(
+                    performance, 2, "HostStaged", "m2a"
+                )
+            with self.assertRaises(common.baseline.BaselineError):
+                runner.validate_candidate_stage(
+                    m2a, 2, "HostStaged", "m2a",
+                    require_domain_layouts=False,
+                )
             with self.assertRaises(common.baseline.BaselineError):
                 runner.validate_candidate_stage(m1, 2, "HostStaged", "m2a")
             with self.assertRaises(common.baseline.BaselineError):
@@ -334,17 +360,32 @@ class LongNveTests(unittest.TestCase):
         reference_env = dict(os.environ)
         reference_env["DMGMD_COMM_LOG_INTERVAL"] = "7"
         reference_env["DMGMD_DOMAIN_DIAGNOSTICS"] = "1"
+        reference_env["DMGMD_DOMAIN_TIMING"] = "1"
         with unittest.mock.patch.dict(os.environ, reference_env):
             cleaned = runner.reference_environment("3")
         self.assertNotIn("DMGMD_COMM_LOG_INTERVAL", cleaned)
         self.assertNotIn("DMGMD_DOMAIN_DIAGNOSTICS", cleaned)
+        self.assertNotIn("DMGMD_DOMAIN_TIMING", cleaned)
         candidate_env = dict(os.environ)
         candidate_env["DMGMD_COMM_LOG_INTERVAL"] = "7"
         candidate_env["DMGMD_DOMAIN_DIAGNOSTICS"] = "0"
+        candidate_env["DMGMD_DOMAIN_TIMING"] = "1"
         with unittest.mock.patch.dict(os.environ, candidate_env):
             staged = runner.candidate_environment(["0", "1"], 2, "HostStaged", 10)
         self.assertEqual(staged["DMGMD_COMM_LOG_INTERVAL"], "10")
         self.assertEqual(staged["DMGMD_DOMAIN_DIAGNOSTICS"], "1")
+        self.assertNotIn("DMGMD_DOMAIN_TIMING", staged)
+        with unittest.mock.patch.dict(os.environ, candidate_env):
+            timed = runner.candidate_environment(
+                ["0", "1"], 2, "HostStaged", 10, True
+            )
+        self.assertEqual(timed["DMGMD_DOMAIN_TIMING"], "1")
+        with unittest.mock.patch.dict(os.environ, candidate_env):
+            performance = runner.candidate_environment(
+                ["0", "1"], 2, "HostStaged", 10, False, True
+            )
+        self.assertEqual(performance["DMGMD_DOMAIN_DIAGNOSTICS"], "0")
+        self.assertNotIn("DMGMD_DOMAIN_TIMING", performance)
 
     def test_generated_models_have_zero_mass_weighted_momentum(self) -> None:
         case = self.manifest["cases"]["dense_water"]

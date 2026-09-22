@@ -2,7 +2,7 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-09-21。
+更新日期：2026-09-22。
 
 本轮第一阶段修改前的 M2a 基线为 clean revision
 `27e07d92b84f0e02d08d99c400c52b795175341f`。Release 配置为
@@ -37,6 +37,30 @@ M2a 的 10000-step nightly profile 已于 2026-09-18 手动执行并通过验证
 case、seed 0、1/2/4 rank、HostStaged/CudaAware 共 42 个配置，其中 2/4 rank 的
 M2a 配置共 28 个，全部通过。100000-step release 矩阵尚未执行，因此仍不发布
 性能或 scaling 结论。
+
+## 第二阶段：统一重建与分步计时（2026-09-22）
+
+M2a 已把即时几何 owner 迁移与 Neighbor 内部 skin 判定合并为唯一、全 rank 一致的 cache
+decision：epoch 内 manager owner/layout/membership/map/neighbor rows 保持，普通步只刷新固定
+ghost 坐标；位移超过 `skin/2` 时才在同一 rebuild transaction 中迁移最终 geometric owner、
+重建 membership/layout/neighbor 并重置连续位移。连续 run 复用已确认 cache；unsupported
+multi-box 位移在 force 前失败。
+
+`DMGMD_DOMAIN_TIMING=1` 提供普通/重建互斥分类、阶段 CUDA/host/MPI 计时、rebuild reason、
+bounded histogram 与 rank min/mean/max；默认关闭时不创建 event、不新增同步或逐步输出，段末
+才归约详细计时。定向 `micro_crossings`、连续 run、PBC/multi-slab、空 rank/N<P、restart、
+双后端 exact communication 与 timing on/off 科学输出已通过。最终二进制 SHA-256 为
+`13da7a81c9c77f46b53dd45ada81d7a593634800c30b2714c13d2fa3bc93b80d`。该哈希对应收尾审查后
+的最终 Release 重建：详细计时关闭时逐步路径不读取 host clock，位移阈值统一由
+`kNeighborSkin` 推导；下述完整正确性与成本矩阵均已在该二进制上重跑。
+
+正式 nightly 几何成本采集覆盖 carbon/water/BaTiO3、P=1/2/4 与 HostStaged/CudaAware；
+10000-step long stages 全部正确性 PASS。频率、阶段成本、通信/布局/分配与瓶颈见
+[第二阶段成本报告](./stage2-cost-report.md)。结论是 HostStaged 已在三体系获得有限正扩展，
+CudaAware 的 water/BaTiO3 仍未正扩展；这不改变任何正确性门槛，也不在本轮继续无限优化。
+同一最终二进制还通过 smoke 7/7（含三体系 NVE/NVT、双向回放、restart 与四个兼容势短程）
+以及 4-rank 单节点 rank-I/O 隔离/故障注入矩阵；结果分别保存在
+`dmgmd-stage2-smoke-final-20260922/report.json` 与测试 stdout。
 
 ## 第一阶段：日志与 GPU 分配（2026-09-21）
 
@@ -91,7 +115,8 @@ flag 与 migration flag 等一次性 `GPU_Vector` 分配，所以静态段为 5�
 是否扩容以 `capacity_growth_events` 和详细 layout 的 `gpu_allocations` 为准。
 
 第一阶段据此完成实现与验收。本节不把 2026-09-18 correctness nightly 计时或本轮 smoke
-wall time 当作无 I/O 性能收益结论；普通步/重建步成本拆分留给第二阶段。
+wall time 当作无 I/O 性能收益结论；第二阶段的正式拆分见本文前述摘要与
+[成本报告](./stage2-cost-report.md)。
 
 ## 已实现能力（M2a 增量）
 
@@ -202,8 +227,8 @@ Atom/NEP/Neighbor 使用独立 logical size/capacity，布局与数值合同未�
 在最后一次 `neighbor.cu` 容量复用修改后的最终源码（candidate
 `34d4a658…`）上复跑了全部验收矩阵；修正 `run_long_nve.py` candidate 环境缺失
 `DMGMD_DOMAIN_DIAGNOSTICS=1` 的缺口（nightly m2a stage 验证依赖 step-0 layout 记录，
-smoke 只跑 1 rank 未暴露）。第二阶段入口是减少重建并分别测量普通步/重建步，不在本轮
-开始 M2b。
+smoke 只跑 1 rank 未暴露）。该记录之后的第二阶段已完成，结果见本文前述摘要；M2b 仍未在
+本轮开始。
 
 2026-09-18 M2a 已实施并验收（本工作树，未提交）：
 

@@ -48,7 +48,12 @@ Adaptations for this replica are listed at the bottom of this header block.
 #include "box.cuh"
 #include "gpu_vector.cuh"
 
+#include <cstdint>
+#include <limits>
+
 namespace gpumd_compat {
+
+enum class DomainNeighborAction { confirmed_reuse, must_rebuild };
 
 #pragma once
 
@@ -213,21 +218,11 @@ public:
     const GPU_Vector<double>& position_per_atom);
 
   // M2a domain interface ------------------------------------------------
-  // True when the next domain build must run: first use, a logical-stride
-  // change, or any local slot (owned or refreshed ghost) moved more than
-  // skin/2 from the reference positions captured at the last build.
-  // num_atoms is the logical stride and may be zero even if device capacity
-  // is padded to one element.
-  bool needs_rebuild_domain(
-    Box& box,
-    const GPU_Vector<double>& position_per_atom,
-    const int num_atoms);
-
   // Builds the full Verlet rows for centers [center_begin, center_end) with
   // candidates taken from all num_candidates local slots, then sorts every
-  // written row by the candidate's global ID. force_rebuild bypasses the
-  // displacement check; the caller drives the global rebuild OR through its
-  // own collective. Rows outside the center range are never read.
+  // written row by the candidate's global ID. The runtime already resolved
+  // the globally consistent cache decision; no second displacement check is
+  // permitted here. Rows outside the center range are never read.
   void find_neighbor_domain(
     const double rc,
     Box& box,
@@ -237,7 +232,8 @@ public:
     const int center_begin,
     const int center_end,
     const int num_candidates,
-    const bool force_rebuild);
+    const DomainNeighborAction action,
+    const std::uint64_t layout_epoch);
 
   // Drops the logical rebuild reference positions while retaining capacity,
   // so the next domain build is forced even when the local stride is unchanged. Must be called whenever the
@@ -253,6 +249,7 @@ private:
   GPU_Vector<int> cell_contents;  // for cell list
   GPU_Vector<double> x0, y0, z0;  // for checking atom distance
   GPU_Vector<int> domain_overflow_; // M2a: Verlet row-capacity guard flag
+  std::uint64_t domain_layout_epoch_ = std::numeric_limits<std::uint64_t>::max();
   int check_atom_distance(
     Box& box,
     const double* x,

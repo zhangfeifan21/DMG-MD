@@ -65,6 +65,7 @@ def validate_runtime_record(
     ranks: int,
     backend_name: str,
     expected_domain_mode: str = "m1-fallback",
+    require_domain_layouts: bool = True,
 ) -> None:
     if expected_domain_mode not in ("m1-fallback", "m2a"):
         raise baseline.BaselineError(
@@ -191,7 +192,7 @@ def validate_runtime_record(
             raise baseline.BaselineError(
                 f"{stage_dir}: M1 fallback unexpectedly emitted local-domain layouts"
             )
-    else:
+    elif require_domain_layouts:
         initial_layout_ranks = set()
         initial_owned_total = 0
         for line in layouts:
@@ -240,6 +241,10 @@ def validate_runtime_record(
                 f"{stage_dir}: step-0 local-domain owned counts cover "
                 f"{initial_owned_total}, expected {global_count}"
             )
+    elif layouts:
+        raise baseline.BaselineError(
+            f"{stage_dir}: performance-mode stage unexpectedly emitted domain layouts"
+        )
 
     accounting = [
         line for line in stdout.splitlines() if line.startswith("DMGMD_COMM accounting=")

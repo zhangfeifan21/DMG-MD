@@ -14,6 +14,8 @@ Verified per run:
   counts as M2a coverage);
 - per-rank layouts (owned / dependency ghosts / coordinate-only ghosts /
   local_count) from the DMGMD_DOMAIN_LAYOUT records;
+- repeated sub-skin internal/PBC slab crossings retain their manager owner and
+  reuse the original membership/layout/neighbor epoch;
 - the owner transitions logged by DMGMD_DOMAIN_MIGRATION match the owners
   recomputed from the dumped double-precision wrapped positions, including
   interior boundaries, periodic ends, one-step multi-slab crossings and
@@ -122,6 +124,41 @@ dump_xyz 1 trajectory.xyz precision double velocity force potential virial
 run 6
 """
 
+# Four force-free atoms cross a different P=4 slab face on each successive
+# step.  The last atom crosses the periodic end; P=2 observes the x=32 and
+# periodic crossings.  Every atom remains within skin/2 = 0.5 A of its epoch
+# reference through step 4, so geometric-owner changes must not migrate the
+# manager owner or rebuild membership/layout/NN; the periodic atom lands
+# exactly on the 0.5 A threshold and locks the strict `>` decision contract.
+MICRO_CROSSINGS_MODEL = """4
+pbc="T T T" Lattice="64 0 0 0 24 0 0 0 24" Properties=species:S:1:pos:R:3:vel:R:3
+C 15.95 3.0  3.0  0.1 0.0 0.0
+C 31.85 9.0  9.0  0.1 0.0 0.0
+C 47.75 15.0 15.0 0.1 0.0 0.0
+C 63.55 21.0 21.0 0.125 0.0 0.0
+"""
+
+MICRO_CROSSINGS_RUN = """potential nep.txt
+
+time_step 1.0
+ensemble nve
+dump_thermo 1
+dump_xyz 1 trajectory.xyz precision double velocity force potential virial
+run 4
+"""
+
+CONTINUOUS_RUN = """potential nep.txt
+
+time_step 0.001
+ensemble nve
+dump_xyz 1 first.xyz precision double velocity force potential virial
+run 3
+
+ensemble nve
+dump_xyz 1 second.xyz precision double velocity force potential virial
+run 3
+"""
+
 # Both atoms remain in slab 0 and are outside the force cutoff.  At P=4 they
 # reach ranks 1 and 3 as ghosts, while rank 2 has neither owned atoms nor
 # ghosts: logical local_count is exactly zero.  1000 steps plus the initial
@@ -180,7 +217,19 @@ C 40.0 12.0 12.0 40.0 0.0 0.0
 C 55.0 12.0 12.0 -45.0 0.0 0.0
 C 30.0 6.0  12.0 0.0 0.0 0.0
 C 8.0  18.0 12.0 5.0 0.0 0.0
-C 60.0 12.0 12.0 -70.0 0.0 0.0
+C 60.0 12.0 12.0 -55.0 0.0 0.0
+"""
+
+UNROUTABLE_MODEL = """2
+pbc="T T T" Lattice="64 0 0 0 24 0 0 0 24" Properties=species:S:1:pos:R:3:vel:R:3
+C 4.0 12.0 12.0 65.0 0.0 0.0
+C 12.0 12.0 12.0 0.0 0.0 0.0
+"""
+
+UNROUTABLE_RUN = """potential nep.txt
+time_step 1.0
+ensemble nve
+run 1
 """
 
 CROSSINGS_RUN = """potential nep.txt
@@ -360,6 +409,7 @@ def execute(
     timeout: int,
     communication_interval: Optional[int] = 1,
     domain_diagnostics: bool = True,
+    domain_timing: bool = False,
 ) -> Dict[str, Any]:
     env = os.environ.copy()
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -373,6 +423,10 @@ def execute(
         env["DMGMD_DOMAIN_DIAGNOSTICS"] = "1"
     else:
         env.pop("DMGMD_DOMAIN_DIAGNOSTICS", None)
+    if domain_timing:
+        env["DMGMD_DOMAIN_TIMING"] = "1"
+    else:
+        env.pop("DMGMD_DOMAIN_TIMING", None)
     completed = subprocess.run(
         [str(mpiexec), "-n", str(ranks), str(executable)],
         cwd=stage_dir,
@@ -388,6 +442,75 @@ def execute(
         "stdout": completed.stdout,
         "stderr": completed.stderr,
     }
+
+
+def verify_timing_records(stdout: str, run_text: str, label: str) -> None:
+    """Validate the bounded per-segment timing schema and categories."""
+    lengths = run_lengths(run_text)
+    classes: Dict[int, Dict[str, Dict[str, str]]] = {}
+    setup: Dict[int, Dict[str, str]] = {}
+    segments: Dict[int, Dict[str, str]] = {}
+    reasons: Dict[int, Dict[str, str]] = {}
+    histograms: Dict[int, Dict[str, Dict[str, str]]] = {}
+    for line in stdout.splitlines():
+        fields = key_values(line)
+        if line.startswith("DMGMD_DOMAIN_TIMING sequence="):
+            sequence = int(fields["sequence"])
+            classes.setdefault(sequence, {})[fields["class"]] = fields
+        elif line.startswith("DMGMD_DOMAIN_TIMING_SETUP " ):
+            setup[int(fields["sequence"])] = fields
+        elif line.startswith("DMGMD_DOMAIN_TIMING_SEGMENT " ):
+            segments[int(fields["sequence"])] = fields
+        elif line.startswith("DMGMD_DOMAIN_REBUILD_REASONS " ):
+            reasons[int(fields["sequence"])] = fields
+        elif line.startswith("DMGMD_DOMAIN_TIMING_HISTOGRAM " ):
+            sequence = int(fields["sequence"])
+            histograms.setdefault(sequence, {})[fields["class"]] = fields
+    expected_sequences = set(range(len(lengths)))
+    for records, name in ((classes, "class"), (setup, "setup"),
+                          (segments, "segment"), (reasons, "reason"),
+                          (histograms, "histogram")):
+        if set(records) != expected_sequences:
+            raise baseline.BaselineError(
+                f"{label}: timing {name} sequences {sorted(records)} != "
+                f"{sorted(expected_sequences)}")
+    required_suffixes = ("_rank_mean", "_rank_max", "_rank_max_total")
+    for sequence, steps in enumerate(lengths):
+        records = classes[sequence]
+        if set(records) != {"ordinary", "rebuild"}:
+            raise baseline.BaselineError(
+                f"{label}: sequence {sequence} lacks ordinary/rebuild timing classes")
+        counted = sum(int(records[name]["count"]) for name in records)
+        if counted != steps:
+            raise baseline.BaselineError(
+                f"{label}: sequence {sequence} timing count {counted} != {steps}")
+        if setup[sequence].get("count") != "1":
+            raise baseline.BaselineError(f"{label}: setup count is not one")
+        for fields in (*records.values(), setup[sequence], segments[sequence]):
+            for key, value in fields.items():
+                if (key.startswith(("step_seconds_", "decision_", "migration_",
+                                    "membership_", "allocation_", "halo_",
+                                    "cell_neighbor_", "nep_", "integration_",
+                                    "thermo_", "scientific_output_", "mpi_wait_",
+                                    "remaining_", "host_seconds_"))
+                        or key.endswith(required_suffixes)):
+                    number = float(value)
+                    if not (number >= 0.0 and number < float("inf")):
+                        raise baseline.BaselineError(
+                            f"{label}: invalid timing {key}={value}")
+        if int(reasons[sequence]["displacement"]) != int(records["rebuild"]["count"]):
+            raise baseline.BaselineError(
+                f"{label}: rebuild reason count disagrees with rebuild class")
+        if set(histograms[sequence]) != {"ordinary", "rebuild"}:
+            raise baseline.BaselineError(f"{label}: incomplete timing histograms")
+        for name, fields in histograms[sequence].items():
+            bucket_counts = [int(value) for value in fields["counts"].split(",")]
+            expected = int(records[name]["count"])
+            if sum(bucket_counts) != expected * int(key_values(
+                    next(line for line in stdout.splitlines()
+                         if line.startswith("DMGMD_TIMING phase=run ")))["ranks"]):
+                raise baseline.BaselineError(
+                    f"{label}: {name} histogram count disagrees with rank-step count")
 
 
 class StepIndex:
@@ -599,8 +722,8 @@ def verify_transitions_against_trajectory(
     index: StepIndex,
     ranks: int,
 ) -> None:
-    """The logged owner transitions must match owners recomputed from the
-    dumped double-precision wrapped positions."""
+    """Manager ownership is stable inside an epoch and equals geometric
+    slab ownership whenever a rebuild transaction commits."""
     if not case.trajectory_files:
         if index.migration_steps():
             raise baseline.BaselineError(
@@ -619,28 +742,32 @@ def verify_transitions_against_trajectory(
         raise baseline.BaselineError(
             f"{case.name}/{ranks}r: have {len(owners) - 1} dumped steps, expected {case.steps}")
 
-    expected_by_step: Dict[int, Dict[int, Tuple[int, int]]] = {}
-    for step in range(1, case.steps + 1):
-        changes: Dict[int, Tuple[int, int]] = {}
-        for gid in range(case.natoms):
-            if owners[step - 1][gid] != owners[step][gid]:
-                changes[gid] = (owners[step - 1][gid], owners[step][gid])
-        if changes:
-            expected_by_step[step] = changes
     logged_by_step = {
         step: index.transitions_at(step) for step in sorted(index.migration_steps())
     }
-    if logged_by_step != expected_by_step:
-        for step in sorted(set(logged_by_step) | set(expected_by_step)):
-            logged = logged_by_step.get(step)
-            expected = expected_by_step.get(step)
-            if logged != expected:
+    rebuild_steps = index.migration_steps() | index.rebuild_steps()
+    manager = list(owners[0])
+    for step in range(1, case.steps + 1):
+        transitions = logged_by_step.get(step, {})
+        if transitions and step not in rebuild_steps:
+            raise baseline.BaselineError(
+                f"{case.name}/{ranks}r: migration outside a rebuild at step {step}")
+        for gid, (old, new) in transitions.items():
+            if manager[gid] != old or owners[step][gid] != new:
                 raise baseline.BaselineError(
-                    f"{case.name}/{ranks}r: step {step} owner transitions {logged} "
-                    f"do not match the trajectory-derived expectation {expected}")
+                    f"{case.name}/{ranks}r: invalid delayed transition for gid {gid} "
+                    f"at step {step}: {(old, new)}, manager={manager[gid]}, "
+                    f"geometric={owners[step][gid]}")
+            manager[gid] = new
+        if step in rebuild_steps and manager != owners[step]:
+            raise baseline.BaselineError(
+                f"{case.name}/{ranks}r: committed manager map differs from "
+                f"geometric ownership at rebuild step {step}")
+    if len(manager) != case.natoms:
+        raise baseline.BaselineError("manager ownership lost global-ID coverage")
     if ranks >= 4 and case.name == "crossings":
         transitions = [
-            change for changes in expected_by_step.values() for change in changes.values()
+            change for changes in logged_by_step.values() for change in changes.values()
         ]
         periodic_edge = {0, ranks - 1}
         if not any(abs(old - new) > 1 and {old, new} != periodic_edge for old, new in transitions):
@@ -655,6 +782,19 @@ def verify_transitions_against_trajectory(
                  [step_records.count(rank) for rank in range(ranks)]]
         if not empty:
             raise baseline.BaselineError("chain/P=4 must exercise empty slabs (N < P)")
+    if case.name == "micro_crossings":
+        if index.migration_steps() or index.rebuild_steps():
+            raise baseline.BaselineError(
+                f"{case.name}/{ranks}r: sub-skin slab crossings rebuilt or migrated")
+        changed_steps = {
+            step for step in range(1, case.steps + 1)
+            if owners[step] != owners[step - 1]
+        }
+        expected = {1, 2, 3, 4} if ranks == 4 else {2, 4}
+        if changed_steps != expected:
+            raise baseline.BaselineError(
+                f"{case.name}/{ranks}r: geometric crossing steps {changed_steps} "
+                f"!= {expected}")
 
 
 def expected_communication(
@@ -698,13 +838,14 @@ def expected_communication(
         }
         P = ranks
         N = case.natoms
-        # Migration decision OR (every step).
-        global_fields["collective_calls"] += 1
-        global_fields["mpi_input_bytes_global"] += 8 * P
-        global_fields["mpi_output_bytes_global"] += 8 * P
+        # Unified decision: displacement MAX (double) + reason OR (uint32).
+        global_fields["collective_calls"] += 2
+        global_fields["mpi_input_bytes_global"] += 12 * P
+        global_fields["mpi_output_bytes_global"] += 12 * P
         migrated = step in migration_steps
-        if not migrated:
-            # Position refresh with the layout in effect, then the rebuild OR.
+        rebuilt = migrated or step in rebuild_steps
+        if not rebuilt:
+            # Ordinary step: position refresh with the cached layout.
             for rank in range(ranks):
                 layout = index.layout_in_effect(rank, step)
                 sends = int(layout["send_left"]) + int(layout["send_right"])
@@ -713,15 +854,12 @@ def expected_communication(
                 per_rank[rank]["p2p_calls"] += 4
                 per_rank[rank]["halo_send"] += 24 * sends
                 per_rank[rank]["halo_recv"] += 24 * recvs
-            global_fields["collective_calls"] += 1
-            global_fields["mpi_input_bytes_global"] += 8 * P
-            global_fields["mpi_output_bytes_global"] += 8 * P
-        else:
+        if migrated:
             # Alltoall count handshake (control).
             for rank in range(ranks):
                 per_rank[rank]["control_send"] += 4 * P
                 per_rank[rank]["control_recv"] += 4 * P
-        if migrated or step in rebuild_steps:
+        if rebuilt:
             # Face count handshake + membership exchange with the NEW layout.
             for rank in range(ranks):
                 layout = index.layout_at(rank, step)
@@ -998,6 +1136,14 @@ def main() -> int:
         outputs=["thermo.out", "trajectory.xyz", "neighbor.out"],
         natoms=3,
     )
+    micro_crossings = DomainCase(
+        name="micro_crossings",
+        model=MICRO_CROSSINGS_MODEL,
+        run=MICRO_CROSSINGS_RUN,
+        trajectory_files=["trajectory.xyz"],
+        outputs=["thermo.out", "trajectory.xyz", "neighbor.out"],
+        natoms=4,
+    )
     empty_local = DomainCase(
         name="empty_local",
         model=EMPTY_LOCAL_MODEL,
@@ -1079,7 +1225,9 @@ def main() -> int:
     try:
         # P=1 references (the numerical oracle) come first.
         references: Dict[str, Path] = {}
-        for case in (lattice, chain, empty_local, crossings, *variant_cases):
+        for case in (
+                lattice, chain, micro_crossings, empty_local, crossings,
+                *variant_cases):
             reference_root = work_root / case.name / "reference-1r"
             stage_case(case, reference_root, potential)
             execution = execute(
@@ -1111,7 +1259,12 @@ def main() -> int:
                 f"default quiet-mode run failed: {quiet['stderr'][-1500:]}")
         quiet_lines = quiet["stdout"].splitlines()
         if any(line.startswith(("DMGMD_DOMAIN_LAYOUT ", "DMGMD_DOMAIN_MIGRATION ",
-                                "DMGMD_COMM step=", "DMGMD_DOMAIN_COMM "))
+                                "DMGMD_COMM step=", "DMGMD_DOMAIN_COMM ",
+                                "DMGMD_DOMAIN_TIMING ",
+                                "DMGMD_DOMAIN_TIMING_SETUP ",
+                                "DMGMD_DOMAIN_TIMING_SEGMENT ",
+                                "DMGMD_DOMAIN_TIMING_HISTOGRAM ",
+                                "DMGMD_DOMAIN_REBUILD_REASONS "))
                for line in quiet_lines):
             raise baseline.BaselineError(
                 "default quiet mode emitted a hot-path diagnostic record")
@@ -1146,7 +1299,8 @@ def main() -> int:
         references["resume"] = resume_reference
 
         cases: List[DomainCase] = [
-            lattice, chain, empty_local, crossings, resume, *variant_cases]
+            lattice, chain, micro_crossings, empty_local, crossings, resume,
+            *variant_cases]
         for case in cases:
             for backend in backends:
                 for ranks in args.ranks:
@@ -1185,6 +1339,78 @@ def main() -> int:
                         f"capacity_growth_events_max={capacity_growths} "
                         f"gpu_allocations_max={gpu_allocations}"
                     )
+
+        # Focused timing A/B: stationary, consecutive run segments must stay
+        # ordinary and timing events must not change any scientific byte.
+        timing_ranks = min(args.ranks)
+        continuous = DomainCase(
+            name="continuous_timing",
+            model=CHAIN_MODEL,
+            run=CONTINUOUS_RUN,
+            trajectory_files=["first.xyz", "second.xyz"],
+            outputs=["first.xyz", "second.xyz", "neighbor.out"],
+            natoms=3,
+        )
+        timing_off_dir = work_root / continuous.name / "off"
+        timing_on_dir = work_root / continuous.name / "on"
+        for stage_dir, enabled in ((timing_off_dir, False), (timing_on_dir, True)):
+            stage_case(continuous, stage_dir, potential)
+            execution = execute(
+                executable, mpiexec, stage_dir, timing_ranks, "HostStaged", devices,
+                args.timeout, continuous.communication_interval, domain_timing=enabled,
+            )
+            index = verify_domain_records(continuous, stage_dir, timing_ranks, execution)
+            if index.migration_steps() or index.rebuild_steps():
+                raise baseline.BaselineError(
+                    "continuous run timing fixture unexpectedly rebuilt its cache")
+            if any(len(index.layouts.get(rank, [])) != 1 for rank in range(timing_ranks)):
+                raise baseline.BaselineError(
+                    "consecutive run boundary changed layout/cache epoch")
+            if enabled:
+                verify_timing_records(execution["stdout"], continuous.run, continuous.name)
+            elif any(line.startswith("DMGMD_DOMAIN_TIMING")
+                     for line in execution["stdout"].splitlines()):
+                raise baseline.BaselineError(
+                    "detailed domain timing was emitted while disabled")
+        for filename in continuous.outputs:
+            if ((timing_off_dir / filename).read_bytes() !=
+                    (timing_on_dir / filename).read_bytes()):
+                raise baseline.BaselineError(
+                    f"domain timing changed scientific output {filename}")
+
+        # Rebuild timing is validated separately so ordinary/rebuild remain
+        # mutually exclusive and both non-empty in the acceptance suite.
+        rebuild_timing_dir = work_root / "crossings-timing"
+        stage_case(crossings, rebuild_timing_dir, potential)
+        rebuild_timing = execute(
+            executable, mpiexec, rebuild_timing_dir, timing_ranks, "HostStaged", devices,
+            args.timeout, crossings.communication_interval, domain_timing=True,
+        )
+        rebuild_index = verify_domain_records(
+            crossings, rebuild_timing_dir, timing_ranks, rebuild_timing)
+        verify_timing_records(rebuild_timing["stdout"], crossings.run, "crossings-timing")
+        if not (rebuild_index.migration_steps() or rebuild_index.rebuild_steps()):
+            raise baseline.BaselineError("rebuild timing fixture did not rebuild")
+
+        # A single integration displacement beyond one full box cannot be
+        # reconstructed from the pinned single-wrap path. It must fail before
+        # halo refresh/NEP rather than silently route a wrapped coordinate.
+        unroutable = DomainCase(
+            name="unroutable", model=UNROUTABLE_MODEL, run=UNROUTABLE_RUN,
+            trajectory_files=[], outputs=[], natoms=2,
+        )
+        unroutable_dir = work_root / unroutable.name
+        stage_case(unroutable, unroutable_dir, potential)
+        failed = execute(
+            executable, mpiexec, unroutable_dir, timing_ranks, "HostStaged", devices,
+            args.timeout, communication_interval=None, domain_diagnostics=False,
+        )
+        if failed["returncode"] == 0 or "unsupported multi-box displacement" not in (
+                failed["stdout"] + failed["stderr"]):
+            raise baseline.BaselineError(
+                "multi-box displacement did not fail before force evaluation")
+        print("PASS focused cache/timing checks: consecutive-run reuse, timing A/B, "
+              "rebuild schema, and multi-box fatal path")
         print(
             f"PASS: M2a domain matrix ranks={args.ranks} backends={backends} "
             "(mode proof, layouts, transitions, oracle differential and "

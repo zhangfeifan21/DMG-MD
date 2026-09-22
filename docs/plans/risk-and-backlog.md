@@ -163,6 +163,11 @@ halo selection = physical cutoff relative to triclinic rank faces
 已完成实现与验收；第二阶段减少重建并分别测量普通步/重建步；第三阶段实现并比较 M2b 与
 MatPL 式 ghost 力回传。通信计算重叠、3D 分解、动态负载均衡、triclinic/非周期扩展均不在
 前三阶段内。第一阶段不改变 M2a 迁移触发、两跳 halo、force assembly 或统计频率。
+第二阶段的缓存有效性证明、统一重建判定与计时口径已实施，批准设计见
+[cache-validity-and-step-timing.md](./cache-validity-and-step-timing.md)，现行合同见
+[replicated-mpi.md](../standards/replicated-mpi.md)，实测与瓶颈见
+[stage2-cost-report.md](../status/stage2-cost-report.md)。第三阶段入口仍是 M2b 与 MatPL 式
+ghost 力回传对比；局部 cell 网格与按需 thermo 已登记为具体性能待办。
 
 旧未决问题文档中的初始仓库快照、已经确认的第一切口决策和已经实现的功能不再保留在
 工作树中；这些历史可从 Git 和 [架构决策](../standards/architecture-decisions.md) 查询。以下只

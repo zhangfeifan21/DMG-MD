@@ -126,6 +126,23 @@ scripts/run_long_nve_nightly.sh
 中断后的续跑同样只需传回结果目录，例如
 `scripts/run_long_nve_nightly.sh dmgmd-nightly-20260914-120000`。
 
+第二阶段成本采集应使用两个不同的结果目录。端到端性能运行保持详细计时关闭；诊断运行增加
+`--domain-timing`，该模式会进入 run/stage checkpoint 和最终报告，不能与非诊断结果混用或复用：
+
+```text
+scripts/run_long_nve_nightly.sh --result-root /persistent/dmgmd-cost-total \
+  --cases carbon_crystal,dense_water,batio3_zbl --ranks 1,2,4 \
+  --backends HostStaged,CudaAware --sections long --performance
+scripts/run_long_nve_nightly.sh --result-root /persistent/dmgmd-cost-detail \
+  --cases carbon_crystal,dense_water,batio3_zbl --ranks 2,4 \
+  --backends HostStaged,CudaAware --sections long --domain-timing
+```
+
+两次运行都保留各 stage 的 `execution.stdout`、输入及 checkpoint。前者的 `DMGMD_TIMING` 用于
+正式总耗时，后者的 `DMGMD_DOMAIN_TIMING*` 用于普通步/重建步及子阶段解释；不要用诊断运行替代
+正式吞吐。wrapper 在首次真实运行前还会创建 `provenance/`，保存 source revision、dirty status/
+patch/文件哈希、candidate 哈希和可用的 `CMakeCache.txt`；续跑不会覆盖该快照。
+
 CudaAware 三初态扩展矩阵：
 
 ```text
@@ -211,11 +228,12 @@ GPUMD 静态计算。在完全相同坐标上逐原子比较 force、energy 和 
 rank 继续后半程。检查 restart schema/顺序/字段、读回边界静态量及后半程 NVE 统计。因为 GPUMD
 restart 不保存 global time 且使用文本量化，本测试不要求它与未中断轨迹逐步重合。
 
-## 非性能测试
+## 运行模式与性能口径
 
-运行器没有 wall-time、atom-steps/s、speedup 或 scaling 判据。M1 每张 GPU 执行完整 NEP，
-M2a 按 owned/dependency center 执行 local-domain NEP；本长测对两条路径都只验证正确性。
+默认模式是 correctness nightly：M1 每张 GPU 执行完整 NEP，M2a 按 owned/dependency center
+执行 local-domain NEP；验收判据仍只判断正确性，不设 speedup 或 scaling 门槛。
 `DMGMD_COMM_LOG_INTERVAL` 由 profile 设置为 10 或 100；runtime 默认值为 1000。需要逐步
-解析的短 MPI 测试显式设置为 1，不依赖默认值。candidate stage 的运行环境始终显式设置
-`DMGMD_DOMAIN_DIAGNOSTICS=1`：m2a 验证要解析每 rank 的 step-0 `DMGMD_DOMAIN_LAYOUT`
-记录，而该记录在默认安静模式下不输出；reference 环境不携带任何 DMGMD 专属变量。
+解析的短 MPI 测试显式设置为 1，不依赖默认值。默认和 `--domain-timing` 模式显式设置
+`DMGMD_DOMAIN_DIAGNOSTICS=1`，以验证每 rank 的 step-0 `DMGMD_DOMAIN_LAYOUT`；
+`--performance` 显式关闭该详细日志，并把通信汇总降为每段末一次，但仍验证启动、mode、
+唯一 owner、通信记账、数值结果和 `DMGMD_TIMING`。reference 环境不携带任何 DMGMD 专属变量。

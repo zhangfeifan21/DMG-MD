@@ -167,8 +167,8 @@ public:
   // rejected small boxes). num_atoms is the logical local_count, independent
   // of any non-zero allocation padding. N1/N2 are the force centers (owned
   // prefix), ND1/ND2 the dependency/descriptor centers, and every array is
-  // strided by num_atoms. force_rebuild is the global rebuild OR computed by
-  // the runtime. The legacy compute() path is unchanged.
+  // strided by num_atoms. neighbor_action is the single globally resolved
+  // cache decision; Neighbor must not repeat a displacement check.
   void compute_domain(
     Box& box,
     const int num_atoms,
@@ -178,20 +178,13 @@ public:
     GPU_Vector<double>& force,
     GPU_Vector<double>& virial,
     const GPU_Vector<unsigned long long>& global_id,
-    const bool force_rebuild);
+    const DomainNeighborAction neighbor_action,
+    const std::uint64_t layout_epoch);
 
   // Updates every logical per-atom NEP workspace size/stride and invalidates
   // the neighbor rebuild reference. Physical capacity is reused when large
   // enough; the potential parameters themselves are never re-parsed.
   void allocate_workspace(const int num_atoms);
-
-  // True when the domain Verlet cache must be rebuilt before the next
-  // compute_domain (first use, stride change, or displacement > skin/2).
-  // num_atoms is the logical local_count, not a GPU_Vector capacity.
-  bool neighbor_needs_rebuild(
-    Box& box,
-    const GPU_Vector<double>& position_per_atom,
-    const int num_atoms);
 
   // Read-only views for the M2a eligibility/radius computation
   // (include/dmgmd/domain_layout.hpp).
@@ -206,6 +199,9 @@ public:
   // file-append behavior byte-for-byte.
   std::function<void(int /*call_index*/, int /*radial_actual*/, int /*angular_actual*/)>
       neighbor_record_sink;
+  std::function<void(int /*0=neighbor start, 1=neighbor end,
+                            2=NEP start, 3=NEP end*/)>
+      domain_timing_marker;
 
   const GPU_Vector<int>& get_NN_radial_ptr() override;
 

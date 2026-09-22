@@ -2,7 +2,7 @@
 
 类别：现行标准。
 
-更新日期：2026-09-21。
+更新日期：2026-09-22。
 
 本文档描述 single-rank、M1 空间所有权 replicated MPI 与 M2a rank-local
 domain `dmg-md` 的数据面，并以现有代码为权威来源。运行时在两种数据面之间
@@ -214,7 +214,15 @@ M2a（`src/domain_runtime.cu`）的 device 数组按上述 local 布局寻址：
 | `velocity` | `3 * local_count` | owned 权威（correct_velocity 经 gather/scatter 维护） |
 | `force` / `potential` / `virial` | `3 / 1 / 9 * local_count` | owned 权威；ghost 槽位是 scratch（清零无害，永不 gather） |
 | `unwrapped` / `previous_position` | 按需 `3 * local_count` | owned（unwrapped 随迁移载荷传递） |
+| `epoch_displacement` | `3 * local_count` | owned 在 wrap 前累计的 cache-reference 位移；rebuild commit 清零，ghost/padding 不读 |
+| `decision_max_squared` / `decision_reasons` | 各 1 个标量 | 唯一 cache decision 的 device scratch；只从 owned manager copy 归约 |
 | NEP `Fp/sum_fxyz/f12/NN/NL` workspace | `local_count` stride | descriptor 域 `[0, owned+dep)`；候选 `[0, local_count)` |
+
+`LocalLayout`、face send/receive map 与 Neighbor reference 共用单调 `layout/mapping` epoch。
+普通步只更新 owned dynamics、epoch displacement 与固定 ghost position slots；只有统一 rebuild
+transaction 才能改变 owner、槽位/stride、ghost 分类或 map，并在新布局全部上传后一起发布
+epoch。capacity 是物理存储属性，不是 layout/cache version；capacity 增长后所有 view 在同一
+transaction 中重新取得。
 
 表中的尺寸是**逻辑尺寸/stride**。为避免底层零字节 device allocation 的实现差异，
 `local_count==0` 时部分 `GPU_Vector` 物理 capacity 保留 1 个元素；NEP domain 接口另行显式

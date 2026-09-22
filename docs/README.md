@@ -26,6 +26,7 @@
 
 - [当前实现进度](./status/current.md)
 - [GPUMD/DMG-MD baseline 实测结果](./status/baseline-results.md)
+- [第二阶段统一重建与分步计时成本报告](./status/stage2-cost-report.md)
 
 “测试已定义”不等于“当前 revision 已执行通过”。新的通过结论必须在此类文档中记录日期、
 代码 revision、环境、精确命令和结果。
@@ -35,6 +36,7 @@
 这些内容尚未成为生产合同：
 
 - [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1、M2a 已实施，M2b 起待审批；M2a 生效合同见 standards/replicated-mpi.md）
+- [M2a 缓存有效性统一重建与分步计时设计](./plans/cache-validity-and-step-timing.md)（APPROVED：已实施；现行合同见 standards，实测见 stage2 成本报告）
 - [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（IN PROGRESS）
 - [风险与待办登记](./plans/risk-and-backlog.md)
 

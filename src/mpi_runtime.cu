@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -44,6 +45,23 @@ void check_mpi(int status, const char* operation)
   MPI_Error_string(status, message.data(), &length);
   throw std::runtime_error(
       std::string(operation) + ": " + std::string(message.data(), length));
+}
+
+using MpiWaitClock = std::chrono::steady_clock;
+
+[[nodiscard]] MpiWaitClock::time_point begin_mpi_wait(
+    const CommunicationVolume& volume)
+{
+  return volume.measure_mpi_wait ? MpiWaitClock::now()
+                                 : MpiWaitClock::time_point{};
+}
+
+void end_mpi_wait(
+    CommunicationVolume& volume, const MpiWaitClock::time_point& start)
+{
+  if (!volume.measure_mpi_wait) return;
+  volume.mpi_wait_seconds_local +=
+      std::chrono::duration<double>(MpiWaitClock::now() - start).count();
 }
 
 int checked_mpi_count(std::size_t count, const char* name)
@@ -1149,9 +1167,11 @@ void MpiRuntime::allreduce_sum_device(
     check_cuda(cudaMemcpy(impl_->host_send.data(), device_values, checked_bytes(elements),
                           cudaMemcpyDeviceToHost),
                "stage reduction input from CUDA device to pinned host");
+  const auto mpi_started = begin_mpi_wait(volume);
     check_mpi(MPI_Allreduce(MPI_IN_PLACE, impl_->host_send.data(), count, MPI_DOUBLE,
                             MPI_SUM, MPI_COMM_WORLD),
               "HostStaged MPI_Allreduce");
+  end_mpi_wait(volume, mpi_started);
     check_cuda(cudaMemcpy(device_values, impl_->host_send.data(), checked_bytes(elements),
                           cudaMemcpyHostToDevice),
                "stage reduction output from pinned host to CUDA device");
@@ -1161,9 +1181,11 @@ void MpiRuntime::allreduce_sum_device(
         checked_bytes(elements) * static_cast<std::uint64_t>(world_size());
   } else {
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware allreduce input");
+  const auto mpi_started = begin_mpi_wait(volume);
     check_mpi(MPI_Allreduce(MPI_IN_PLACE, device_values, count, MPI_DOUBLE,
                             MPI_SUM, MPI_COMM_WORLD),
               "CudaAware MPI_Allreduce");
+  end_mpi_wait(volume, mpi_started);
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware allreduce output");
   }
   ++volume.collective_calls;
@@ -1188,9 +1210,11 @@ void MpiRuntime::broadcast_device(
                             cudaMemcpyDeviceToHost),
                  "stage broadcast input from CUDA device to pinned host");
     }
+  const auto mpi_started = begin_mpi_wait(volume);
     check_mpi(MPI_Bcast(impl_->host_receive.data(), mpi_count, MPI_DOUBLE, root,
                         MPI_COMM_WORLD),
               "HostStaged MPI_Bcast");
+  end_mpi_wait(volume, mpi_started);
     if (count != 0) {
       check_cuda(cudaMemcpy(device_values, impl_->host_receive.data(), checked_bytes(count),
                             cudaMemcpyHostToDevice),
@@ -1201,8 +1225,10 @@ void MpiRuntime::broadcast_device(
         checked_bytes(count) * static_cast<std::uint64_t>(world_size());
   } else {
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware broadcast input");
+  const auto mpi_started = begin_mpi_wait(volume);
     check_mpi(MPI_Bcast(device_values, mpi_count, MPI_DOUBLE, root, MPI_COMM_WORLD),
               "CudaAware MPI_Bcast");
+  end_mpi_wait(volume, mpi_started);
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware broadcast output");
   }
   ++volume.collective_calls;
@@ -1214,12 +1240,49 @@ void MpiRuntime::broadcast_device(
 double MpiRuntime::allreduce_max_host(double value, CommunicationVolume& volume) const
 {
   double result = 0.0;
+  const auto mpi_started = begin_mpi_wait(volume);
   check_mpi(MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD),
             "MPI_Allreduce adaptive timestep maximum");
+  end_mpi_wait(volume, mpi_started);
   ++volume.collective_calls;
   volume.mpi_input_bytes_global += sizeof(double) * static_cast<std::uint64_t>(world_size());
   volume.mpi_output_bytes_global += sizeof(double) * static_cast<std::uint64_t>(world_size());
   return result;
+}
+
+std::uint32_t MpiRuntime::allreduce_or_u32(
+    std::uint32_t value, CommunicationVolume& volume) const
+{
+  std::uint32_t result = 0;
+  const auto mpi_started = begin_mpi_wait(volume);
+  check_mpi(MPI_Allreduce(&value, &result, 1, MPI_UINT32_T, MPI_BOR, MPI_COMM_WORLD),
+            "MPI_Allreduce domain decision reasons");
+  end_mpi_wait(volume, mpi_started);
+  ++volume.collective_calls;
+  volume.mpi_input_bytes_global +=
+      sizeof(std::uint32_t) * static_cast<std::uint64_t>(world_size());
+  volume.mpi_output_bytes_global +=
+      sizeof(std::uint32_t) * static_cast<std::uint64_t>(world_size());
+  return result;
+}
+
+void MpiRuntime::reduce_sum_min_max_doubles(
+    const double* local_values,
+    double* sums,
+    double* minima,
+    double* maxima,
+    int count) const
+{
+  if (count <= 0 || local_values == nullptr || sums == nullptr || minima == nullptr ||
+      maxima == nullptr) {
+    throw std::invalid_argument("invalid domain timing reduction buffers");
+  }
+  check_mpi(MPI_Reduce(local_values, sums, count, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD),
+            "reduce domain timing sums");
+  check_mpi(MPI_Reduce(local_values, minima, count, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD),
+            "reduce domain timing minima");
+  check_mpi(MPI_Reduce(local_values, maxima, count, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD),
+            "reduce domain timing maxima");
 }
 
 void MpiRuntime::exchange_p2p_indexed_device_soa(
@@ -1236,7 +1299,8 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
     int recv_right_count,
     int left_peer,
     int right_peer,
-    CommunicationVolume& volume) const
+    CommunicationVolume& volume,
+    P2pTimingEvents* timing) const
 {
   if (world_size() <= 1) return;
   if (components <= 0) {
@@ -1260,6 +1324,10 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
   const int mpi_stride = checked_mpi_count(stride, "SoA stride");
   impl_->device_p2p_send.reserve(std::max<std::size_t>(send_elements, 1));
   impl_->device_p2p_receive.reserve(std::max<std::size_t>(recv_elements, 1));
+  if (timing != nullptr) {
+    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->pack_begin)),
+               "record halo pack start");
+  }
   if (send_left_elements != 0) {
     pack_indexed_soa<<<(send_left_elements + kThreads - 1) / kThreads, kThreads>>>(
         send_left_indices, send_left_count, mpi_stride, components, device_values,
@@ -1272,7 +1340,14 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
         impl_->device_p2p_send.data() + send_left_elements);
     check_cuda(cudaGetLastError(), "pack right halo send list");
   }
+  if (timing != nullptr) {
+    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->pack_end)),
+               "record halo pack end");
+  }
 
+  const auto transfer_started =
+      timing != nullptr ? std::chrono::steady_clock::now()
+                        : std::chrono::steady_clock::time_point{};
   if (backend() == CommunicationBackend::host_staged) {
     impl_->host_p2p_send.reserve(std::max<std::size_t>(send_elements, 1));
     impl_->host_p2p_receive.reserve(std::max<std::size_t>(recv_elements, 1));
@@ -1281,6 +1356,7 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
                             checked_bytes(send_elements), cudaMemcpyDeviceToHost),
                  "stage halo send list from CUDA device to pinned host");
     }
+  const auto mpi_started = begin_mpi_wait(volume);
     impl_->p2p_exchange_bytes(
         impl_->host_p2p_send.data(), checked_mpi_count(checked_bytes(send_left_elements), "p2p send bytes"),
         impl_->host_p2p_send.data() + send_left_elements,
@@ -1289,6 +1365,7 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
         impl_->host_p2p_receive.data() + recv_left_elements,
         checked_mpi_count(checked_bytes(recv_right_elements), "p2p recv bytes"),
         left_peer, right_peer);
+  end_mpi_wait(volume, mpi_started);
     if (recv_elements != 0) {
       check_cuda(cudaMemcpy(impl_->device_p2p_receive.data(), impl_->host_p2p_receive.data(),
                             checked_bytes(recv_elements), cudaMemcpyHostToDevice),
@@ -1296,6 +1373,7 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
     }
   } else {
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware p2p input");
+  const auto mpi_started = begin_mpi_wait(volume);
     impl_->p2p_exchange_bytes(
         impl_->device_p2p_send.data(), checked_mpi_count(checked_bytes(send_left_elements), "p2p send bytes"),
         impl_->device_p2p_send.data() + send_left_elements,
@@ -1304,7 +1382,14 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
         impl_->device_p2p_receive.data() + recv_left_elements,
         checked_mpi_count(checked_bytes(recv_right_elements), "p2p recv bytes"),
         left_peer, right_peer);
+  end_mpi_wait(volume, mpi_started);
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware p2p output");
+  }
+  if (timing != nullptr) {
+    timing->transfer_wait_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - transfer_started).count();
+    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->unpack_begin)),
+               "record halo unpack start");
   }
 
   if (recv_left_elements != 0) {
@@ -1318,6 +1403,10 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
         recv_right_slots, recv_right_count, mpi_stride, components,
         impl_->device_p2p_receive.data() + recv_left_elements, device_values);
     check_cuda(cudaGetLastError(), "unpack right halo receive stream");
+  }
+  if (timing != nullptr) {
+    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->unpack_end)),
+               "record halo unpack end");
   }
   volume.p2p_calls += 4;
   volume.add_p2p_bytes(ByteClass::halo, checked_bytes(send_elements),
@@ -1340,12 +1429,14 @@ void MpiRuntime::exchange_p2p_host_bytes(
 {
   if (world_size() <= 1) return;
   impl_->validate_peers(left_peer, right_peer);
+  const auto mpi_started = begin_mpi_wait(volume);
   impl_->p2p_exchange_bytes(
       send_left, checked_mpi_count(send_left_bytes, "p2p send bytes"),
       send_right, checked_mpi_count(send_right_bytes, "p2p send bytes"),
       recv_left, checked_mpi_count(recv_left_bytes, "p2p receive bytes"),
       recv_right, checked_mpi_count(recv_right_bytes, "p2p receive bytes"),
       left_peer, right_peer);
+  end_mpi_wait(volume, mpi_started);
   volume.p2p_calls += 4;
   volume.add_p2p_bytes(byte_class, send_left_bytes + send_right_bytes,
                        recv_left_bytes + recv_right_bytes);
@@ -1360,9 +1451,11 @@ std::vector<int> MpiRuntime::alltoall_ints(
     throw std::invalid_argument("alltoall values must be world-sized");
   }
   std::vector<int> received(static_cast<std::size_t>(world_size()));
+  const auto mpi_started = begin_mpi_wait(volume);
   check_mpi(MPI_Alltoall(send_values.data(), 1, MPI_INT, received.data(), 1, MPI_INT,
                          MPI_COMM_WORLD),
             "MPI_Alltoall ints");
+  end_mpi_wait(volume, mpi_started);
   const std::uint64_t bytes = 4 * static_cast<std::uint64_t>(world_size());
   volume.add_p2p_bytes(byte_class, bytes, bytes);
   return received;
@@ -1374,8 +1467,10 @@ std::vector<int> MpiRuntime::allgather_int(
     CommunicationVolume& volume) const
 {
   std::vector<int> received(static_cast<std::size_t>(world_size()));
+  const auto mpi_started = begin_mpi_wait(volume);
   check_mpi(MPI_Allgather(&value, 1, MPI_INT, received.data(), 1, MPI_INT, MPI_COMM_WORLD),
             "MPI_Allgather int");
+  end_mpi_wait(volume, mpi_started);
   volume.add_p2p_bytes(byte_class, 4, 4 * static_cast<std::uint64_t>(world_size()));
   return received;
 }
@@ -1398,11 +1493,13 @@ void MpiRuntime::alltoallv_host_bytes(
   static const char kUnused = 0;
   const void* send = send_buffer == nullptr ? &kUnused : send_buffer;
   void* receive = recv_buffer == nullptr ? const_cast<char*>(&kUnused) : recv_buffer;
+  const auto mpi_started = begin_mpi_wait(volume);
   check_mpi(MPI_Alltoallv(const_cast<void*>(send), send_counts_bytes.data(),
                          send_displacements_bytes.data(), MPI_BYTE, receive,
                          recv_counts_bytes.data(), recv_displacements_bytes.data(),
                          MPI_BYTE, MPI_COMM_WORLD),
             "MPI_Alltoallv bytes");
+  end_mpi_wait(volume, mpi_started);
   std::uint64_t sent = 0;
   std::uint64_t received = 0;
   for (int count : send_counts_bytes) {
@@ -1476,11 +1573,13 @@ std::vector<double> MpiRuntime::gather_prefix_device_soa_to_root(
     }
     static const double kUnused = 0.0;
     const void* send = send_elements == 0 ? &kUnused : impl_->host_send.data();
+  const auto mpi_started = begin_mpi_wait(volume);
     check_mpi(MPI_Gatherv(const_cast<void*>(send),
                           checked_mpi_count(send_elements, "gather send"), MPI_DOUBLE,
                           is_root() ? impl_->host_receive.data() : nullptr, counts.data(),
                           displacements.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD),
               "HostStaged MPI_Gatherv owned prefix");
+  end_mpi_wait(volume, mpi_started);
     if (is_root() && receive_elements != 0) {
       std::copy_n(impl_->host_receive.data(), receive_elements, packed.data());
     }
@@ -1489,11 +1588,13 @@ std::vector<double> MpiRuntime::gather_prefix_device_soa_to_root(
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware prefix gather input");
     static const double kUnused = 0.0;
     const void* send = send_elements == 0 ? &kUnused : impl_->device_send.data();
+  const auto mpi_started = begin_mpi_wait(volume);
     check_mpi(MPI_Gatherv(const_cast<void*>(send),
                           checked_mpi_count(send_elements, "gather send"), MPI_DOUBLE,
                           is_root() ? impl_->device_receive.data() : nullptr, counts.data(),
                           displacements.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD),
               "CudaAware MPI_Gatherv owned prefix");
+  end_mpi_wait(volume, mpi_started);
     check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware prefix gather output");
     if (is_root()) {
       check_cuda(cudaMemcpy(packed.data(), impl_->device_receive.data(),
@@ -1533,11 +1634,13 @@ std::vector<unsigned long long> MpiRuntime::gather_u64_to_root(
   static const unsigned long long kUnused = 0;
   const unsigned long long* send = count == 0 ? &kUnused : host_values;
   std::vector<unsigned long long> packed(is_root() ? total : 0);
+  const auto mpi_started = begin_mpi_wait(volume);
   check_mpi(MPI_Gatherv(const_cast<unsigned long long*>(send), count,
                         MPI_UNSIGNED_LONG_LONG,
                         is_root() ? packed.data() : nullptr, counts.data(),
                         displacements.data(), MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD),
             "MPI_Gatherv u64 ids");
+  end_mpi_wait(volume, mpi_started);
   ++volume.collective_calls;
   const std::uint64_t bytes = 8 * static_cast<std::uint64_t>(total);
   volume.mpi_input_bytes_global += bytes;
@@ -1583,10 +1686,12 @@ void MpiRuntime::scatterv_prefix_device_soa_from_root(
   static const double kUnused = 0.0;
   const void* send = (is_root() && total_atoms != 0) ? root_payload.data() : &kUnused;
   void* receive = my_elements == 0 ? const_cast<double*>(&kUnused) : received.data();
+  const auto mpi_started = begin_mpi_wait(volume);
   check_mpi(MPI_Scatterv(const_cast<void*>(send), element_counts.data(),
                          displacements.data(), MPI_DOUBLE, receive, my_elements,
                          MPI_DOUBLE, 0, MPI_COMM_WORLD),
             "MPI_Scatterv corrected velocities");
+  end_mpi_wait(volume, mpi_started);
   if (my_elements != 0) {
     impl_->device_send.reserve(static_cast<std::size_t>(my_elements));
     check_cuda(cudaMemcpy(impl_->device_send.data(), received.data(),

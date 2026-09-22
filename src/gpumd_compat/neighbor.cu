@@ -580,34 +580,10 @@ void Neighbor::find_neighbor_global(
 }
 
 
-// Returns true when a domain rebuild must run before the next domain neighbor
-// build: first use for this stride, a stride/capacity change, or any local
-// slot (owned or refreshed ghost) more than skin/2 from the reference
-// positions. Ghost displacement equals its source owned atom's displacement
-// on the owner rank, so a global OR over the per-rank results covers every
-// local slot of every rank exactly once.
-bool Neighbor::needs_rebuild_domain(
-  Box& box,
-  const GPU_Vector<double>& position_per_atom,
-  const int num_atoms)
-{
-  const int N = num_atoms;
-  if (N <= 0) return false;  // empty rank: nothing to rebuild
-  if (NN.size() < static_cast<size_t>(N) ||
-      position_per_atom.size() < 3 * static_cast<size_t>(N)) {
-    throw std::logic_error("domain neighbor buffers are smaller than logical local_count");
-  }
-  if (x0.size() != static_cast<size_t>(N)) return true;  // first use / resize
-  return check_atom_distance(box, position_per_atom.data(),
-                             position_per_atom.data() + N,
-                             position_per_atom.data() + 2 * static_cast<size_t>(N), N) != 0;
-}
-
 // Domain Verlet build. Centers [center_begin, center_end) get rows; candidates
 // are all num_candidates local slots. Rows are then sorted by global ID so the
 // many-body reverse-edge binary search (find_properties_many_body_domain) uses
-// the same key. force_rebuild=true skips the displacement check (the caller
-// has already run the global rebuild OR, or knows the layout changed).
+// the same key. The explicit action was resolved once by the runtime.
 void Neighbor::find_neighbor_domain(
   const double rc,
   Box& box,
@@ -617,14 +593,25 @@ void Neighbor::find_neighbor_domain(
   const int center_begin,
   const int center_end,
   const int num_candidates,
-  const bool force_rebuild)
+  const DomainNeighborAction action,
+  const std::uint64_t layout_epoch)
 {
   static_cast<void>(type);  // kept for interface parity; rows are untyped
   const int N = num_candidates;
   if (center_begin < 0 || center_end < center_begin || center_end > N) {
     throw std::invalid_argument("domain neighbor center range is outside local_count");
   }
-  if (N <= 0) return;  // empty rank: no local slots, nothing to build
+  if (action == DomainNeighborAction::confirmed_reuse &&
+      domain_layout_epoch_ != layout_epoch) {
+    throw std::logic_error(
+      "confirmed domain neighbor reuse has a mismatched layout epoch");
+  }
+  if (N <= 0) {
+    if (action == DomainNeighborAction::must_rebuild) {
+      domain_layout_epoch_ = layout_epoch;
+    }
+    return;  // empty rank: no local slots, but the epoch is still resolved
+  }
   if (type.size() < static_cast<size_t>(N) ||
       position_per_atom.size() < 3 * static_cast<size_t>(N) ||
       global_id.size() < static_cast<size_t>(N)) {
@@ -655,10 +642,17 @@ void Neighbor::find_neighbor_domain(
     }
     gpu_update_xyz0<<<(N - 1) / 128 + 1, 128>>>(N, x, y, z, x0.data(), y0.data(), z0.data());
     GPU_CHECK_KERNEL
+    if (action == DomainNeighborAction::must_rebuild) {
+      domain_layout_epoch_ = layout_epoch;
+    }
     return;
   }
-  if (!force_rebuild && !needs_rebuild_domain(box, position_per_atom, N)) {
-    return;  // reuse the cached rows and reference positions verbatim
+  if (action == DomainNeighborAction::confirmed_reuse) {
+    if (NN.size() != static_cast<size_t>(N) || x0.size() != static_cast<size_t>(N)) {
+      throw std::logic_error(
+        "confirmed domain neighbor reuse has no matching cache reference");
+    }
+    return;
   }
 
   const int block_size = 256;
@@ -730,6 +724,7 @@ void Neighbor::find_neighbor_domain(
   gpu_update_xyz0<<<(N - 1) / 128 + 1, 128>>>(
     N, x, y, z, x0.data(), y0.data(), z0.data());
   GPU_CHECK_KERNEL
+  domain_layout_epoch_ = layout_epoch;
 }
 
 
@@ -753,6 +748,7 @@ void Neighbor::invalidate_rebuild_reference(void)
   x0.resize_reuse(0);
   y0.resize_reuse(0);
   z0.resize_reuse(0);
+  domain_layout_epoch_ = std::numeric_limits<std::uint64_t>::max();
 }
 
 }  // namespace gpumd_compat

@@ -334,8 +334,10 @@ M2a 的 device 数据面下每 rank 只保存自己的 owned 原子与 ghost；�
 - 每个槽位携带 global_id、owner/source rank、face 与周期 image shift 元数据；
   非确定性数值上不会出现重复 `(global_id, image)`（发送端按 MIC 带去重，接收端
   拒绝重复 ID）；
-- ghost 位置每步通过缓存 face 计划刷新（24 B/原子）；成员关系只在全局 neighbor
-  rebuild 时重估（40 B membership 记录 + 4 B/face count handshake）。
+- `manager_owner` 在一个 cache epoch 内保持不变，可以暂时不同于当前位置算出的
+  `geometric_owner`；只有统一 rebuild transaction 才提交 owner 迁移。ghost 位置在普通步
+  通过缓存 face 计划刷新（24 B/原子），成员关系只在统一 rebuild 时重估（40 B membership
+  记录 + 4 B/face count handshake）。
 
 typewise 半径按 pinned kernel 的实际消费路径枚举：radial list 成员需要
 `d < (rc_radial[t1]+rc_radial[t2])/2`，angular list（radial-first filter）需要
@@ -354,16 +356,22 @@ double 平均低估实际消费 cutoff。
    stride 的 device 数组）；
 2. 自适应时间步（owned max |v| host max-Allreduce）；
 3. owned VV first half（+ unwrapped 跟踪）；
-4. owned 位置 wrap 进全局盒（pinned 单次 `<0/+1`、`>1/-1` 语义；单步位移超过
-   一个盒长时坐标可合法留在盒外，下游所有带判定使用 MIC 距离）；
-5. direct migration：逐个 owned 原子计算最终 owner（可一步跨任意多 slab，含周期
-   端），Alltoall count handshake + Alltoallv 载荷直发最终 owner；载荷含 gid、
-   type、mass、charge、group labels、wrapped position、half-step velocity、
-   unwrapped（启用时）；force/PE/virial 不迁移；完成后强制重建布局、halo、
-   workspace 与 neighbor cache；
-6. halo 位置刷新（缓存 face 计划；migration 步跳过，由 membership 交换携带）；
-7. 全局 neighbor-rebuild OR（任一 rank 的任一 local 槽位移 > skin/2 ⇒ 全体
-   重建；触发时同步重估 halo membership）；
+4. owned 位置按 pinned 单次 `<0/+1`、`>1/-1` 语义 wrap；若单步位移导致坐标一次 wrap 后
+   仍在盒外，则统一 decision 在任何 halo/force 前报 unsupported multi-box displacement；
+5. 唯一 cache decision：VV1 在 wrap 前把 owned 原子的真实位移累加到 epoch
+   displacement；只检查每个 global ID 的 manager copy，做一次全局最大位移归约与一次
+   reason-mask OR。非有限位移、无法证明的连续性或单步超过一个盒长在 halo/force 前全 rank
+   报错；全局位移 `> skin/2` 才进入 rebuild，恰好阈值仍复用。Neighbor 接受明确的
+   `confirmed_reuse` / `must_rebuild` action，不再执行第二次位移检查；
+6. 普通步保持 manager、slot/layout、membership、communication map 与 neighbor rows 不变，
+   只按缓存 face 计划刷新 ghost 坐标（24 B/原子），并验证 mapping/refreshed epoch；微小跨
+   slab 或周期端只改变 `geometric_owner`，不单独迁移；
+7. rebuild transaction 中，若 manager 与最终 geometric owner 不同，则沿现有 direct
+   all-rank 路由执行 Alltoall count handshake + Alltoallv，一步直达最终 slab；载荷含 gid、
+   type、mass、charge、group labels、wrapped position、half-step velocity、unwrapped（启用
+   时），force/PE/virial 不迁移。随后统一重建 membership/layout/map，复用或扩展 capacity，
+   清零 epoch displacement 并重建 neighbor rows；无 owner 变化的 skin rebuild 也走同一
+   membership/layout/neighbor transaction；
 8. 域分片 NEP：dependency-center 邻居表/descriptor/partial
    （`[0, owned+dep)`），owned radial force/many-body/ZBL（`[0, owned)`），
    候选 `[0, local_count)`；
@@ -374,8 +382,10 @@ double 平均低估实际消费 cutoff。
     N 条按 global ID 排序的记录后复用既有 formatter（ghost 永不直接输出）。
 
 第一个 run 前的初始力先完成 local owned 初始化、bootstrap 设备 wrap（与
-pinned wrap kernel 逐位一致）、halo 与 NEP workspace。多段 run 延续同一 domain
-state，不在段间恢复 replicated device arrays。
+pinned wrap kernel 逐位一致）、halo 与 NEP workspace。多段 run 延续同一 domain state，
+不在段间恢复 replicated device arrays，也不因段首兼容 force call 强制重建已确认的
+membership/neighbor cache。restart 不序列化 cache/owner epoch；新进程按新 rank 数从输入行
+bootstrap 新 epoch。
 
 ### 通信后端与字节口径
 
@@ -407,13 +417,24 @@ rank 语义不变。无论详细诊断是否开启，每个 run 段末每 rank �
 普通 M2a 步不含任何 N-scaled collective（position Allgatherv 不存在于此协议）；
 输出步增加 gid gather（8N）+ 各字段 gather（8 B/atom/component，root 侧恢复
 input-slot 顺序）；correct_velocity 触发步增加 80N 的 gather/scatter。除下述周期记录外，
-迁移步的 collective 只有 thermo（64P）与 migration-OR（8P）；
-普通步另加 rebuild-OR（8P）。
+每步固定执行 displacement MAX（8P）、decision reason OR（4P）与 thermo（64P），所以
+input/output 各为 `76P` B、3 次 collective；rebuild 若发生 owner 变化再增加 Alltoall count
+和 migration payload，所有 rebuild 增加 face-count/membership p2p。统一 decision 取代旧的
+migration-OR + neighbor-rebuild-OR 双判定，不得由 Neighbor 再发起位移 collective。
 `neighbor.out` 每 1000 次 force 调用（含首次）由各 rank dependency-center local
 max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须在**本次** Verlet/typewise
 邻居表生成后读取；真正 `local_count=0` 的 rank 贡献零但仍参加 collective。初始力或段首力
 的聚合属一次性 control plane，不计入 step 行；若记录落在 step force，则该 step 精确增加
 2 次 collective、`mpi_input_bytes_global += 16P`、`mpi_output_bytes_global += 16P`。
+
+设置 `DMGMD_DOMAIN_TIMING=1` 后，每个积分步恰好分类为 `ordinary` 或 `rebuild`，并用固定
+CUDA event 集与 host monotonic clock 记录 decision、migration、membership/layout、
+allocation/upload、halo pack/transfer-wait/unpack、cell/neighbor、NEP、integration、thermo、
+scientific output 和 remaining。默认关闭时不创建 event、不输出逐步记录、也不增加计时专用
+同步；开启时只在既有 thermo D2H/段末 device synchronization 读取 event，并在每个 run 段末
+各做一次 SUM/MIN/MAX 归约，输出有界 summary/histogram。device interval、host critical-path
+interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端性能仍以详细计时关闭时的
+`DMGMD_TIMING phase=run seconds_max` 为准。
 
 ### 验证入口（M2a）
 
@@ -425,6 +446,8 @@ slab 32/16 Å）：
 - 三原子两跳链（owned i 依赖 ghost j 的 descriptor/partial，j 再依赖 coordinate-only
   ghost k）证明两跳闭包；N<P、空 rank、周期端、一步跨多 slab、暂时空 slab 的
   迁移经 `DMGMD_DOMAIN_MIGRATION` transitions 与逐步 dump 坐标重算验证；
+- 四原子 `micro_crossings` fixture 在累计位移不超过 `skin/2` 时连续跨 P=4 内部 slab 与
+  周期端，断言 layout epoch 不变、零 migration/rebuild，并与 P=1 oracle 比较；
 - 两原子静止 fixture 在 P=4 上令 rank 2 连续 1000 步保持逻辑 `local_count=0`，并验证
   force call 1000 的第二条 `neighbor.out` 与该步两次 MPI_MAX 的精确记账；
 - NEP5、mixed typewise radial/angular cutoff、flexible ZBL、typewise ZBL 各有两步
@@ -436,7 +459,9 @@ slab 32/16 Å）：
 - 默认安静模式不产生逐次 layout/migration/communication 记录但保留段末摘要；诊断模式
   显式开启原有解析断言，并验证 Atom stride 与四个 face-index logical size 均相同的重复
   layout upload 不发生 GPU 分配；
-- owned global ID 全局恰好一次、ghost 不进积分/thermo/输出。
+- owned global ID 全局恰好一次、ghost 不进积分/thermo/输出；
+- 连续 run 不在段边界重建，详细计时 on/off 的科学文件逐字节一致；普通/重建分类计数、
+  histogram、rank min/mean/max schema 与 unsupported multi-box fatal path 均有定向断言。
 
 既有 `run_mpi_differential.py` 与 `run_mpi_migration.py` 对其 24 Å 小盒
 fixture 断言 `mode=m1-fallback`（小盒 slab 12/6 Å < d_coord 16）。

@@ -55,6 +55,8 @@ struct CommunicationVolume {
   std::uint64_t migration_recv_bytes_local = 0;
   std::uint64_t control_send_bytes_local = 0;
   std::uint64_t control_recv_bytes_local = 0;
+  bool measure_mpi_wait = false;
+  double mpi_wait_seconds_local = 0.0;
 
   void add_p2p_bytes(ByteClass byte_class, std::uint64_t send, std::uint64_t recv)
   {
@@ -73,6 +75,17 @@ struct CommunicationVolume {
         break;
     }
   }
+};
+
+// Optional fixed event set owned by the caller. The exchange only records
+// events; it never synchronizes them for diagnostics. The caller resolves
+// elapsed time after an existing data-readiness synchronization.
+struct P2pTimingEvents {
+  void* pack_begin = nullptr;
+  void* pack_end = nullptr;
+  void* unpack_begin = nullptr;
+  void* unpack_end = nullptr;
+  double transfer_wait_seconds = 0.0;
 };
 
 // Communication plan for the M1 indexed collectives. M1 spatial ownership is
@@ -260,6 +273,14 @@ class MpiRuntime {
       int root = 0);
 
   double allreduce_max_host(double value, CommunicationVolume& volume) const;
+  std::uint32_t allreduce_or_u32(
+      std::uint32_t value, CommunicationVolume& volume) const;
+  void reduce_sum_min_max_doubles(
+      const double* local_values,
+      double* sums,
+      double* minima,
+      double* maxima,
+      int count) const;
 
   // -----------------------------------------------------------------------
   // M2a local-domain exchanges (docs/plans/domain-decomposition.md section
@@ -288,7 +309,8 @@ class MpiRuntime {
       int recv_right_count,
       int left_peer,
       int right_peer,
-      CommunicationVolume& volume) const;
+      CommunicationVolume& volume,
+      P2pTimingEvents* timing = nullptr) const;
 
   // Host-memory p2p with the same tag scheme, used for the rebuild-time face
   // membership records (40 bytes per atom, halo class) and the one-int face

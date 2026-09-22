@@ -25,6 +25,12 @@ Options:
   --work-root PATH      Explicit retained work directory to resume
   --candidate PATH      Candidate executable (default: ./build/dmg-md)
   --devices LIST        CUDA IDs/UUIDs (defaults: smoke=0, nightly=0..3, release=0..7)
+  --cases LIST          Comma-separated manifest cases
+  --ranks LIST          Comma-separated MPI rank counts
+  --backends LIST       Comma-separated HostStaged,CudaAware
+  --sections LIST       Comma-separated short,long,replay,restart,nvt
+  --performance         Disable detailed domain logs for total-time measurement
+  --domain-timing       Enable diagnostic M2a ordinary/rebuild phase timing
   --retries N           Retries per failed stage (default: 1)
   --ui MODE             auto, dashboard, or plain (default: auto)
   --adopt-existing      Forward legacy-stage adoption to the Python runner
@@ -44,6 +50,12 @@ result_root=""
 work_root=""
 candidate="$repo_root/build/dmg-md"
 devices=""
+cases=""
+ranks=""
+backends=""
+sections=""
+performance=0
+domain_timing=0
 retries=1
 ui_mode="auto"
 adopt_existing=0
@@ -78,6 +90,34 @@ while (($# > 0)); do
       (($# >= 2)) || fail "--devices requires a comma-separated list"
       devices=$2
       shift 2
+      ;;
+    --cases)
+      (($# >= 2)) || fail "--cases requires a comma-separated list"
+      cases=$2
+      shift 2
+      ;;
+    --ranks)
+      (($# >= 2)) || fail "--ranks requires a comma-separated list"
+      ranks=$2
+      shift 2
+      ;;
+    --backends)
+      (($# >= 2)) || fail "--backends requires a comma-separated list"
+      backends=$2
+      shift 2
+      ;;
+    --sections)
+      (($# >= 2)) || fail "--sections requires a comma-separated list"
+      sections=$2
+      shift 2
+      ;;
+    --domain-timing)
+      domain_timing=1
+      shift
+      ;;
+    --performance)
+      performance=1
+      shift
       ;;
     --retries)
       (($# >= 2)) || fail "--retries requires a non-negative integer"
@@ -134,6 +174,8 @@ case "$ui_mode" in
   auto|dashboard|plain) ;;
   *) fail "--ui must be auto, dashboard, or plain" ;;
 esac
+((performance == 0 || domain_timing == 0)) ||
+  fail "--performance and --domain-timing are mutually exclusive"
 
 if [[ -z "$result_root" ]]; then
   result_root="$repo_root/dmgmd-$profile-$(date +%Y%m%d-%H%M%S)"
@@ -201,6 +243,12 @@ runner=(
   --ui-log "$log_path"
   --keep-work
 )
+[[ -z "$cases" ]] || runner+=(--cases "$cases")
+[[ -z "$ranks" ]] || runner+=(--ranks "$ranks")
+[[ -z "$backends" ]] || runner+=(--backends "$backends")
+[[ -z "$sections" ]] || runner+=(--sections "$sections")
+((performance == 0)) || runner+=(--performance)
+((domain_timing == 0)) || runner+=(--domain-timing)
 if [[ -n "$work_root" ]]; then
   runner+=(--resume-work "$work_root")
 fi
@@ -228,6 +276,25 @@ echo "To resume later: $entrypoint --result-root $result_root"
 if ((dry_run)); then
   print_command
   exit 0
+fi
+
+provenance_dir="$result_root/provenance"
+if [[ ! -e "$provenance_dir" ]]; then
+  mkdir -- "$provenance_dir"
+  git -C "$repo_root" rev-parse HEAD >"$provenance_dir/source-revision.txt"
+  git -C "$repo_root" status --short --branch >"$provenance_dir/git-status.txt"
+  git -C "$repo_root" diff --binary HEAD >"$provenance_dir/dirty.patch"
+  git -C "$repo_root" ls-files --modified --others --exclude-standard -z |
+    while IFS= read -r -d '' path; do
+      [[ -f "$repo_root/$path" ]] || continue
+      sha256sum "$repo_root/$path"
+    done | LC_ALL=C sort >"$provenance_dir/dirty-files.sha256"
+  sha256sum "$candidate" >"$provenance_dir/candidate.sha256"
+  candidate_build_dir=$(dirname -- "$candidate")
+  if [[ -f "$candidate_build_dir/CMakeCache.txt" ]]; then
+    cp -- "$candidate_build_dir/CMakeCache.txt" "$provenance_dir/CMakeCache.txt"
+    sha256sum "$candidate_build_dir/CMakeCache.txt" >"$provenance_dir/CMakeCache.sha256"
+  fi
 fi
 
 # This is the only supported MPI/CUDA environment entry point. Sourcing it in

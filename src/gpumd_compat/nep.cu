@@ -449,16 +449,6 @@ NEP::~NEP(void)
   // nothing
 }
 
-// Forwards the Verlet rebuild decision to the runtime so it can drive the
-// global rebuild OR before deciding to rebuild the halo membership.
-bool NEP::neighbor_needs_rebuild(
-  Box& box,
-  const GPU_Vector<double>& position_per_atom,
-  const int num_atoms)
-{
-  return neighbor.needs_rebuild_domain(box, position_per_atom, num_atoms);
-}
-
 // Partitions the flat device parameter buffer into per-type ANN weight /
 // bias views used directly by the kernels (reference nep.cu:402).
 
@@ -1246,10 +1236,12 @@ void NEP::compute_domain(
   GPU_Vector<double>& force_per_atom,
   GPU_Vector<double>& virial_per_atom,
   const GPU_Vector<unsigned long long>& global_id,
-  const bool force_rebuild)
+  const DomainNeighborAction neighbor_action,
+  const std::uint64_t layout_epoch)
 {
   const int BLOCK_SIZE = 64;
   const int N = num_atoms;  // logical local_count; device capacity may be padded
+  if (domain_timing_marker) domain_timing_marker(0);
 
   if (N < 0 || N1 < 0 || N2 < N1 || N2 > N || ND1 < 0 || ND2 < ND1 || ND2 > N) {
     throw std::invalid_argument("NEP domain center range is outside logical local_count");
@@ -1271,6 +1263,9 @@ void NEP::compute_domain(
   // but must not derive a logical stride from their one-element allocation
   // capacity or touch any padded device element.
   if (N == 0) {
+    neighbor.find_neighbor_domain(
+      rc, box, type, position_per_atom, global_id, ND1, ND2, N,
+      neighbor_action, layout_epoch);
     if (record_neighbors) {
       if (neighbor_record_sink) {
         neighbor_record_sink(call_index, 0, 0);
@@ -1281,11 +1276,17 @@ void NEP::compute_domain(
                     << paramb.MN_angular << ",actual=0)." << std::endl;
       }
     }
+    if (domain_timing_marker) {
+      domain_timing_marker(1);
+      domain_timing_marker(2);
+      domain_timing_marker(3);
+    }
     return;
   }
 
   neighbor.find_neighbor_domain(
-    rc, box, type, position_per_atom, global_id, ND1, ND2, N, force_rebuild);
+    rc, box, type, position_per_atom, global_id, ND1, ND2, N, neighbor_action,
+    layout_epoch);
 
   const int grid_dep =
     (ND2 > ND1) ? (ND2 - ND1 - 1) / BLOCK_SIZE + 1 : 0;
@@ -1311,7 +1312,7 @@ void NEP::compute_domain(
       nep_data.NL_angular.data());
     GPU_CHECK_KERNEL
   }
-
+  if (domain_timing_marker) domain_timing_marker(1);
   // Sample only after this call's Verlet rows and typewise lists are ready.
   // Empty dependency ranges contribute zero without reading uninitialized
   // workspace, while every rank still invokes the sink in lockstep.
@@ -1344,6 +1345,10 @@ void NEP::compute_domain(
       output_file.close();
     }
   }
+  // The periodic neighbor-occupancy D2H/MPI record is host diagnostics, not
+  // NEP device execution. Start the force/descriptor device interval only
+  // after that record has completed.
+  if (domain_timing_marker) domain_timing_marker(2);
 
   bool is_polarizability = paramb.model_type == 2;
   if (grid_dep > 0) {
@@ -1455,6 +1460,7 @@ void NEP::compute_domain(
       potential_per_atom.data());
     GPU_CHECK_KERNEL
   }
+  if (domain_timing_marker) domain_timing_marker(3);
 }
 
 // small box possibly used for active learning:
