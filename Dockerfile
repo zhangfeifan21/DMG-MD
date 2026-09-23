@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # CUDA 12.8 GA keeps the native Linux driver baseline at 570.26.
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
 

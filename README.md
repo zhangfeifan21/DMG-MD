@@ -55,7 +55,8 @@ sudo docker run --rm --gpus '"device=0"' dmgmd:cuda12.8 nvidia-smi
 ```
 
 看到 T4 显卡信息表即表示 Docker 可把显卡交给容器。之后直接跳到第 4 步检查 DMG-MD，
-无需在 T4 服务器重新执行第 2～3 步。若提示 `could not select device driver` 或
+**不要在 T4 上执行第 3 步的 `docker build`**。你已经有可运行的镜像，直接复制第 4 步
+那条以 `sudo docker run` 开头的自检命令。若提示 `could not select device driver` 或
 `could not select device driver with capabilities: [[gpu]]`，请管理员在 T4 服务器安装并配置
 NVIDIA Container Toolkit；Docker Hub 的网络问题与显卡运行时配置是两项独立检查。
 
@@ -128,7 +129,8 @@ ls Dockerfile README.md
 ```
 
 **成功标志：** 显示 `Dockerfile` 和 `README.md` 两个文件名。
-若文件放在其他位置，只需把第一行的 `~/newmd` 换成真实路径。
+如果你已从第一台服务器导入 `dmgmd:cuda12.8` 镜像，且 GPU 检查通过，可跳过第 2～3 步，直接进入第 4 步。
+需要从源码构建或更新镜像时，再按第 2～3 步操作。若文件放在其他位置，只需把第一行的 `~/newmd` 换成真实路径。
 例如文件夹是 `/data/alice/newmd`，就输入 `cd /data/alice/newmd`。
 如果解压后多套了一层文件夹，需要进入真正包含这两个文件的那一层。
 
@@ -264,6 +266,7 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 | 自检失败，但显卡信息能正常显示 | 保存自检完整输出给维护者；显卡可见不代表计算环境全部正常 |
 | 构建时出现 `generated model hash mismatch` | 更新项目文件，确认 `tests/long_nve/long_nve_common.py` 是包含 `math.fsum` 的新版，然后重跑第 3 步 |
 | 容器自检报 `run parser test failure: unsupported command 'dftd3'` | 更新项目文件，确认 `tests/run_parser_tests.cpp` 包含 `mkstemp`，重新执行第 3 步构建镜像，再运行第 4 步自检 |
+| 导入镜像后误执行 `docker build`，报 `resolve image config for docker.io/docker/dockerfile:1` 或 `403 Forbidden` | 不要在 T4 上重建；直接运行第 4 步的自检命令。若确实需要从源码构建，构建服务器需能访问 Docker Hub 及其他构建依赖 |
 
 ### 可选：用两张显卡计算
 
