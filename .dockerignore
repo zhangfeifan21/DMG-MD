@@ -1,0 +1,16 @@
+# Allow only reproducible source inputs; simulation output can exceed 100 GB.
+**
+!CMakeLists.txt
+!README.md
+!include/
+!include/**
+!src/
+!src/**
+!tests/
+!tests/**
+!scripts/
+!scripts/**
+!docker/
+!docker/**
+**/__pycache__/
+**/*.pyc

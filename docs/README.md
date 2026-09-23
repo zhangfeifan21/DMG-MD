@@ -25,6 +25,7 @@
 这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
 
 - [当前实现进度](./status/current.md)
+- [Docker 适配验证与待验收项（2026-09-23）](./status/docker-validation.md)
 - [Benchmark 功能验证（2026-09-22）](./status/benchmark-validation.md)
 - [GPUMD/DMG-MD baseline 实测结果](./status/baseline-results.md)
 - [第二阶段统一重建与分步计时成本报告](./status/stage2-cost-report.md)

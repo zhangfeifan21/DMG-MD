@@ -118,7 +118,10 @@ Potential、NEP kernels）。该模式已于 2026-09-09 废除。当前规则：
 
 ## 构建与测试
 
-从本仓库根目录先加载唯一受支持的 MPI/CUDA 环境，再配置：
+原生部署从本仓库根目录加载 `../env/md-mpi.sh`；Docker 使用仓库
+`docker/md-mpi.sh` 安装到 `/opt/dmgmd/env/md-mpi.sh`，entrypoint 自动加载。
+两种方式均须通过相同的 MPI/CUDA 门槛；容器内置 PMIx 使用编译时组件目录，无需宿主机路径。
+原生构建示例：
 
     source ../env/md-mpi.sh
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

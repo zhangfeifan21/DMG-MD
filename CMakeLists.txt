@@ -37,6 +37,20 @@ file(REAL_PATH "$ENV{OMPI_HOME}" DMGMD_OMPI_HOME)
 file(REAL_PATH "$ENV{UCX_HOME}" DMGMD_UCX_HOME)
 file(REAL_PATH "$ENV{CUDA_HOME}" DMGMD_CUDA_HOME)
 
+# Reject cached compilers/toolkits from another CUDA installation as well as
+# mixed MPI installations. Containers and native builds share this contract.
+file(REAL_PATH "${CMAKE_CUDA_COMPILER}" DMGMD_CUDA_COMPILER)
+file(REAL_PATH "${CUDAToolkit_BIN_DIR}" DMGMD_CUDA_BIN_DIR)
+string(FIND "${DMGMD_CUDA_COMPILER}" "${DMGMD_CUDA_HOME}/bin/" DMGMD_CUDA_COMPILER_PREFIX)
+if(NOT DMGMD_CUDA_COMPILER_PREFIX EQUAL 0 OR
+   NOT DMGMD_CUDA_BIN_DIR STREQUAL "${DMGMD_CUDA_HOME}/bin")
+  message(FATAL_ERROR
+    "CUDA compiler/toolkit must come from CUDA_HOME. "
+    "Reload ../env/md-mpi.sh and use a fresh build directory. "
+    "Compiler='${CMAKE_CUDA_COMPILER}', toolkit='${CUDAToolkit_BIN_DIR}'"
+  )
+endif()
+
 find_package(MPI 3.1 REQUIRED COMPONENTS CXX)
 
 file(REAL_PATH "${MPI_CXX_COMPILER}" DMGMD_MPI_CXX_COMPILER)

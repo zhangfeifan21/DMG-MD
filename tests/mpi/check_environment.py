@@ -128,10 +128,13 @@ def validate_environment(
     component_path = Path(environment.get("OMPI_MCA_mca_base_component_path", "")).resolve()
     if component_path != (ompi_home / "lib" / "openmpi").resolve():
         raise EnvironmentError("Open MPI MCA component path does not match OMPI_HOME")
-    pmix_component_path = Path(
-        environment.get("PMIX_MCA_mca_base_component_path", "")
-    ).resolve()
-    if not pmix_component_path.is_dir():
+    # Bundled PMIx (the container stack) uses its compiled-in component path.
+    # Validate an external override when supplied; do not require Ubuntu's
+    # system PMIx layout for a self-contained Open MPI installation.
+    pmix_component_path = environment.get("PMIX_MCA_mca_base_component_path")
+    if pmix_component_path is not None and (
+        not pmix_component_path or not Path(pmix_component_path).is_dir()
+    ):
         raise EnvironmentError("PMIx MCA component path is missing or invalid")
 
     mpi_version = _run([str(mpiexec), "--version"], environment)

@@ -137,8 +137,11 @@ nep_N1_N2_shard_complete=false
 
 ## 通信后端
 
-唯一受支持的运行栈是由仓库同级 `env/md-mpi.sh` 选择的 Open MPI+UCX。脚本固定 UCX PML、
-Open MPI/PMIx component path，并排除 HCOLL；测试不得回退到 system MPI/UCX。
+唯一受支持的运行栈是由仓库同级 `env/md-mpi.sh` 选择的 Open MPI+UCX；容器将
+`docker/md-mpi.sh` 安装到 `/opt/dmgmd/env/md-mpi.sh` 并自动加载。脚本固定 UCX PML、
+Open MPI component path，并排除 HCOLL。外部 PMIx 显式指定其组件目录；容器内置 PMIx
+使用编译时目录。预检检查显式覆盖的目录，并仍执行真实 device-pointer 自检；测试不得回退
+到 system MPI/UCX。
 
 `HostStaged` 是默认及必需后端。每次 device collective 都严格执行：
 

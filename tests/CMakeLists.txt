@@ -25,7 +25,7 @@ add_test(
 )
 set_tests_properties(dmgmd.domain_neighbor_cuda PROPERTIES SKIP_RETURN_CODE 77)
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 add_test(
   NAME dmgmd.long_nve_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/long_nve/test_long_nve.py

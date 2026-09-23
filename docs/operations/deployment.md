@@ -3,7 +3,14 @@
 类别：操作手册。目标：单节点 NVIDIA GPU 服务器，重建同一源码与工具链后执行正确性门槛和
 benchmark。本手册不把尚未硬化的多节点运行当作已验证能力。
 
-## 推荐交付内容
+## Docker 交付（优先）
+
+跨服务器优先使用 [README 的 Docker 安装、构建、运行和验收步骤](../../README.md#docker-部署推荐跨服务器使用)。
+镜像统一 Ubuntu 22.04 / CUDA 12.8.0 用户态并包含 T4 架构。宿主机仍需兼容驱动和 NVIDIA
+Container Toolkit。镜像实测状态见 [Docker 验证记录](../status/docker-validation.md)。
+下文保留原生部署和 GPUMD 对照 benchmark 的操作方法；宿主机旧工具链不影响容器依赖。
+
+## 原生交付内容
 
 保持如下兄弟目录关系，可放在任意用户可写路径：
 
@@ -83,8 +90,8 @@ UCX 和 Open MPI 都需启用 CUDA；构建与能力检测依据
 
 Open MPI 的 PMIx、hwloc、libevent 必须避免加载成不一致版本，参见
 [Open MPI 依赖库说明](https://docs.open-mpi.org/en/v5.0.x/installing-open-mpi/required-support-libraries.html)。
-本项目现有预检要求显式且有效的 PMIx component path。外部 PMIx 与 Open MPI 内置 PMIx 的
-安装位置不同，**不能原样复制原服务器的 `/usr/lib/.../pmix2/lib/pmix`**。
+显式设置 PMIx component path 时，预检要求该目录有效；内置 PMIx 可不设置覆盖，使用编译时
+默认目录。两者安装位置不同，**不能原样复制原服务器的 `/usr/lib/.../pmix2/lib/pmix`**。
 
 ## 唯一环境入口
 
@@ -135,7 +142,7 @@ source ../env/md-mpi.sh
 ctest --test-dir build-benchmark --output-on-failure -E domain_neighbor_cuda
 
 # devices 换成实际可用设备；此门槛会真的启动 GPU/MPI 自检
-python3 tests/mpi/check_environment.py --candidate ./build-benchmark/dmg-md --devices 0,1
+python3 tests/mpi/check_environment.py --candidate ./build-benchmark/dmg-md --devices 0,1 --ranks 2
 
 # 单卡 golden 与 MPI 正确性测试；新服务器上先做这一步，再评估性能
 python3 tests/baseline/run_baselines.py --candidate ./build-benchmark/dmg-md --device 0
@@ -164,5 +171,5 @@ GPUMD 始终一个进程；不要 `srun -n8 gpumd`。DMG-MD 仍由已选择的 O
 新机验收完成标准是“环境自检 → 单卡数值 → 多卡数值 → benchmark smoke → pilot → 正式矩阵”，
 不能用编译成功替代运行验证。将不同服务器的曲线分别标注硬件和功率配置，不能混合求 speedup。
 
-可选容器适合统一用户空间，但仍依赖宿主驱动、GPU 分配与 IPC/共享内存权限；当前没有经过
-验收的容器镜像，本手册优先提供原生用户目录部署，不把容器命令列为已验证捷径。
+Docker 的构建和迁移入口已纳入仓库；目标 GPU 上的实际验收仍以报告为准，
+不把上游兼容声明或 CPU 测试结果当作 T4、多节点或性能验证。
