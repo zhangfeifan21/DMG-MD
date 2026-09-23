@@ -66,3 +66,55 @@ cmake -S . -B /tmp/dmgmd-mixed-cuda-negative \
 具备 Docker 权限后，执行 README 的构建命令和单/多 GPU 验收命令。必须先通过新镜像内的
 环境门槛，才能把新 Open MPI/UCX 组合称为运行兼容；还应在目标 T4 和 Ubuntu 22.04 服务器
 上保留实际结果。现有原生通过记录不代替新镜像、T4、跨节点或性能验收。
+
+## 2026-09-23：Ubuntu 22.04 / Python 3.10 构建测试修正
+
+用户在 Docker 构建的 `dmgmd.long_nve_analysis` 中报告碳模型哈希失败。原代码在
+`velocities()` 中用内置 `sum()` 计算质心；同一源码在本机 Python 3.10.6 得到用户报告的
+`904ac9df...`（base）和 `5eccc7d1...`（nightly），在 Python 3.12.3 得到 manifest 锁定的
+`e5e3ae72...` 和 `59dcd7aa...`。根因是 Python 3.12 的浮点 `sum()` 行为发生变化，
+见 [Python 官方文档](https://docs.python.org/3.12/library/functions.html#sum)。
+
+该函数改用 `math.fsum()` 计算总质量与加权速度，保留原有模型哈希和势函数数据。
+在原生 Ubuntu 24.04.2 主机上执行：
+
+```bash
+/usr/bin/python3.10 tests/long_nve/test_long_nve.py
+/usr/bin/python3.12 tests/long_nve/test_long_nve.py
+```
+
+两种解释器均为 23/23 通过。全部 90 个锁定哈希另按下面的命令逐一核对：
+
+```bash
+for md_python in /usr/bin/python3.10 /usr/bin/python3.12; do "$md_python" - <<'PY'
+import sys
+sys.path.insert(0, 'tests/long_nve')
+import long_nve_common as common
+manifest = common.load_manifest()
+for profile in ('base', 'nightly', 'release'):
+    for name in ('carbon_crystal', 'dense_water', 'batio3_zbl'):
+        case = (manifest['cases'][name] if profile == 'base' else
+                common.profile_case(manifest, profile, name))
+        for seed in range(10):
+            common.validate_generated_model(case, seed, common.generate_model(case, seed))
+print('PASS', sys.version.split()[0], '90 locked model hashes')
+PY
+done
+```
+
+两种解释器均为 90/90 通过。尚未在用户的 Docker 环境中重新构建镜像或运行 GPU 验收。
+
+## 2026-09-23：运行时解析器测试的临时文件权限
+
+用户报告镜像构建成功、单卡 `check_environment.py` 自检通过，但容器内完整 CTest 的
+`dmgmd.run_parser` 失败，报 `unsupported command 'dftd3'`；其余 6 项 CTest 通过。
+`run_parser_tests.cpp` 原来固定使用 `/tmp/dmgmd-run-parser-test.in`。构建阶段 root 运行
+CTest 后留下这个文件，内容是第二个解析器测试的 `dftd3` 命令；镜像运行阶段使用普通用户，
+无法覆盖 root 拥有的旧文件，第一个解析器测试遂读到旧内容。这是测试的临时文件问题，
+不是 `dftd3` 被错误接受或实际算例需要支持该命令。
+
+在当前原生环境中，用不可写的旧文件复现了完全相同的失败输出；改为每次用 `mkstemp`
+创建唯一文件、验证写入并在测试后清理。执行
+`cmake --build build --target dmgmd_run_parser_tests -j4` 和
+`ctest --test-dir build --output-on-failure -R '^dmgmd.run_parser$'`，结果通过；同一不可写
+旧文件仍存在时，新测试也通过且没有留下新文件。用户的镜像仍需同步源码、重新构建后验收。

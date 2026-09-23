@@ -12,6 +12,8 @@ seed 0–4，共 5 组。模型由
 `long_nve_common.py` 确定性生成，每一组完整 `model.xyz` 的 SHA-256 都保存在 manifest；运行器
 在启动任何 GPU 作业前重新生成并校验 base/nightly/release 三套几何的全部 90 个基础模型哈希。
 派生 compatibility case 继承对应基础模型的几何与哈希。
+初始速度的质心归零使用 `math.fsum`，确保 Ubuntu 22.04 的 Python 3.10 与 Python 3.12
+生成相同的模型文件；现有锁定哈希无需更改。
 
 base 几何只供 smoke 使用：
 

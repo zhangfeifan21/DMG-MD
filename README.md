@@ -45,6 +45,29 @@ sudo docker run --rm --gpus '"device=0"' nvidia/cuda:12.8.0-base-ubuntu22.04 nvi
 
 **成功标志：** 再次出现显卡信息表。成功后直接进入第 2 步。
 
+如果出现 `Unable to find image` 后又报告连接 `registry-1.docker.io` 失败，这是 Docker
+服务器无法从 Docker Hub 拉取这个测试镜像。你已有第一台服务器构建的 `dmgmd:cuda12.8`
+镜像时，不必从 Docker Hub 下载这个测试镜像：按后面的[镜像搬运步骤](#可选搬到另一台服务器省去重新编译)
+把 DMG-MD 镜像复制到 T4 服务器并导入，然后用它检查 GPU：
+
+```bash
+sudo docker run --rm --gpus '"device=0"' dmgmd:cuda12.8 nvidia-smi
+```
+
+看到 T4 显卡信息表即表示 Docker 可把显卡交给容器。之后直接跳到第 4 步检查 DMG-MD，
+无需在 T4 服务器重新执行第 2～3 步。若提示 `could not select device driver` 或
+`could not select device driver with capabilities: [[gpu]]`，请管理员在 T4 服务器安装并配置
+NVIDIA Container Toolkit；Docker Hub 的网络问题与显卡运行时配置是两项独立检查。
+
+如果需要直接从 Docker Hub 下载镜像，服务器管理员还须检查 Docker 服务自己的出网权限或代理。
+终端里的 `curl` 能联网，不一定表示 Docker 服务也能联网；参见[Docker 官方代理说明](https://docs.docker.com/engine/daemon/proxy/)。
+给 `docker run` 加 `--network=host` 不会修复镜像拉取，因为拉取由 Docker 服务完成。
+
+若 `sudo` 同时显示 `unable to resolve host <主机名>`，这是服务器主机名没有正确写入
+`/etc/hosts`。该提示本身没有阻止 `sudo` 执行；请管理员核对 `/etc/hostname` 和 `/etc/hosts`，
+确保 `/etc/hosts` 中有一行 `127.0.1.1 <主机名>`，其中名称与 `/etc/hostname` 完全一致。
+Docker Hub 的连接失败才是上面镜像下载中断的原因。
+
 如果失败，把下面这段话连同报错发给服务器管理员：
 
 > 我需要运行 DMG-MD 的 Docker 计算环境，使用 CUDA 12.8。请确认 NVIDIA 驱动 ≥570.26，
@@ -239,6 +262,8 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 | `out of memory` / `CUDA ... memory allocation` | 显存不足，先减小体系或确认显卡未被其他任务占用 |
 | `unsupported` | `run.in` 使用了当前尚未支持的命令，请对照支持范围调整 |
 | 自检失败，但显卡信息能正常显示 | 保存自检完整输出给维护者；显卡可见不代表计算环境全部正常 |
+| 构建时出现 `generated model hash mismatch` | 更新项目文件，确认 `tests/long_nve/long_nve_common.py` 是包含 `math.fsum` 的新版，然后重跑第 3 步 |
+| 容器自检报 `run parser test failure: unsupported command 'dftd3'` | 更新项目文件，确认 `tests/run_parser_tests.cpp` 包含 `mkstemp`，重新执行第 3 步构建镜像，再运行第 4 步自检 |
 
 ### 可选：用两张显卡计算
 

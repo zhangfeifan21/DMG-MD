@@ -285,9 +285,12 @@ def velocities(
         ]
         for atom, item in enumerate(atoms)
     ]
-    total_mass = sum(atom[4] for atom in atoms)
+    # Python 3.12 changed float sum() accumulation. Use the same compensated
+    # summation on 3.10 (Ubuntu 22.04) and 3.12 so locked model hashes agree.
+    total_mass = math.fsum(atom[4] for atom in atoms)
     center = [
-        sum(atom[4] * result[index][axis] for index, atom in enumerate(atoms)) / total_mass
+        math.fsum(atom[4] * result[index][axis] for index, atom in enumerate(atoms))
+        / total_mass
         for axis in range(3)
     ]
     for velocity in result:
