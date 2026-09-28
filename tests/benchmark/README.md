@@ -82,6 +82,13 @@ python3 tests/benchmark/run_benchmark.py --profile standard --output dmgmd-bench
 python3 tests/benchmark/run_benchmark.py --profile capacity --output dmgmd-bench-capacity
 ```
 
+`--output` 指定输出目录前缀，每次运行自动追加运行环境本地时间 `YYYYMMDD-HHMMSS`
+（年月日-时分秒）。例如 `--output dmgmd-bench-smoke` 会生成
+`dmgmd-bench-smoke-20260924-153045/`；同一秒重名时再追加 `-1`、`-2` 等序号，
+不会覆盖之前的结果或因已有结果目录而失败。不指定时使用仓库根目录下的
+`dmgmd-benchmark` 前缀。启动时打印实际输出路径；`--dry-run` 不创建目录。
+Docker 中的时间以容器时区为准。
+
 若用快速部署脚本构建，每条运行命令加上：
 
 ```text
@@ -92,6 +99,70 @@ python3 tests/benchmark/run_benchmark.py --profile capacity --output dmgmd-bench
 使用相同 CUDA/GCC/架构与 Release 选项，保留构建日志。运行器检查参考 checkout commit、
 保存二进制 SHA-256，但不能仅凭旧二进制推断其一定来自该 checkout。其他 reference 路径也必须
 保留同级锁定 `gpumd-reference` 源码用于审计。
+
+### 在 Docker 中构建并运行
+
+仓库镜像 `dmgmd:cuda12.8` 自带编译工具、MPI/CUDA 环境和 DMG-MD 的常规 `build/`，但镜像构建时
+没有包含同级的 `gpumd-reference`。要做 GPUMD 对比，需把宿主机上包含 `newmd` 和
+`gpumd-reference` 两个目录的父目录挂载到容器；下面的命令假设你当前位于 `newmd` 根目录，
+目录布局为 `../newmd` 和 `../gpumd-reference`，且镜像已准备好。
+
+benchmark 构建脚本使用容器内的 `git` 检查参考版本。若运行时报 `git: command not found`，说明
+本机镜像早于 Git 依赖更新；在 `newmd` 根目录用当前 Dockerfile 重建镜像（需要构建机可访问镜像
+构建所需的下载站点），再运行下面的命令：
+
+```bash
+docker build --build-arg BUILD_JOBS=4 \
+  --build-arg DMGMD_UID="$(id -u)" --build-arg DMGMD_GID="$(id -g)" \
+  -t dmgmd:cuda12.8 .
+```
+
+以下示例把宿主机 GPU 0、1 分配给容器。在容器内它们会显示为设备 0、1；benchmark 的
+`--devices` 应填写容器内编号。该命令先在容器内重新构建两边的 Release 可执行文件，再运行
+两卡 smoke 矩阵，结果写入宿主机的 `newmd/dmgmd-bench-docker-smoke-YYYYMMDD-HHMMSS/`：
+
+```bash
+docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 \
+  -v "$PWD/..:/workspace" \
+  -w /workspace/newmd \
+  dmgmd:cuda12.8 bash -c '
+    set -e
+    MD_ENV_FILE=/opt/dmgmd/env/md-mpi.sh bash scripts/build_benchmark.sh 89 8
+    python3 tests/benchmark/run_benchmark.py --profile smoke \
+      --devices 0,1 --ranks 1,2 \
+      --candidate ./build-benchmark/dmg-md \
+      --reference ./build-benchmark-gpumd/gpumd \
+      --output dmgmd-bench-docker-smoke
+  '
+```
+
+`scripts/build_benchmark.sh` 会检查 `../gpumd-reference` 是否位于锁定 commit
+`9d23496e41319b9e2af5221a7df6285387401d1e` 且没有已跟踪文件修改；检查不通过时先切换到干净的
+参考 checkout。构建产物分别放在 `build-benchmark/` 和 `build-benchmark-gpumd/`，不会覆盖常规
+`build/`。参数 `89 8` 分别表示 CUDA 架构和编译并行度；按目标 GPU/工具链选择架构。
+
+常见 NVIDIA GPU 的 Compute Capability 与 `scripts/build_benchmark.sh` 第一个参数对应如下。
+参数写法是把 Compute Capability 的点去掉，例如 `8.9` 写成 `89`，用于生成对应的 `sm_89` 代码：
+
+| GPU 示例 | Compute Capability | 构建参数 / SM |
+|---|---:|---:|
+| GeForce RTX 5090、RTX PRO Blackwell | 12.0 | `120` / `sm_120` |
+| NVIDIA B200、GB200 | 10.0 | `100` / `sm_100` |
+| NVIDIA H100、H200、GH200 | 9.0 | `90` / `sm_90` |
+| GeForce RTX 4090、RTX 4080；NVIDIA L4、L40、L40S | 8.9 | `89` / `sm_89` |
+| NVIDIA A100、A30 | 8.0 | `80` / `sm_80` |
+| NVIDIA A10、A40、A16；GeForce RTX 3090、RTX 3080 | 8.6 | `86` / `sm_86` |
+| NVIDIA T4；GeForce RTX 2080 系列 | 7.5 | `75` / `sm_75` |
+| NVIDIA V100 | 7.0 | `70` / `sm_70` |
+
+例如 RTX 5090 可运行 `bash scripts/build_benchmark.sh 120 8`。构建机上的 CUDA Toolkit 和
+NVCC 必须支持目标架构；较旧的 GPU 架构也可能已被当前 Toolkit 移除。以上型号和版本依据
+[NVIDIA CUDA GPU Compute Capability 列表](https://developer.nvidia.com/cuda/gpus)及其
+[旧款 GPU 列表](https://developer.nvidia.com/cuda/gpus/legacy)，具体型号请按该表核对。
+
+只用一张卡时，将 Docker 的 `--gpus` 改为 `--gpus '"device=0"'`，并将 benchmark 参数改为
+`--devices 0 --ranks 1`。确认 smoke 通过、并完成所需正确性验收后，可把 `--profile smoke`
+换成 `pilot` 或 `standard`，并相应更改 `--output`；standard 是长时间正式矩阵，建议在独占节点运行。
 
 standard/capacity 默认预热 200、正式 1000 步、3 次重复，单 trial 正式段须 ≥10 s；这些是起点，
 不是保证足够的时长。用 pilot 的最快 ms/step，按 `steps >= 10000 / ms_per_step` 选正式步数，
@@ -114,13 +185,12 @@ python3 tests/benchmark/run_benchmark.py --profile standard \
 
 ## 共享服务器与可审计输出
 
-启动前与每 trial 前检查所选 GPU 的计算进程、已用显存、利用率；有进程即停止，不终止他人任务。
-默认允许 ≤256 MiB 显存、≤10% 利用率的无计算进程背景；阈值可调，但进程检查不能绕过。
+由使用者自行选择空闲服务器。脚本不查询 GPU 计算进程，也不根据已用显存或利用率阻止运行，
+不再提供 `--idle-memory-mib`、`--idle-util-percent` 参数。
 采用 nvidia-smi 物理索引解析成完整 UUID，再写入 CUDA_VISIBLE_DEVICES，避免 CUDA 顺序歧义。
 
-每 2 s 采样温度、功耗、SM/显存时钟、利用率、显存和计算 PID，并追踪启动进程的父子关系排除自身（MPI rank 可能自建进程组）；检测到
-外来 GPU 进程的 trial 标记 contaminated，保留但不纳入汇总。采样不能证明没有短暂干扰，也
-不能排除 CPU/内存/PCIe/磁盘竞争，因此正式结果仍需调度器独占节点/预留时段。脚本不改 GPU
+每 2 s 采样温度、功耗、SM/显存时钟、利用率和显存，仅作为遥测记录，不据此判定 GPU 忙碌或
+将 trial 标记为 contaminated。正式结果的环境独占性由使用者保证。脚本不改 GPU
 功率或锁频，不把 CUDA-aware 等同于 GPUDirect P2P 实际可用；4090 的传输能力以实测拓扑和
 UCX 路径为准。若通过其他工具锁频/设置功率，双方保持一致并附命令和恢复方案。
 
@@ -128,7 +198,7 @@ UCX 路径为准。若通过其他工具锁频/设置功率，双方保持一致
   生成器哈希、MPI/UCX/CUDA、CPU、拓扑、完整 GPU 配置和相关环境变量。
 - `preflight.txt`：现有 MPI/CUDA 门槛，实际 device-buffer collective/p2p 自检；失败不启动矩阵。
 - `inputs/`：可复现初态和势；每 trial 有 `run.in`、输入哈希、stdout/stderr、telemetry、结果 JSON。
-- `results.json`：包括失败、OOM（查看原始 stderr）、超时、受干扰和过短 trial。
+- `results.json`：包括失败、OOM（查看原始 stderr）、超时和过短 trial。
 - `summary.{json,csv,md}`：只汇总有效样本，提供 min/median/max、相对范围、样本数和完成标记。
   只有重复次数完整的行与基线才能计算性能比。
 

@@ -10,6 +10,34 @@ benchmark。本手册不把尚未硬化的多节点运行当作已验证能力�
 Container Toolkit。镜像实测状态见 [Docker 验证记录](../status/docker-validation.md)。
 下文保留原生部署和 GPUMD 对照 benchmark 的操作方法；宿主机旧工具链不影响容器依赖。
 
+### PMIx 压缩库警告导致 domain 验收失败
+
+若环境预检显示 PASS，但 domain 测试在 `lattice: P=1 oracle failed` 后只打印
+`PMIx was unable to find a usable compression library`，该警告已足以触发失败：
+`run_mpi_domain.py` 同时要求退出码为零和 stderr 为空，而环境预检允许 stderr 警告。
+这段报错本身不能证明数值不一致，也不能证明 P=1 的退出码为零。
+
+现有镜像可仅关闭这条可选压缩功能警告后重跑，其他错误及数值检查仍然生效：
+
+```bash
+docker run --rm --gpus '"device=0,1,2,3"' --shm-size=1g --ulimit memlock=-1:-1 \
+  -e PMIX_MCA_pcompress_base_silence_warning=1 \
+  -w /opt/dmgmd/newmd dmgmd:cuda12.8 bash -c '
+set -e
+python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4
+python3 tests/mpi/run_mpi_domain.py --candidate ./build/dmg-md --devices 0,1,2,3
+'
+```
+
+源码构建的修复是在编译 Open MPI / 内置 PMIx **之前**安装 `zlib1g-dev`，Dockerfile
+已加入该依赖。[Open MPI 官方说明](https://docs.open-mpi.org/en/v5.0.1/news/news-v5.0.x.html)
+指出仅有 zlib 运行库不足以启用编译时支持。修改源码不会更新已导入的旧镜像；需要在具备
+构建网络的服务器重建镜像，再导出和导入。不要只在宿主机安装 zlib。
+
+如仍失败，需检查完整 `execution.stdout` 和 `execution.stderr`。脚本保留的工作目录位于
+容器 `/tmp`，`docker run --rm` 退出后会随容器删除；排查时可绑定宿主机目录到容器
+`/tmp`，保存日志后再分析。
+
 ## 原生交付内容
 
 保持如下兄弟目录关系，可放在任意用户可写路径：

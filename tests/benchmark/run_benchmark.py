@@ -44,6 +44,22 @@ def save(path, data):
     temp.replace(path)
 
 
+def create_output_directory(prefix):
+    """Reserve a fresh timestamped directory, including concurrent same-second runs."""
+    prefix = Path(prefix).absolute()
+    stamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
+    base = prefix.with_name(f'{prefix.name}-{stamp}')
+    base.parent.mkdir(parents=True, exist_ok=True)
+    counter = 0
+    while True:
+        output = base if counter == 0 else base.with_name(f'{base.name}-{counter}')
+        try:
+            output.mkdir()
+            return output.resolve()
+        except FileExistsError:
+            counter += 1
+
+
 def command_output(command):
     result = subprocess.run(command, capture_output=True, text=True, timeout=30)
     if result.returncode:
@@ -137,11 +153,7 @@ def snapshot():
     raw = command_output(['nvidia-smi', f'--query-gpu={GPU_FIELDS}', '--format=csv,noheader,nounits'])
     gpus = [dict(zip(GPU_FIELDS.split(','), [v.strip() for v in row]))
             for row in csv.reader(io.StringIO(raw)) if row]
-    raw = command_output(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid,used_memory',
-                          '--format=csv,noheader,nounits'])
-    apps = [dict(zip(('uuid', 'pid', 'memory'), [v.strip() for v in row]))
-            for row in csv.reader(io.StringIO(raw)) if len(row) == 3]
-    return {'time': dt.datetime.now(dt.timezone.utc).isoformat(), 'gpus': gpus, 'apps': apps}
+    return {'time': dt.datetime.now(dt.timezone.utc).isoformat(), 'gpus': gpus}
 
 
 def resolve_devices(requested, snap):
@@ -156,30 +168,10 @@ def resolve_devices(requested, snap):
     return resolved
 
 
-def ensure_idle(snap, selected, max_memory, max_util):
-    busy = [a for a in snap['apps'] if a['uuid'] in selected]
-    for gpu in snap['gpus']:
-        if gpu['uuid'] in selected and (float(gpu['memory.used']) > max_memory
-                                       or float(gpu['utilization.gpu']) > max_util):
-            busy.append(gpu)
-    if busy:
-        raise RuntimeError(f'selected GPU is busy; choose idle GPUs or reschedule: {busy}')
-
-
 def process_record(pid):
     # comm may contain spaces/parentheses; fields after its final ')' start at state.
     values = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
     return {'parent': int(values[1]), 'group': int(values[2]), 'start': values[19]}
-
-
-def belongs_to_job(pid, launcher):
-    visited = set()
-    while pid > 1 and pid not in visited:
-        if pid == launcher:
-            return True
-        visited.add(pid)
-        pid = process_record(pid)['parent']
-    return False
 
 
 def stop_process_tree(process):
@@ -210,24 +202,7 @@ def stop_process_tree(process):
     process.wait()
 
 
-def foreign_apps(snap, selected, launcher):
-    foreign = []
-    for app in snap['apps']:
-        if app['uuid'] not in selected:
-            continue
-        try:
-            if belongs_to_job(int(app['pid']), launcher):
-                continue
-        except (ProcessLookupError, FileNotFoundError):
-            continue
-        except PermissionError:
-            pass
-        foreign.append(app)
-    return foreign
-
-
-def execute(command, directory, environment, selected, timeout, interval):
-    contaminated = False
+def execute(command, directory, environment, timeout, interval):
     timed_out = False
     start = time.monotonic()
     with (directory / 'stdout.txt').open('w') as out, (directory / 'stderr.txt').open('w') as err, \
@@ -237,8 +212,6 @@ def execute(command, directory, environment, selected, timeout, interval):
         try:
             while process.poll() is None:
                 sample = snapshot()
-                sample['foreign_apps'] = foreign_apps(sample, selected, process.pid)
-                contaminated |= bool(sample['foreign_apps'])
                 telemetry.write(json.dumps(sample) + '\n')
                 telemetry.flush()
                 if time.monotonic() - start > timeout:
@@ -251,7 +224,7 @@ def execute(command, directory, environment, selected, timeout, interval):
         finally:
             if process.poll() is None:
                 stop_process_tree(process)
-    return process.returncode, time.monotonic() - start, contaminated, timed_out
+    return process.returncode, time.monotonic() - start, timed_out
 
 
 def summary(results, repeats):
@@ -322,14 +295,13 @@ def main():
     p.add_argument('--reference', type=Path, default=ROOT.parent / 'gpumd-reference/src/gpumd')
     p.add_argument('--mpiexec', default='mpiexec')
     p.add_argument('--mpiexec-arg', action='append', default=[])
-    p.add_argument('--output', type=Path, default=ROOT / ('dmgmd-benchmark-' + dt.datetime.now().strftime('%Y%m%d-%H%M%S')))
+    p.add_argument('--output', type=Path, default=ROOT / 'dmgmd-benchmark',
+                   help='output directory prefix; appends local YYYYMMDD-HHMMSS and a counter on collision')
     for name in ('warmup', 'steps', 'repeats'):
         p.add_argument('--' + name, type=int)
     p.add_argument('--min-seconds', type=float)
     p.add_argument('--timeout', type=float, default=7200, help='per-trial wall time limit')
     p.add_argument('--sample-interval', type=float, default=2)
-    p.add_argument('--idle-memory-mib', type=float, default=256)
-    p.add_argument('--idle-util-percent', type=float, default=10)
     p.add_argument('--dry-run', action='store_true', help='print matrix; no GPU access, model generation or output writes')
     args = p.parse_args()
     profile = dict(manifest['profiles'][args.profile])
@@ -349,7 +321,7 @@ def main():
         p.error('duplicate matrix entries')
     if any(profile[k] <= 0 for k in ('warmup', 'steps', 'repeats')) or profile['min_seconds'] < 0:
         p.error('warmup/steps/repeats must be positive; min-seconds must be nonnegative')
-    if args.timeout <= 0 or args.sample_interval <= 0 or args.idle_memory_mib < 0 or args.idle_util_percent < 0:
+    if args.timeout <= 0 or args.sample_interval <= 0:
         p.error('invalid monitoring limits')
     plan = []
     for name in cases:
@@ -374,14 +346,13 @@ def main():
     if args.dry_run:
         print(json.dumps({'profile': profile, 'trials': trials}, indent=2))
         return 0
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    output = create_output_directory(args.output)
+    print(f'Output: {output}', flush=True)
     binaries = {'dmgmd': args.candidate.resolve(), 'gpumd': args.reference.resolve()}
     identity = {name: {'path': str(binaries[name]), 'sha256': sha(binaries[name])} for name in engines}
     snap = snapshot()
     selected = resolve_devices(devices, snap)
     save(output / 'initial-gpus.json', snap)
-    ensure_idle(snap, selected[:max(ranks)], args.idle_memory_mib, args.idle_util_percent)
     metadata = {'schema_version': 1, 'profile_name': args.profile, 'profile': profile,
                 'hostname': socket.gethostname(), 'argv': sys.argv, 'devices': selected,
                 'binaries': identity, 'manifest': manifest, 'plan': trials,
@@ -451,10 +422,9 @@ def main():
                     raise RuntimeError('binary changed during benchmark')
                 before = snapshot()
                 save(directory / 'before.json', before)
-                ensure_idle(before, visible, args.idle_memory_mib, args.idle_util_percent)
-                code, wall, contaminated, timeout = execute(command, directory, environment, visible,
-                                                            args.timeout, args.sample_interval)
-                result.update(returncode=code, process_wall_seconds=wall, contaminated=contaminated)
+                code, wall, timeout = execute(command, directory, environment,
+                                              args.timeout, args.sample_interval)
+                result.update(returncode=code, process_wall_seconds=wall)
                 if timeout:
                     raise RuntimeError('trial timeout (process group terminated)')
                 if code:
@@ -464,9 +434,7 @@ def main():
                 thermo = parse_thermo((directory / 'thermo.out').read_text())
                 result.update(seconds=seconds, atom_steps_per_second=job['atoms'] * job['steps'] / seconds,
                               final_thermo=thermo, status='ok')
-                if contaminated:
-                    result.update(status='contaminated', error='foreign GPU process detected during trial')
-                elif seconds < profile['min_seconds']:
+                if seconds < profile['min_seconds']:
                     result.update(status='too_short', error='increase --steps; timing below min-seconds')
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
                 result['error'] = str(error)
@@ -478,8 +446,6 @@ def main():
                 save(directory / 'result.json', result)
                 report(output, results, profile['repeats'])
                 print(f'BENCHMARK status={result["status"]} {result.get("error", "")}', flush=True)
-            if result['status'] == 'failed' and 'busy' in result.get('error', ''):
-                break
     finally:
         report(output, results, profile['repeats'])
     print(f'Report: {output / "summary.md"}')

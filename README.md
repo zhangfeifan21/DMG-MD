@@ -6,11 +6,15 @@ DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读�
 **第一次使用，请按下面的第 1～6 步操作。** Docker 可以理解为装好程序和配套软件的
 “计算环境包”：准备好服务器后，一条命令就能调用它进行计算，无需逐个安装 CUDA、MPI 等依赖。
 
+查看项目目前已实现和验证的功能：
+[开发进度与验证结果](docs/status/current.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
+
 ## Docker 部署（推荐跨服务器使用）
 
-本指南面向 Ubuntu 22.04 / 24.04、Intel/AMD 64 位 CPU、NVIDIA 显卡服务器，包含 Tesla T4。
-示例先使用一张显卡；多卡操作放在后面。新镜像和 T4 实机仍待验收，
-[当前验证记录](docs/status/docker-validation.md) 如实列出了已完成与未完成的检查。
+本指南适用于 Ubuntu 22.04 / 24.04、Intel/AMD 64 位 CPU 和 NVIDIA GPU 的新服务器。
+默认镜像包含 `sm_75`、`sm_80`、`sm_86`、`sm_89`、`sm_90` GPU 架构；实际显卡须与其中一个匹配。
+命令先以一张 GPU 为例，多卡操作见后文。Docker 镜像和目标服务器的验证状态见
+[验证记录](docs/status/docker-validation.md)。
 
 ### 开始前：这些命令在哪里输入？
 
@@ -19,7 +23,8 @@ DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读�
 
 - 按顺序复制每个代码框的全部内容，粘贴后按回车；代码框中的 `#` 开头行是说明。
 - 多行命令末尾的 `\` 表示“下一行接着这一行”，复制时保留它。
-- `sudo` 表示使用管理员权限。提示密码时输入服务器登录密码；输入时不显示字符是正常的。
+- 下方日常命令以当前登录账号执行；该账号须已获准访问 Docker 服务及分配给它的 GPU。
+  若出现 `permission denied`，请联系管理员开通访问，不要改用 root 账号运行计算。
 - **任意一步出现报错，先解决该步，再继续。** 下方有常见问题表。
 
 如果你使用课题组共享服务器或超算，请先向管理员确认允许使用 Docker，并分配一张显卡。
@@ -40,7 +45,7 @@ nvidia-smi
 然后复制以下命令，检查 Docker 能否使用显卡。第一次可能需要等待下载：
 
 ```bash
-sudo docker run --rm --gpus '"device=0"' nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus '"device=0"' nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 ```
 
 **成功标志：** 再次出现显卡信息表。成功后直接进入第 2 步。
@@ -48,24 +53,24 @@ sudo docker run --rm --gpus '"device=0"' nvidia/cuda:12.8.0-base-ubuntu22.04 nvi
 如果出现 `Unable to find image` 后又报告连接 `registry-1.docker.io` 失败，这是 Docker
 服务器无法从 Docker Hub 拉取这个测试镜像。你已有第一台服务器构建的 `dmgmd:cuda12.8`
 镜像时，不必从 Docker Hub 下载这个测试镜像：按后面的[镜像搬运步骤](#可选搬到另一台服务器省去重新编译)
-把 DMG-MD 镜像复制到 T4 服务器并导入，然后用它检查 GPU：
+把 DMG-MD 镜像复制到新服务器并导入，然后用它检查 GPU：
 
 ```bash
-sudo docker run --rm --gpus '"device=0"' dmgmd:cuda12.8 nvidia-smi
+docker run --rm --gpus '"device=0"' dmgmd:cuda12.8 nvidia-smi
 ```
 
-看到 T4 显卡信息表即表示 Docker 可把显卡交给容器。之后直接跳到第 4 步检查 DMG-MD，
-**不要在 T4 上执行第 3 步的 `docker build`**。你已经有可运行的镜像，直接复制第 4 步
-那条以 `sudo docker run` 开头的自检命令。若提示 `could not select device driver` 或
-`could not select device driver with capabilities: [[gpu]]`，请管理员在 T4 服务器安装并配置
+看到新服务器的显卡信息表即表示 Docker 可把显卡交给容器。之后直接跳到第 4 步检查 DMG-MD，
+**不要在新服务器上执行第 3 步的 `docker build`**。你已经有可运行的镜像，直接复制第 4 步
+那条以 `docker run` 开头的自检命令。若提示 `could not select device driver` 或
+`could not select device driver with capabilities: [[gpu]]`，请管理员在新服务器安装并配置
 NVIDIA Container Toolkit；Docker Hub 的网络问题与显卡运行时配置是两项独立检查。
 
 如果需要直接从 Docker Hub 下载镜像，服务器管理员还须检查 Docker 服务自己的出网权限或代理。
 终端里的 `curl` 能联网，不一定表示 Docker 服务也能联网；参见[Docker 官方代理说明](https://docs.docker.com/engine/daemon/proxy/)。
 给 `docker run` 加 `--network=host` 不会修复镜像拉取，因为拉取由 Docker 服务完成。
 
-若 `sudo` 同时显示 `unable to resolve host <主机名>`，这是服务器主机名没有正确写入
-`/etc/hosts`。该提示本身没有阻止 `sudo` 执行；请管理员核对 `/etc/hostname` 和 `/etc/hosts`，
+若运行 Docker 命令时同时显示 `unable to resolve host <主机名>`，这是服务器主机名没有正确写入
+`/etc/hosts`。该提示通常不影响命令继续执行；请管理员核对 `/etc/hostname` 和 `/etc/hosts`，
 确保 `/etc/hosts` 中有一行 `127.0.1.1 <主机名>`，其中名称与 `/etc/hostname` 完全一致。
 Docker Hub 的连接失败才是上面镜像下载中断的原因。
 
@@ -79,7 +84,7 @@ Docker Hub 的连接失败才是上面镜像下载中断的原因。
 <summary>我是管理员 / 我有管理权限：展开查看首次安装命令</summary>
 
 以下命令由有管理权限的人在服务器上执行，适用于 Ubuntu 22.04/24.04。
-已有 Docker Engine 时跳过第一组安装命令。若装有发行版 `docker.io` / `containerd` 等冲突包，
+以下 `sudo` 只用于管理员安装软件和修改系统配置，普通用户日常运行 Docker 命令时不要加 `sudo`。已有 Docker Engine 时跳过第一组安装命令。若装有发行版 `docker.io` / `containerd` 等冲突包，
 先按 [Docker 官方说明](https://docs.docker.com/engine/install/ubuntu/) 处理，不要在运行服务时直接替换。
 
 ```bash
@@ -109,7 +114,7 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 # 在允许重启 Docker 服务的维护窗口执行
 sudo systemctl restart docker
-sudo docker run --rm --gpus '"device=0"' nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus '"device=0"' nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 ```
 
 
@@ -139,7 +144,7 @@ ls Dockerfile README.md
 保持在第 2 步的文件夹内，完整复制下面的命令。最后的英文句点 `.` 也要保留。
 
 ```bash
-sudo docker build --build-arg BUILD_JOBS=4 \
+docker build --build-arg BUILD_JOBS=4 \
   --build-arg DMGMD_UID="$(id -u)" --build-arg DMGMD_GID="$(id -g)" \
   -t dmgmd:cuda12.8 .
 ```
@@ -151,7 +156,7 @@ sudo docker build --build-arg BUILD_JOBS=4 \
 结束后复制：
 
 ```bash
-sudo docker image inspect dmgmd:cuda12.8 --format '{{.Id}}'
+docker image inspect dmgmd:cuda12.8 --format '{{.Id}}'
 ```
 
 **成功标志：** 安装命令没有报错，检查命令显示以 `sha256:` 开头的一长串字符。
@@ -164,7 +169,7 @@ sudo docker image inspect dmgmd:cuda12.8 --format '{{.Id}}'
 完整复制即可；**其中 `--devices 0` 表示选中的显卡在容器内部的编号，不随外面的 GPU 编号修改。**
 
 ```bash
-sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
   -w /opt/dmgmd/newmd dmgmd:cuda12.8 bash -c '
     set -e
     python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0 --ranks 1
@@ -183,8 +188,7 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 碳体系的结构、计算设置和对应 NEP 势；每次都会生成新文件夹，不会覆盖已有结果。
 
 ```bash
-mkdir -p "$HOME/dmgmd-runs"
-case_dir=$(mktemp -d "$HOME/dmgmd-runs/carbon-XXXXXX")
+case_dir=$(mktemp -d ./carbon-XXXXXX)
 cp tests/baseline/inputs/single_large_nve/model.xyz "$case_dir/"
 cp tests/baseline/inputs/single_large_nve/run.in "$case_dir/"
 cp tests/baseline/inputs/potentials/nep_C.txt "$case_dir/nep.txt"
@@ -195,7 +199,7 @@ pwd
 最后一行显示本次计算文件夹的完整路径，建议记下来。接着运行：
 
 ```bash
-sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
   -v "$PWD:/work" dmgmd:cuda12.8
 ```
 
@@ -214,12 +218,15 @@ head thermo.out
 
 ### 第 6 步：换成自己的材料体系（日常操作）
 
-为每个新任务单独建立一个文件夹。例如：
+先进入你有写入权限、准备存放计算结果的位置，再在**当前目录**创建本次算例文件夹。
+例如：
 
 ```bash
-mkdir -p ~/dmgmd-runs/my-sample
-cd ~/dmgmd-runs/my-sample
+mkdir ./my-sample
+cd ./my-sample
 ```
+
+如果 `my-sample` 已存在，请换一个文件夹名称，避免混入旧结果。
 
 通过你常用的文件传输软件，将以下三个文件放进去：
 
@@ -241,7 +248,7 @@ ls model.xyz run.in nep.txt
 确认列出了三个文件；如果提示缺少文件，先补齐。然后执行：
 
 ```bash
-sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
   -v "$PWD:/work" dmgmd:cuda12.8
 ```
 
@@ -252,7 +259,7 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 
 | 提示或现象 | 处理方法 |
 | --- | --- |
-| `sudo` 无权限 / `not in the sudoers file` | 请管理员完成安装并提供 Docker 使用权限；如果账号已获准直接运行 Docker，可去掉命令开头的 `sudo` |
+| `permission denied`（提到 Docker socket） | 当前账号没有 Docker 访问权限；联系管理员开通，不要切换到 root 账号运行计算 |
 | `docker: command not found` | 尚未安装 Docker，回到第 1 步的管理员安装说明 |
 | 无法连接 Docker / `permission denied`（提到 `docker.sock`） | 请管理员检查 Docker 服务和你的访问权限 |
 | `could not select device driver` / `unknown or invalid runtime` | 请管理员安装、配置 NVIDIA Container Toolkit，并重新执行第 1 步检查 |
@@ -266,7 +273,7 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 | 自检失败，但显卡信息能正常显示 | 保存自检完整输出给维护者；显卡可见不代表计算环境全部正常 |
 | 构建时出现 `generated model hash mismatch` | 更新项目文件，确认 `tests/long_nve/long_nve_common.py` 是包含 `math.fsum` 的新版，然后重跑第 3 步 |
 | 容器自检报 `run parser test failure: unsupported command 'dftd3'` | 更新项目文件，确认 `tests/run_parser_tests.cpp` 包含 `mkstemp`，重新执行第 3 步构建镜像，再运行第 4 步自检 |
-| 导入镜像后误执行 `docker build`，报 `resolve image config for docker.io/docker/dockerfile:1` 或 `403 Forbidden` | 不要在 T4 上重建；直接运行第 4 步的自检命令。若确实需要从源码构建，构建服务器需能访问 Docker Hub 及其他构建依赖 |
+| 导入镜像后误执行 `docker build`，报 `resolve image config for docker.io/docker/dockerfile:1` 或 `403 Forbidden` | 不要在新服务器上重建；直接运行第 4 步的自检命令。若确实需要从源码构建，构建服务器需能访问 Docker Hub 及其他构建依赖 |
 
 ### 可选：用两张显卡计算
 
@@ -274,7 +281,7 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 在**自己的算例文件夹**中执行。先检查两卡环境：
 
 ```bash
-sudo docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 \
   -w /opt/dmgmd/newmd dmgmd:cuda12.8 \
   python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1 --ranks 2
 ```
@@ -282,7 +289,7 @@ sudo docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 
 出现 `PASS environment` 后，再运行：
 
 ```bash
-sudo docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 \
   -v "$PWD:/work" dmgmd:cuda12.8 mpiexec -n 2 dmg-md
 ```
 
@@ -293,10 +300,10 @@ sudo docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 
 
 ### 可选：搬到另一台服务器，省去重新编译
 
-请管理员在目标服务器完成第 1 步。原服务器执行：
+请管理员先确认目标服务器已经安装并配置 Docker 和 NVIDIA Container Toolkit。旧服务器执行：
 
 ```bash
-sudo docker save dmgmd:cuda12.8 | gzip > dmgmd-cuda12.8.tar.gz
+docker save dmgmd:cuda12.8 | gzip > dmgmd-cuda12.8.tar.gz
 sha256sum dmgmd-cuda12.8.tar.gz
 ```
 
@@ -310,7 +317,7 @@ sha256sum dmgmd-cuda12.8.tar.gz
 两台服务器的校验码应完全相同；不一致时重新传输。确认一致后再导入：
 
 ```bash
-gzip -dc dmgmd-cuda12.8.tar.gz | sudo docker load
+gzip -dc dmgmd-cuda12.8.tar.gz | docker load
 ```
 
 导入完成后重新执行第 4 步自检。自己的算例文件夹需要另外复制。
@@ -321,11 +328,11 @@ gzip -dc dmgmd-cuda12.8.tar.gz | sudo docker load
 
 ### 进阶验收（维护者 / 正式多卡研究）
 
-四卡节点在容器内先运行 `check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4`，
+已分配四张 GPU 的服务器在容器内先运行 `check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4`，
 通过后运行 `run_mpi_domain.py`。可在服务器直接完整复制下列命令（需已分配 0～3 号卡）：
 
 ```bash
-sudo docker run --rm --gpus '"device=0,1,2,3"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0,1,2,3"' --shm-size=1g --ulimit memlock=-1:-1 \
   -w /opt/dmgmd/newmd dmgmd:cuda12.8 bash -c '
     set -e
     python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4
@@ -336,7 +343,7 @@ sudo docker run --rm --gpus '"device=0,1,2,3"' --shm-size=1g --ulimit memlock=-1
 单卡长程 smoke 命令：
 
 ```bash
-sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
+docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
   -w /opt/dmgmd/newmd dmgmd:cuda12.8 \
   python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --profile smoke
 ```
@@ -350,8 +357,7 @@ sudo docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 
 ### 依赖选择与兼容边界
 
-Dockerfile 固定以下基线，目标是 **Linux x86_64、Ubuntu 22.04/24.04 宿主机、T4 到
-Hopper GPU**。这是依据上游支持范围选定的组合；编译成功不等于目标机数值验收通过，
+Dockerfile 固定以下基线，适用于 Linux x86_64 主机（包括 Ubuntu 22.04/24.04）和 NVIDIA GPU。镜像默认编入 `sm_75`、`sm_80`、`sm_86`、`sm_89`、`sm_90` 五种 GPU 架构；这是依据上游支持范围选定的组合。编译成功不等于目标机数值验收通过，
 每台机器还须执行下方自检。当前验证情况见 [Docker 验证记录](docs/status/docker-validation.md)。
 
 | 组件 | 镜像内版本 / 配置 | 选择原因 |
@@ -363,7 +369,7 @@ Hopper GPU**。这是依据上游支持范围选定的组合；编译成功不�
 | Open MPI | 5.0.10，CUDA + UCX PML | 延续原项目 MPI 版本；与 UCX 一起源码编译 |
 | PMIx / PRRTE / hwloc / libevent | Open MPI 发行包内置版本 | 避免依赖不同宿主机的 PMIx ABI 和组件目录 |
 | Python | Ubuntu 22.04 的 3.10 | 仅用于测试和构建工具，不安装 PyTorch 等框架 |
-| GPU 代码 | `75;80;86;89;90` | 包含 T4 的原生 `sm_75`，以及 Ampere/Ada/Hopper |
+| GPU 代码 | `75;80;86;89;90` | 覆盖对应的 Turing/Ampere/Ada/Hopper GPU 架构 |
 
 宿主机只需 NVIDIA 驱动、Docker Engine、NVIDIA Container Toolkit；无需安装或降级宿主机
 CUDA、GCC、MPI。容器共享宿主机内核和驱动，不能消除驱动限制。此方案采用 CUDA 12.8 GA 的
@@ -373,7 +379,7 @@ Linux 原生驱动基线 **≥570.26**；如果 `nvidia-smi` 显示 CUDA 12.8，
 
 依据：[CUDA 12.8 驱动表](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/)、
 [CUDA 12.8 Linux/编译器支持](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-installation-guide-linux/index.html)、
-[T4 compute capability 7.5](https://developer.nvidia.com/cuda/gpus)、
+[NVIDIA GPU 计算能力表](https://developer.nvidia.com/cuda/gpus)、
 [Open MPI CUDA 构建](https://docs.open-mpi.org/en/v5.0.x/tuning-apps/networking/cuda.html)、
 [UCX 1.18.1 发布记录](https://github.com/openucx/ucx/releases/tag/v1.18.1)、
 [Open MPI 5.0.10 发行包与校验值](https://www.open-mpi.org/software/ompi/v5.0/)。
@@ -383,8 +389,8 @@ Linux 原生驱动基线 **≥570.26**；如果 `nvidia-smi` 显示 CUDA 12.8，
 UCX/Open MPI 源码包校验 SHA-256。构建时自动执行 CPU 测试，不需要连接 GPU。
 `.dockerignore` 排除旧 build 和大型计算结果。
 
-默认编译五种 GPU 架构；仅部署 T4 时，可在构建命令中加 `--build-arg CUDA_ARCHITECTURES=75`，
-但这样的镜像不再包含其他四种原生架构代码。大体系可适当增大 `--shm-size`。
+默认编译五种 GPU 架构。若新服务器的 GPU 不在默认列表中，应先根据显卡型号确认计算能力，
+例如，若确认目标 GPU 的计算能力是 7.5，可在构建命令中加 `--build-arg CUDA_ARCHITECTURES=75`；请按实际型号替换数字。这样构建的镜像只包含所选架构的原生代码。大体系可适当增大 `--shm-size`。
 跨节点网络、RDMA 和调度器集成仍需单独部署验收。
 
 核心版本已固定，但基础镜像标签和 Ubuntu 安全更新可能变化，不保证跨日期重建的镜像完全相同。

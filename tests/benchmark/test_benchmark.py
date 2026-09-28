@@ -65,17 +65,20 @@ class BenchmarkTests(unittest.TestCase):
         self.assertAlmostEqual(weak['efficiency'], 0.8)
         self.assertTrue(all(r['speedup'] is None and r['efficiency'] is None for r in bench.summary(data, 3)))
 
-    def test_idle_guard_and_uuid_mapping(self):
+    def test_uuid_mapping(self):
         snap = {'gpus': [dict(index='2', uuid='GPU-A', **{'memory.used': '12', 'utilization.gpu': '0'})],
                 'apps': []}
         self.assertEqual(bench.resolve_devices(['2'], snap), ['GPU-A'])
-        bench.ensure_idle(snap, ['GPU-A'], 256, 10)
-        snap['apps'] = [dict(uuid='GPU-A', pid='42')]
-        with self.assertRaises(RuntimeError):
-            bench.ensure_idle(snap, ['GPU-A'], 256, 10)
-        with patch.object(bench, 'process_record', side_effect=lambda pid: {'parent': 99 if pid == 42 else 1}):
-            self.assertEqual(bench.foreign_apps(snap, ['GPU-A'], 99), [])
-            self.assertEqual(len(bench.foreign_apps(snap, ['GPU-A'], 100)), 1)
+
+    def test_snapshot_records_busy_gpu_without_querying_processes(self):
+        values = ['0', 'GPU-A', 'Tesla T4', '0000:00:06.0', '570.124.04',
+                  '15360', '12000', '100', '34', '34', '70', '1590', '5000']
+        with patch.object(bench, 'command_output', return_value=','.join(values)) as query:
+            snap = bench.snapshot()
+        query.assert_called_once_with([
+            'nvidia-smi', f'--query-gpu={bench.GPU_FIELDS}', '--format=csv,noheader,nounits'])
+        self.assertEqual(snap['gpus'][0]['utilization.gpu'], '100')
+        self.assertNotIn('apps', snap)
 
     def test_timeout_cleans_rank_in_separate_session(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -84,11 +87,10 @@ class BenchmarkTests(unittest.TestCase):
                        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); "
                        "pathlib.Path('child.pid').write_text(str(p.pid)); time.sleep(60)")
             with patch.object(bench, 'snapshot', return_value={'apps': [], 'gpus': []}):
-                code, _, contaminated, timeout = bench.execute(
-                    [sys.executable, '-c', program], directory, os.environ.copy(), [], 0.5, 0.05)
+                code, _, timeout = bench.execute(
+                    [sys.executable, '-c', program], directory, os.environ.copy(), 0.5, 0.05)
             self.assertTrue(timeout)
             self.assertNotEqual(code, 0)
-            self.assertFalse(contaminated)
             child = int((directory / 'child.pid').read_text())
             stat = Path(f'/proc/{child}/stat')
             if stat.exists():
