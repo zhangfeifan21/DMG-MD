@@ -2,7 +2,7 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-09-22。
+更新日期：2026-10-08。
 
 本轮第一阶段修改前的 M2a 基线为 clean revision
 `27e07d92b84f0e02d08d99c400c52b795175341f`。Release 配置为
@@ -31,12 +31,14 @@ runtime（M1）与 M2a local-domain 路径：
   判据、`slab_width >= d_coord`）的输入进入 rank-local owned/ghost 布局 +
   保守两跳位置 halo + p2p halo/迁移 + NEP 中心/依赖域分片；其余 P>1 输入
   自动回退 M1 replicated-full（`DMGMD_DOMAIN mode=m1-fallback`），小盒继续可运行；
-- M2b（Fp/partial 分阶段交换）与 M3（多节点硬化）仍未实施。
+- M2b（Fp/partial 分阶段交换）与 3D/triclinic local-domain 仍未实施；多节点物理验收按维护者要求暂缓。
+- 2026-09-26 另一台服务器完成单机 1/2/4/8 GPU benchmark，3 算例、两后端、五次重复全部有效；8 GPU strong-scaling speedup 为 carbon_200k 6.31–6.47×、carbon_1m 7.52–7.66×、water_400k 5.17–5.39×。完整记录见 [多 GPU benchmark 实测](./benchmark-multigpu-results-20260926.md)。这是单机结果，不代表多节点。
+- 近期研发优先级调整为：CPU 调度/使用率实测与通信计算重叠（并列 P0）；其余功能扩展、100000-step release 与多节点验收排在其后。详见 [CPU 使用研究计划](../plans/cpu-usage-study.md) 和 [通信计算重叠计划](../plans/communication-computation-overlap.md)。
 
 M2a 的 10000-step nightly profile 已于 2026-09-18 手动执行并通过验证：覆盖 7 个
 case、seed 0、1/2/4 rank、HostStaged/CudaAware 共 42 个配置，其中 2/4 rank 的
 M2a 配置共 28 个，全部通过。100000-step release 矩阵尚未执行，因此仍不发布
-性能或 scaling 结论。
+多节点 scaling 结论；2026-09-26 的单机多 GPU scaling 结果已另行记录。
 
 ## 第二阶段：统一重建与分步计时（2026-09-22）
 
@@ -206,18 +208,16 @@ mixed-cutoff float 舍入上界、P=2 同 peer 去重、真正 `local_count=0`�
 - M2a profile 专属大盒 nightly 已于 2026-09-18 手动执行并通过（7 个 case、42 个配置，
   其中 M2a 2/4 rank 共 28 个配置）；100000-step release 矩阵仍待执行，compatibility
   变体按合同只执行静态/短轨迹；
-- R28 多节点 rank I/O 隔离整改尚未形成带最终提交 revision 的验证记录，严格双
-  物理（互不可见 TMPDIR）节点验收也尚未执行，见
+- R28 多节点 rank I/O 隔离的双物理节点验收按维护者要求暂缓，不作为当前研发阻塞项；详见
   [multi-node-io.md](../plans/multi-node-io.md)；
-- M2b（Fp/partial 分阶段交换）与 M3（3D 分解、triclinic/非周期 local-domain、
-  多节点 rank-slab 布局、scaling 基准）仍是计划；
+- 优先新方向为 CPU 使用证据/调度研究与通信计算 overlap 原型；M2b、3D 分解、triclinic/非周期 local-domain、100000-step release 和多节点验证列为后续；
 - M2a 的 debug 构建不变量断言（risk-and-backlog §5 全表）未实现为每步 assert，
   由 CPU 单测 + layout 记录 + 精确字节模型间接覆盖；
 - M2a device 数据面为 local，但每 rank 仍保留完整 `HostAtoms` identity/输出元数据，
   因此 host 内存仍为 O(NP)；后续大 N 输出元数据分片前不宣称端到端内存 scaling；
 - malformed potential corpus、若干 cutoff/ZBL 边界语义仍待验证，见
   [风险与待办](../plans/risk-and-backlog.md)；
-- replicated/M2a 阶段均不发布多卡 speedup 或 scaling 结论。
+- 2026-09-26 单机 1/2/4/8 GPU strong-scaling 已有五次重复结果，见 benchmark 报告；跨节点 scaling 未测。
 
 ## 最近变更
 
@@ -250,3 +250,7 @@ capacity 分离；修正非零中心 ELL row offset；`neighbor.out` 改为在�
 
 2026-09-15 M0（删除每步 velocity Allgatherv）已实施并验收（详见 Git 历史与
 2026-09-15 的记录方式；基线二进制 A/B 逐字节一致）。M1（`10903db`）见 Git 历史。
+
+## 2026-10-08 方向与优先级更新
+
+用户提供的 `dmgmd-bench-docker-confirm-20260926-174639` 已整理为独立实测记录。当前源码存在 CUDA/MPI/host 阶段计时，但没有 CPU 核心利用率/线程职责的阶段化证据；先按 CPU 研究计划完成静态调度清点与可复跑采样。halo 交换目前在 `MPI_Isend/Irecv` 后同步 `MPI_Waitall`，runtime 在 halo 返回后才进入域分片 NEP，因此下一项核心技术探索是安全 interior/boundary 划分与通信重叠。物理双节点验收暂缓。

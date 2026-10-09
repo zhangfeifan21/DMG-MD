@@ -25,6 +25,7 @@
 这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
 
 - [当前实现进度](./status/current.md)
+- [多 GPU Benchmark 实测结果（2026-09-26）](./status/benchmark-multigpu-results-20260926.md)
 - [Docker 适配验证与待验收项（2026-09-23）](./status/docker-validation.md)
 - [Benchmark 功能验证（2026-09-22）](./status/benchmark-validation.md)
 - [GPUMD/DMG-MD baseline 实测结果](./status/baseline-results.md)
@@ -42,9 +43,13 @@
 
 这些内容尚未成为生产合同：
 
+- [CPU 调度与使用率研究计划](./plans/cpu-usage-study.md)（PROPOSED，P0）
+- [通信与计算并行研究/实施计划](./plans/communication-computation-overlap.md)（PROPOSED，P0）
 - [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1、M2a 已实施，M2b 起待审批；M2a 生效合同见 standards/replicated-mpi.md）
 - [M2a 缓存有效性统一重建与分步计时设计](./plans/cache-validity-and-step-timing.md)（APPROVED：已实施；现行合同见 standards，实测见 stage2 成本报告）
-- [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（IN PROGRESS）
+- [CPU 调度与使用率研究计划](./plans/cpu-usage-study.md)（PROPOSED，P0）
+- [通信与计算并行研究/实施计划](./plans/communication-computation-overlap.md)（PROPOSED，P0）
+- [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（暂缓）
 - [风险与待办登记](./plans/risk-and-backlog.md)
 
 计划获批并实施后，应把最终合同迁入 `standards/`，把实测结果写入 `status/`，再从计划中删除

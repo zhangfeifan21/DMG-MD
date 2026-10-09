@@ -2,6 +2,13 @@
 
 类别：待实施计划。状态：IN PROGRESS（持续登记）。本文只登记仍影响未来实现的风险和待决事项。
 
+## 当前开发优先级（2026-10-08）
+
+1. **P0 并列：CPU 调度/使用率证据**（[cpu-usage-study.md](./cpu-usage-study.md)）；先测量线程、CPU 时间和按阶段利用率，再决定是否需要 CPU 侧优化。
+2. **P0 并列：通信与计算并行**（[communication-computation-overlap.md](./communication-computation-overlap.md)）；先做依赖证明和 interior overlap 原型。
+3. **P1 后续：** 100000-step release、M2b、3D/local-domain 扩展、兼容性 backlog。
+4. **暂缓：** R28 双物理节点 I/O/restart 验收（[multi-node-io.md](./multi-node-io.md)）。用户已说明物理双节点暂不验证。
+
 ## 1. 风险评级
 
 参考 GPUMD commit：`9d23496e41319b9e2af5221a7df6285387401d1e`。
@@ -108,7 +115,7 @@
 | R25 | P2（M2a 已关闭） | 每1000次隐式 `neighbor.out` D2H/I/O | `nep.cu:1007-1025` | 同步尖峰、多rank文件竞争 | 已实施：在本次 typewise 表生成后采样，各rank local max经MPI_MAX聚合，仅rank0写；1000-step fixture 精确断言记录值/归约字节（2026-09-18） |
 | R26 | P2 | CUDA-aware MPI/stream同步不明确 | GPUMD只依赖默认stream和blocking copy | 发送未完成buffer或读未到达halo | 固定 Open MPI+UCX；MPIX query + collective及p2p数值自检；同步；HostStaged fallback |
 | R27 | P2（M2a 已关闭） | local capacity变化使device view失效 | `GPU_Vector::resize`式重分配 | 偶发illegal address | 已实施：布局 epoch 全量重建 + workspace 仅随 local_count 重分配 + 强制 neighbor 重建；device 指针每用途现取（2026-09-18） |
-| R28 | P0（整改与验证进行中） | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `src/runtime.cu` `RankIoIsolation`（整改前 `runtime.cu:80-129`） | 非零rank无法chdir，异常路径可能collective hang | 目标合同：每 rank 本机 `mkdtemp` scratch（0700）+ 两阶段错误归约共享出口 + 三阶段 finish；严格关闭条件为 [multi-node-io.md](./multi-node-io.md) 的双物理节点验收，现行合同见 [replicated-mpi.md](../standards/replicated-mpi.md) |
+| R28 | P2（物理双节点验证暂缓） | rank 0 创建的 node-local `/tmp` 被其他节点 rank 使用 | `src/runtime.cu` `RankIoIsolation`（整改前 `runtime.cu:80-129`） | 非零rank无法chdir，异常路径可能collective hang | 目标合同：每 rank 本机 `mkdtemp` scratch（0700）+ 两阶段错误归约共享出口 + 三阶段 finish；严格关闭条件为 [multi-node-io.md](./multi-node-io.md) 的双物理节点验收，现行合同见 [replicated-mpi.md](../standards/replicated-mpi.md) |
 
 ## 4. PBC 与 triclinic 专项
 

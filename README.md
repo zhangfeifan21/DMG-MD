@@ -7,7 +7,7 @@ DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读�
 “计算环境包”：准备好服务器后，一条命令就能调用它进行计算，无需逐个安装 CUDA、MPI 等依赖。
 
 查看项目目前已实现和验证的功能：
-[开发进度与验证结果](docs/status/current.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
+[开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/benchmark-multigpu-results-20260926.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
 
 ## Docker 部署（推荐跨服务器使用）
 
