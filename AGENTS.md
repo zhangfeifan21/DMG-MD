@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1 + M2a；下一实施切口：M2b（待审批）
+## 当前代码基线：M1 + M2a；近期 P0：CPU 绑定、LAMMPS 对比、通信重叠
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -50,8 +50,16 @@ eligibility 后在两条数据面之间分派：
 - `docs/plans/`：尚未实施或待审批的方案、风险和待办。
 
 M2a 已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
-nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行，不发布性能结论。M2b（Fp/partial 分阶段交换）、3D 分解、
+nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026-09-26 单节点
+多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。M2b（Fp/partial 分阶段交换）、3D 分解、
 triclinic/非周期 local-domain 仍待后续审批。
+
+2026-10-09 的近期 P0 方向：固定 MPI 启动时每 rank 的 CPU 物理核心数并支持 NUMA
+放置；增加 LAMMPS 多 GPU + MPI 的 NEP benchmark；继续通信与计算重叠。
+计划分别位于 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md`
+与 `docs/plans/communication-computation-overlap.md`。LAMMPS 输入、静态物理量对照与
+三引擎 benchmark smoke 已实施；正式效率矩阵仍待固定 CPU/NUMA 绑定和更多正确性验收。
+现有 CPU 采样 C1 只提供观测，不执行绑定；M2b 不是当前下一实施切口。
 
 ## GPUMD 复现边界（强制）
 
@@ -73,6 +81,29 @@ Potential、NEP kernels）。该模式已于 2026-09-09 废除。当前规则：
 - `../gpumd-reference` 只作为只读对照与 golden 基线生成源（`run_baselines.py
   --reference` / `--update-goldens`），不参与 DMG-MD 构建与运行。审计结论仍须记录
   参考文件、类、函数或 CUDA kernel；使用 `rg` 跟踪实际调用和符号。
+
+## 外部 reference 的只读边界（强制）
+
+`../gpumd-reference`、`../lammps-reference` 和 `../lammps-matpl-reference` 均为锁定的
+**严格只读 reference**。不得在其中应用补丁、复制源码、运行原位构建、生成日志或输出、
+清理文件，也不得为了测试修改势文件。执行参考程序时把工作目录和输出目录放在 `newmd`
+或临时目录；每次相关工作前后核对三个 checkout 的 Git 状态，并检查是否新增被忽略的构建产物。
+
+LAMMPS 锁定 `stable_22Jul2025_update4`（commit
+`611ca3b7f8525ba802373b04f9e3d632d515f7e3`），MatPL 锁定 commit
+`21fabf34eadc57a717f4c7fbce9bb80aad5fd991`。2026-10-09 从原位安装迁出的
+MatPL 补丁源码、CMake 修改和逐文件 SHA-256 保存在
+`third_party/lammps-matpl-overlay/`；当时的构建产物保存在忽略版本控制的
+`build-lammps-nep-kk-preserved/`。后者的 CMake cache 包含旧绝对路径，只用于保留
+已验证的可执行文件，不能直接当作可迁移的重建目录。
+
+如需修改或重建 LAMMPS，先从只读 `../lammps-reference` 在 `newmd` 内生成独立工作源码
+（例如 `build-lammps-matpl-src/`），再应用上述 overlay 或新的本地补丁；构建目录也必须在
+`newmd` 内。不能把 `../lammps-matpl-reference` 当作可编辑插件工作树。任何用于
+GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256，并明确标注等价范围。
+维护者已批准以物理量等价而非文件哈希一致作为三引擎横向判定：所有元素的径向 cutoff
+相同且角向 cutoff 相同时，可把 typewise 行折叠为统一行；若任一值不同必须拒绝该转换。
+转换规则、静态物理量门槛和性能比较边界见 `docs/standards/cross-engine-reference.md`。
 
 ## 不可破坏的产品约束
 
@@ -161,6 +192,11 @@ GPUMD 是数值和兼容性参考。验证至少分四层：
 
 比较邻居关系、每原子能量/力/virial、总 thermo、短轨迹、NVE 漂移、输出字节结构和 restart。不得为了让测试通过而随意放宽容差；容差必须来自重复的基线实验，并区分逐字段精确、确定性数值容差和随机/混沌轨迹的统计比较。
 
+GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，允许经证明
+等价的格式/单位转换；先比较能量、力、virial 和轨迹等物理量，再比较运行效率。
+横向对照不要求输入文件或不同软件的输出字节相同；现有 DMG-MD 对 GPUMD 的
+兼容性 golden 回归仍保持其独立门槛。
+
 ## 文档治理
 
 - 测试行为以测试脚本为第一事实源；case、profile、输入哈希、容差和统计门槛以对应
@@ -179,7 +215,7 @@ GPUMD 是数值和兼容性参考。验证至少分四层：
 
 非平凡任务按以下顺序进行：
 
-1. 检查两个仓库的状态和已有用户修改；
+1. 检查本仓库与三个只读 reference checkout 的状态和已有用户修改；
 2. 阅读相关说明、构建脚本和测试；
 3. 用 `rg` 从入口沿调用和 buffer 读写追踪；
 4. 给出文件、符号、执行位置、数据所有权和 MPI 影响；

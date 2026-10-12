@@ -35,3 +35,13 @@ add_test(
   NAME dmgmd.benchmark_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_benchmark.py
 )
+
+add_test(
+  NAME dmgmd.cpu_sampling
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_cpu_sampling.py
+)
+
+add_test(
+  NAME dmgmd.lammps_reference
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lammps_reference/test_lammps_reference.py
+)

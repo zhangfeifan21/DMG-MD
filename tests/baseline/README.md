@@ -3,6 +3,12 @@
 本目录只锁定单进程、单 GPU 的 GPUMD NEP MD reference 行为，不包含 MPI，也不修改
 DMG-MD 或 GPUMD 的生产物理内核。
 
+LAMMPS/MatPL 对照输入可用
+[`tests/lammps_reference/lammps_inputs.py`](../lammps_reference/README.md)
+从这四组 case 生成；跨软件按物理量等价比较，允许可证明等价的格式转换。
+本目录的 GPUMD committed golden 文件哈希与逐字节检查仍独立有效，不作为
+LAMMPS 横向通过条件；见[三引擎对照标准](../../docs/standards/cross-engine-reference.md)。
+
 从 DMG-MD 仓库根目录重复运行全部 baseline：
 
 ```bash

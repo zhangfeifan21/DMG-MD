@@ -9,6 +9,11 @@ DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读�
 查看项目目前已实现和验证的功能：
 [开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/benchmark-multigpu-results-20260926.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
 
+近期 P0 研发需求为：[MPI 启动固定 CPU 核数与 NUMA 绑定](docs/plans/mpi-cpu-binding.md)、
+[LAMMPS 多 GPU + MPI NEP 性能对比](docs/plans/lammps-multigpu-benchmark.md)、
+[通信与计算重叠](docs/plans/communication-computation-overlap.md)。三项仍为计划；
+已有 [CPU 采样工具](docs/standards/cpu-sampling.md)用于核验与性能归因，采样本身不会绑定 CPU。
+
 ## Docker 部署（推荐跨服务器使用）
 
 本指南适用于 Ubuntu 22.04 / 24.04、Intel/AMD 64 位 CPU 和 NVIDIA GPU 的新服务器。
@@ -423,7 +428,9 @@ M2a 已于 2026-09-18 完成专属验收矩阵，并手动通过 nightly 正确�
 - `tests/mpi/run_mpi_domain.py`：9 cases × 2/4 rank × HostStaged/CudaAware，共 36 组全通过；
 - `scripts/run_long_nve_nightly.sh`：7 cases、seed 0、1/2/4 rank、双通信后端，共 42 个配置全通过；
   其中 M2a 的 2/4-rank 配置 28/28 命中 `mode=m2a` 并通过；
-- 100000-step release 矩阵尚未执行，因此当前不发布多卡性能或 scaling 结论。
+- 100000-step release 矩阵尚未执行；2026-09-26 已有另一台服务器的单节点多 GPU
+  benchmark 实测，详见[结果记录](docs/status/benchmark-multigpu-results-20260926.md)，
+  不代表多节点或固定 CPU 绑定下的结果。
 
 详细环境、命令和结果证据见 [当前进度与验证结果](docs/status/current.md)。
 
@@ -566,8 +573,13 @@ scripts/run_long_nve_nightly.sh
 
 ## 性能测试与迁移部署
 
-独立 benchmark 支持 GPUMD 与 DMG-MD 的 1/2/4/8 卡对比、强/弱扩展、百万级样例，
-含 GPU 占用检查、预热排除、重复统计与 JSON/CSV 报告。它不代替长程正确性验收。
+独立 benchmark 已支持 GPUMD、LAMMPS、DMG-MD 的统一 case 和 1/2/4/8 卡编排，
+含 GPU 遥测、预热排除、重复统计与 JSON/CSV 报告。LAMMPS/MatPL 已通过同初态
+静态物理量检查及 1/2 GPU smoke；输入允许经证明等价的格式转换，三软件横向比较
+能量、力、virial 等物理量，不要求文件哈希相同。当前尚无固定每 rank CPU 核数/NUMA
+的一等启动参数，三引擎 smoke 不能作为正式效率结论；见[对照标准](docs/standards/cross-engine-reference.md)
+与[2026-10-09 验证记录](docs/status/lammps-reference-20261009.md)。
+benchmark 不代替长程正确性验收。
 
 ```bash
 source ../env/md-mpi.sh
@@ -606,5 +618,6 @@ database，它会错误地认为该宏未定义，并且可能找不到 `dmgmd/m
 - [当前数据布局](docs/standards/data-layout.md)
 - [输入兼容矩阵](docs/standards/compatibility-matrix.md)
 - [待实施计划](docs/plans/domain-decomposition.md)
+- [近期 P0：CPU 绑定、LAMMPS 对比、通信重叠](docs/plans/risk-and-backlog.md#当前开发优先级2026-10-09)
 - [Golden test 说明](tests/baseline/README.md)
 - [长程 NVE/NVT 正确性测试](tests/long_nve/README.md)

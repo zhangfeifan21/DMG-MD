@@ -1,7 +1,14 @@
-# 在其他服务器部署 DMG-MD 与 GPUMD
+# 在其他服务器部署 DMG-MD 与参考软件
 
 类别：操作手册。目标：单节点 NVIDIA GPU 服务器，重建同一源码与工具链后执行正确性门槛和
 benchmark。本手册不把尚未硬化的多节点运行当作已验证能力。
+
+本手册下方的原生和 Docker 命令目前只部署 DMG-MD 与 GPUMD，因此运行 benchmark
+时须显式指定 `--engines gpumd,dmgmd`。runner 已支持 LAMMPS/MatPL 第三引擎，
+其只读 reference 布局与输入生成见
+[三引擎对照标准](../standards/cross-engine-reference.md)；固定 MPI CPU/NUMA
+绑定仍属 [2026-10-09 P0 计划](../plans/risk-and-backlog.md#当前开发优先级2026-10-09)，
+当前 smoke 不代表正式效率结果。
 
 ## Docker 交付（优先）
 
@@ -47,6 +54,8 @@ md-stack/
   env/md-mpi.sh
   newmd/                 # DMG-MD 源码、tests、势文件、脚本和文档
   gpumd-reference/       # GPUMD 锁定 checkout，只读对照
+  lammps-reference/      # 使用三引擎对照时的 LAMMPS 锁定只读 checkout
+  lammps-matpl-reference/ # 使用三引擎对照时的 MatPL 锁定只读 checkout
 ```
 
 复制源码和势，不搬旧 build、CMakeCache、CUDA 对象文件。保留 `.git` 以记录 revision；本次新增
@@ -179,6 +188,7 @@ python3 tests/mpi/run_mpi_domain.py --candidate ./build-benchmark/dmg-md --devic
 
 # 短性能编排检查
 python3 tests/benchmark/run_benchmark.py --profile smoke --devices 0,1 --ranks 1,2 \
+  --engines gpumd,dmgmd \
   --candidate ./build-benchmark/dmg-md --reference ./build-benchmark-gpumd/gpumd \
   --output dmgmd-deployment-smoke
 ```

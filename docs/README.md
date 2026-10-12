@@ -15,7 +15,9 @@
 - [Replicated-data MPI 协议](./standards/replicated-mpi.md)
 - [GPUMD runtime 审计与最小源码闭包](./standards/gpumd-runtime-audit.md)
 - [NEP kernel 与通信依赖](./standards/kernel-inventory.md)
+- [Benchmark CPU 采样合同](./standards/cpu-sampling.md)
 - [Golden Test 标准](./standards/golden-test-standard.md)
+- [GPUMD、LAMMPS、DMG-MD 横向对照标准](./standards/cross-engine-reference.md)
 
 测试的机器可读参数仍以 `tests/**/manifest.json` 和测试脚本为第一事实源；标准文档解释合同，
 不复制全部 profile 和容差。
@@ -24,6 +26,8 @@
 
 这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
 
+- [CPU 采样 C1 验证（2026-10-09）](./status/cpu-sampling-c1-20261009.md)
+- [LAMMPS/MatPL 三引擎静态与 smoke 验证（2026-10-09）](./status/lammps-reference-20261009.md)
 - [当前实现进度](./status/current.md)
 - [多 GPU Benchmark 实测结果（2026-09-26）](./status/benchmark-multigpu-results-20260926.md)
 - [Docker 适配验证与待验收项（2026-09-23）](./status/docker-validation.md)
@@ -37,18 +41,19 @@
 ## 操作手册与测试入口
 
 - [单节点多 GPU benchmark：样例、测量口径与操作](../tests/benchmark/README.md)
-- [DMG-MD / GPUMD 跨服务器部署](./operations/deployment.md)
+- [LAMMPS/MatPL NEP 对照输入与静态物理量检查](../tests/lammps_reference/README.md)
+- [DMG-MD 与参考软件跨服务器部署](./operations/deployment.md)
 
 ## 待实施计划
 
 这些内容尚未成为生产合同：
 
-- [CPU 调度与使用率研究计划](./plans/cpu-usage-study.md)（PROPOSED，P0）
-- [通信与计算并行研究/实施计划](./plans/communication-computation-overlap.md)（PROPOSED，P0）
+- [MPI 启动 CPU 核数与 NUMA 绑定](./plans/mpi-cpu-binding.md)（PROPOSED，P0）
+- [LAMMPS 多 GPU + MPI NEP benchmark](./plans/lammps-multigpu-benchmark.md)（IN PROGRESS，P0：输入、静态比较和三引擎 smoke 已实现；固定 CPU/NUMA 正式矩阵待完成）
+- [通信与计算重叠](./plans/communication-computation-overlap.md)（PROPOSED，P0）
+- [CPU 使用率研究](./plans/cpu-usage-study.md)（IN PROGRESS：C0/C1 完成；C2/C3 改作绑定验收后的辅助诊断）
 - [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1、M2a 已实施，M2b 起待审批；M2a 生效合同见 standards/replicated-mpi.md）
 - [M2a 缓存有效性统一重建与分步计时设计](./plans/cache-validity-and-step-timing.md)（APPROVED：已实施；现行合同见 standards，实测见 stage2 成本报告）
-- [CPU 调度与使用率研究计划](./plans/cpu-usage-study.md)（PROPOSED，P0）
-- [通信与计算并行研究/实施计划](./plans/communication-computation-overlap.md)（PROPOSED，P0）
 - [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（暂缓）
 - [风险与待办登记](./plans/risk-and-backlog.md)
 

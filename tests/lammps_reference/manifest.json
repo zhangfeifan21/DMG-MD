@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scope": "cross-engine static NEP physical equivalence; same atom order, species, box and initial velocities",
+  "lammps_metal_nktv2p_bar_A3_per_eV": 1602176.5,
+  "tolerances": {
+    "position_A": {"atol": 1e-8, "rtol": 0},
+    "velocity_A_per_fs": {"atol": 1e-9, "rtol": 0},
+    "energy_per_atom_eV": {"atol": 3e-4, "rtol": 1e-4},
+    "force_eV_per_A": {"atol": 3e-4, "rtol": 1e-4},
+    "virial_eV": {"atol": 3e-4, "rtol": 1e-4},
+    "total_energy_per_atom_eV": {"atol": 5e-5, "rtol": 0}
+  }
+}

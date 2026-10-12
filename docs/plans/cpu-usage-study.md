@@ -1,6 +1,11 @@
 # CPU 调度与使用率研究计划
 
-类别：待实施计划。状态：**PROPOSED**。优先级：P0（与通信计算重叠并列）。
+类别：待实施计划。状态：**IN PROGRESS**（C0/C1 完成；C2/C3 待执行）。优先级：辅助诊断（原 P0，2026-10-09 调整）。
+
+导师当前的 CPU 需求是**固定 MPI 启动时每 rank 可用物理核心数，并能按 NUMA 放置**；
+实现合同见 [MPI CPU 绑定计划](./mpi-cpu-binding.md)。本计划已完成的 C0/C1 静态审计与
+采样工具继续保留，用于核对真实 affinity、quota 和绑定后的性能归因。C2/C3 不再是
+“先测使用率、再决定是否绑核”的前置 P0。采样工具不会设置 rank 的 CPU affinity。
 
 ## 目标
 
@@ -26,7 +31,7 @@
 
 ### B. 动态采样
 
-在专用节点上固定算例、rank/GPU 绑定、CPU affinity 与 Docker CPU 限额，分阶段采样：初始化、稳定普通步、重建步、输出步、结束。每组至少重复 5 次。至少选 carbon_1m 与 water_400k，并测 1/2/4/8 rank。
+在专用节点上先按 [绑定计划](./mpi-cpu-binding.md) 固定算例、rank/GPU、每 rank 物理核心数、NUMA 位置与 Docker CPU 限额，再分阶段采样：初始化、稳定普通步、重建步、输出步、结束。每组至少重复 5 次。至少选 carbon_1m 与 water_400k，并测 1/2/4/8 rank。
 
 - `pidstat -h -u -t -p <rank-pid> 1`：采样线程级 `%CPU`、user/system CPU 时间；用 MPI launcher wrapper 或 `/proc` 父子关系把 rank PID 与 local rank/GPU 对应。
 - `/proc/<pid>/stat`、`/proc/<pid>/task/*/stat`：累积 user/system ticks 与线程数，低开销计算区间 CPU time；同时保存 `/proc/<pid>/status` 的 voluntary/nonvoluntary context switches。
@@ -59,10 +64,10 @@
 |---|---|---|---|
 | C0 | CPU 职责审计与指标合同 | 调用链、已知/未知、采样 schema、阶段可观测性明确 | C1；可与 O0 独立开展 |
 | C1 | 低扰动采样与解析工具 | CPU-only 测试、端到端 smoke、异常退出保留数据 | C2；O1 复用 |
-| C2 | pilot 与串行基线实测 | rank 映射可靠、采样开销已量化、原始数据可重算 | O1、C3 |
+| C2 | 固定 CPU 绑定后的 pilot 与采样开销校准 | rank 映射与实际 K 核/NUMA 可核验、采样开销已量化、原始数据可重算 | O1 可复用，C3 |
 | C3 | 扩展实验与结论 | 正式重复实验、按 rank/阶段图表、限制与热点证据 | O5 复用同一采样器 |
 
-执行顺序建议：C0 → C1 → C2 → C3；与 overlap 的联合顺序见
+当前建议先完成 CPU 绑定 P0，再按需执行 C2 → C3；C0/C1 已完成。与 overlap 的联合顺序见
 [通信计算重叠计划](./communication-computation-overlap.md#联合执行顺序)。
 资源不足允许提交部分矩阵，但必须标为 PARTIAL，不得将未跑的 8 rank 或多节点写成通过。
 
@@ -85,8 +90,8 @@
 
 ## C0 审计与 C1 设计交接（2026-10-08）
 
-**C0 COMPLETE（静态审计/设计）；C1–C3 未执行。** 总计划保持 PROPOSED，以下接口为
-待实现合同，不表示已有采样工具、阶段 trace 或 CPU 利用率实测。本轮只修改本文件。
+**C0 COMPLETE（静态审计/设计）**。本节审计基线为 2026-10-08；当时尚无采样工具，
+只修改本文件。C1 后续实现见下方交接与现行标准，阶段 trace/正式 CPU 使用率研究仍待 C2/C3。
 
 ### 审计基线、范围与证据定位
 
@@ -177,117 +182,22 @@ CPU样本可靠分给初始化、warmup/正式段、普通/rebuild/迁移/修速
 不是时间线。需要默认关闭、同机单调时钟的begin/end标记后才能段级归因，毫秒级细分还需trace。
 CPU busy/poll/sleep、GPU wait/MPI wait、真实网络进展均另需栈/调度/设备trace；本轮未测。
 
-### C1 最小接口（拟定，当前 CLI 尚无这些能力）
+### C1 实现交接（2026-10-09）
 
-复用 `tests/benchmark/run_benchmark.py:285 main` 的解析配置、trial顺序、输入哈希、
-metadata/result保存；在 `execute:205` 接入采样生命周期。拟新增 `--cpu-sampling off|proc`
-（默认off）、`--cpu-sample-interval SECONDS`（与现有GPU `--sample-interval` 分离）、
-`--cpu-output PATH`（默认trial内cpu/）；均要 help/dry-run 展示。分析入口拟为
-`python3 tests/benchmark/analyze_cpu.py TRIAL_DIR --output OUTPUT_DIR`。这些名称是C1交付目标，
-不是本轮可执行命令；C1可按项目风格改名，但必须同步本节、README和测试。
+C1 的已实施接口、schema、计算/缺失口径和支持边界已迁入
+[CPU 采样合同](../standards/cpu-sampling.md)，执行入口见
+[benchmark README](../../tests/benchmark/README.md#cpu-采样c1)。
+[本轮验证记录](../status/cpu-sampling-c1-20261009.md) 保存 revision、命令和原始数据位置。
+C0 静态审计保留在上文；原拟定接口的历史版本可由 Git 查看，不在计划复制已生效合同。
 
-1. runner在mpiexec的rank executable位置插入wrapper；wrapper从OMPI_COMM_WORLD_RANK/
-   LOCAL_RANK读取身份，写rank注册记录后 **exec候选程序**，保持PID/starttime。
-   不预先初始化CUDA/MPI、不在rank中新增CPU线程。采样器独立进程；注册/握手写本机绝对路径，
-   不依赖rank之后chdir，输出文件不混入MD科学文件。exec确认用`/proc/PID/exe`匹配候选与哈希；
-   exec前wrapper CPU单独标boundary，不当candidate初始化。读取不到exec边界则初始化首尾不完整。
-2. 注册rank与现有DMGMD_MPI按trial+hostname+world rank关联，local rank/size一致、UUID唯一；
-   保存请求可见卡、实际device/UUID、后端、自检和原始日志。将32 hex CUDA UUID与nvidia-smi
-   UUID规范化比较，保留原串。映射状态verified/conflict/unavailable；无日志的早退保留PID记录，
-   GPU=null，不能靠CUDA_VISIBLE_DEVICES猜实卡。CPU采样可先开始，GPU映射后补。
-3. sampler以绝对deadline采样，逐对象记录read begin/end而非假设同时读取；超期计missed，
-   不连续补采伪造时间序列。结束flush并原子写summary；超时/中断保留jsonl与退出原因。
-   只回收本trial注册且PID+starttime核验的sampler/wrapper；参考现有stop_process_tree:175，
-   不按进程名kill、不杀无关任务；wrapper exec不得破坏现有rank后代回收逻辑。
-4. C1先交付进程窗口采样与marker解析接口；生产标记由C2/O1另行接入。拟marker记录
-   `{rank, pid, process_start_ticks, clock_id, t_ns, sequence, phase, edge, global_step, epoch}`，
-   edge=begin/end，phase至少run，扩展setup/step/correction/migration/output；用嵌套关系保留重叠。
-   必须在调用位置产生时间戳、不得用收日志时间替代；缺一端标incomplete。先用合成marker测试。
-   `steady_clock`标准并不保证与Python clock epoch相同，后续标记显式用CLOCK_MONOTONIC，
-   或记录经验证的时钟配对/误差；CUDA event时长不能直接转换为host绝对时间。
-5. 详细诊断实验还需显式白名单开关接口：runner:408–416清除全部继承DMGMD_*并置timing=0；
-   外部export无效。新增诊断选项必须在dry-run、launch_environment、实际日志三处一致，
-   默认off，不开放任意未知变量。C1可以先保留详细trace不支持状态，不虚构现有入口。
-
-### 最小机器可读 schema 与可重算指标
-
-schema_version=1；UTF-8 JSONL原始记录（整数计数/ns，不只百分比），JSON/CSV派生汇总。
-所有记录含type、trial_id、schema_version、host_id（hostname+boot_id）、clock_domain_id
-（含time namespace身份）、source、status与reason；不适用/无权限/退出/解析错误用null+原因，
-合法0与缺失严格区别。元数据改变以version引用，不悄悄覆盖。
-
-| record type | 必需字段/单位与口径 |
-|---|---|
-| trial | resolved manifest/profile/CLI、case/geometry/steps/warmup/repeat/order_seed、engine、requested/actual backend/mode、完整argv与测量相关环境、source HEAD+dirty diff hash及内容、untracked相关输入hash、binary/input/manifest/generator hash、运行方式、工具版本、开始/结束状态。沿用metadata而非另造输入参数表。 |
-| rank_map | world/local rank与size，hostname、PID、process_start_ticks（stat field22）、CLK_TCK、主TID、exe、注册/exec验证时刻、pid/mount/time namespace inode、NSpid链、GPU原始/规范UUID及device，mapping证据/状态。主键trial+host/namespace+PID+starttime。 |
-| proc_sample / task_sample | sample_id，t_begin_ns/t_end_ns与midpoint，CLOCK_MONOTONIC/分辨率、utime_ticks/stime_ticks（stat14/15）、num_threads、state；task额外TID+task_start_ticks、comm；进程/线程各自stat/status原文或无损解析字段，Cpus_allowed_list/affinity，voluntary/nonvoluntary context switches，last_cpu（stat processor，**不是migration次数**）。 |
-| capacity | capacity_id，cgroup路径/挂载root/namespace和可见祖先链、每层cpu.max的quota_us/period_us或max、cpu.weight、cpuset.cpus.effective、逐task affinity集合、逻辑CPU/core/socket/NUMA/SMT拓扑，read区间，限制是否完整可见、其他进程共享/独占状态。 |
-| cgroup_sample | capacity_id、read区间、cpu.stat原始usage_usec/user_usec/system_usec/nr_periods/nr_throttled/throttled_usec等实际存在字段。是整个cgroup（可含launcher/sampler/其他job），与rank总量平行展示，不能相加。 |
-| collector / lifecycle / marker | sampler PID/starttime/CPU ticks、轮次read耗时/写出字节/延迟/漏采数、thread首次/末次可见/退出区间、exec/exit/timeout信号与数据完整性；marker按上节。可选perf原始计数、time_enabled/running/事件scope、失败原因；GPU样本增加同clock begin/end和UUID。 |
-
-计算合同（Linux /proc为C1目标平台，解析含空格/括号comm必须按stat结构处理）：
-
-- 同身份两端：`U=Δutime/CLK_TCK`、`S=Δstime/CLK_TCK`，不加cutime/cstime（子进程），
-  不再加guest_time（避免重复）；`W=Δmidpoint_ns/1e9`，`C=(U+S)/W`，单核CPU%=100C。
-  PID/TID starttime变化、负差、W<=0、缺任一端则该区间invalid；不补0、不跨缺样洞插值。
-  实际采样间隔不是目标间隔；保留read跨度以显示读取误差。原始整数用无损表示。
-- 进程stat是rank聚合视图，task是分解视图，不再相加；`/proc/PID/status` context switches
-  只代表主task，不能标签为整个进程。task/status各自取差；已观测task差之和标签为
-  observed-task总量/下界（出生退出可漏），不强行与进程CPU相等。
-- rank窗口平均`sum(valid CPU seconds)/sum(valid W)`，峰值为有效采样窗口max(C)，附该窗口宽度、
-  count、coverage和缺口。首个样本只建立基线；新task不将首次累积值分摊到前一窗口；
-  已退出task无末端样本标right-censored。两次轮询间出生又退出的线程不可见，
-  num_threads也是采样值、不是总创建数；进程stat通常仍包含已退出线程CPU，保留差额但不直接
-  命名“短命线程CPU”（不同读取时刻也会产生差额）。若需完整线程生命周期另用可选调度trace。
-- 阶段样本只纳入两端及读取区间完全位于同一可靠marker窗内的区间；跨边界标boundary，
-  不按时间比例假分配CPU；同时输出marker墙钟、observed_wall、覆盖率和observed CPU。
-  没marker时sequence/phase=null，scope=process_observed，run利用率=null。
-- 单机job取共同有效窗口的各rank CPU总和除共同W；rank缺失时job写PARTIAL/observed subtotal，
-  不把缺失rank当0，不把各rank不同窗口的峰值相加称job峰值。独立trial给median、min/max、
-  IQR、relative_range、有效/计划重复数；失败和过短trial保留。跨机monotonic不可直接拼接，
-  先每机相对marker对齐；无跨机校准不提供同步全job瞬时峰值。跨机平均可报告
-  各节点同逻辑阶段CPU/各自W的和，标明非同一绝对窗口，并同时列节点时长。
-
-**affinity/quota分母合同**：有效CPU集合用每个task affinity与有效cpuset/online CPU交集，
-进程potential capacity取已观测task集合并集，漏线程则完整性UNKNOWN。逻辑CPU按调度容量计，
-不把SMT两个逻辑CPU解释为两个物理核心吞吐。单个独占共享资源域的简单情形：
-`K=min(|union(allowed CPUs)|, quota/period及可见祖先约束)`；quota=max不限制，不能用
-宿主os.cpu_count直接作容器分母。窗口容量变化时按`∫K(t)dt`归一化；若变化时刻不明，
-该窗口capacity利用率null，CPU seconds仍可报告。
-
-rank报告100C及affinity容量；若共享quota，**不人为等分quota**。可另报
-`100 * rank_CPU_seconds / shared_capacity_seconds`，明确是对共同额度的贡献而非rank独享利用率。
-job分母对重叠CPU集合取并集、共享quota只计一次。多个子cgroup/重叠affinity/共享父quota
-不能直接Σmin：C1最小实现支持单一可见共同资源域与CPU集合互斥且无额外共享上限的资源域；
-其他拓扑保留原始树并令有效容量/归一化=null、reason=unsupported_capacity_topology，
-不得猜分母。祖先限额被容器隐藏时标upper_bound/incomplete、正式quota归一化null。
-被其他job共享的容量是上限不是独占保证，throttling与竞争单独报告。
-
-### 原生/容器、开销与 C1 验收
-
-- 原生每个执行shell source `../env/md-mpi.sh`；容器用entrypoint加载
-  `/opt/dmgmd/env/md-mpi.sh`（`docker/md-mpi.sh`）。采样器与rank运行在相同PID/mount/time
-  namespace，读取本机/proc；优先容器内采样，完整父目录挂载布局沿用benchmark README。
-  宿主采容器需显式NSpid/namespace/cgroup映射证据，否则不支持，不能按同数字PID关联。
-- C1最低支持单节点Linux、原生/cgroup v2容器；v1/不可读cgroup先提供CPU ticks与affinity，
-  quota归一化unavailable。容器内层root显示max不证明宿主无quota，需宿主限制元数据核验。
-  多节点必须每节点本地collector/注册与原始文件回收；当前runner是单节点suite，C1可明确
-  fail fast为unsupported_multi_node，远端/proc不可见不能静默变成全job统计。
-- sampler/launcher/nvidia-smi等observer用独立scope记CPU/affinity/cgroup，尽量固定独立可用CPU，
-  但不自动改应用绑定或quota。共享cgroup时承认observer占额度；cgroup CPU不通过减法冒充rank CPU。
-  现有GPU telemetry:152–156只有UTC time，C1要附单调读取区间，不能直接与CPU ns连接。
-- 校准三组：A=CPU sampler off、详细timing off；B=proc sampler on、详细timing off；
-  C=详细timing/trace诊断组（明确其sampler状态）。三组保留相同既有GPU telemetry与输入/绑定，
-  因此A称现有benchmark基线，不能称完全无观测。先试CPU周期1s，再按pilot时长评估0.2s；
-  短smoke无两个有效样本只验接线、不报利用率。比较run seconds_max和进程wall分开，
-  `overhead_B=median(T_B)/median(T_A)-1`、C同理，附波动与sampler CPU/read成本；至少5次
-  独立重复且随机化组序。C2据实测设可接受扰动门槛后锁配置，C0不凭空宣称低扰动通过。
-- C1 CPU-only测试应覆盖：tick/不同W、comm括号、PID/TID重用、缺失/null、短命task、
-  主task context switch范围、共享quota不重复求和、容量变化/隐藏祖先、marker边界、异常退出；
-  load/sleep子进程只验证趋势，mock rank日志验证映射冲突；wrapper与原runner默认off无回归。
-  GPU smoke须再走环境门槛；本轮不执行。C1不应为凑阶段图直接修改生产runtime。
+C1 只提供本机进程观测窗口；线程归属/等待原因、跨 rank 同步阶段边界、完整 observer 扰动
+仍 UNKNOWN。CPU 指标支持关闭；生产 runtime、NEP、manifest 参数均未修改。
+C2 需要补时间线时与 O1 共用 marker 合同，另行授权生产标记；详细 timing 显式开关仍未接入。
 
 ### 最小 pilot 与完整矩阵配置设计（均未运行）
+
+以下矩阵是原 CPU 使用率研究方案。执行前须固定并核对每 rank CPU 核数与 NUMA 策略；
+原始 `--mpiexec-arg` 只可作临时实验，不构成新的 P0 启动接口验收。
 
 输入/profile/几何/seed继续引用 `tests/benchmark/manifest.json` 和
 `run_benchmark.py:70 geometry、93 run_input、285 main`；不另存一份数值defaults。
@@ -302,7 +212,7 @@ CPU研究只选dmgmd（现有`--engines dmgmd`），保留P=1两后端但标mode
 | C3核心完整矩阵 | carbon_1m/water_400k × P=1/2/4/8 × HostStaged/CudaAware × 至少5次，最低80个CPU采样trial；引用standard profile并显式--repeats 5，steps/warmup由C2校准覆盖且保留resolved config。8卡不足或失败保留PARTIAL；不把缺项当通过。timing-off主组与诊断组分别汇总。 |
 | 路径定向诊断（不混入核心强扩展） | 核心run_input只NVE、末步thermo，不含correct_velocity/adaptive/XYZ/restart/NVT。C2复用 `tests/mpi/run_mpi_domain.py`/`run_mpi_migration.py` 的现有fixture、CLI与触发条件，单独保存生成run.in/hash，覆盖修速、输出、实际rebuild/迁移、M1 fallback与多段run。先读对应--help，不杜撰benchmark --correct-velocity等不存在选项；未触发路径标NOT_OBSERVED。 |
 
-现有CLI可预览的模板（仅表示计算矩阵，**没有CPU采样功能**；设备列表按实际资源提供）：
+C2/C3 计算矩阵预览模板（未运行；若需采样加 `--cpu-sampling proc`，设备列表按实际资源提供）：
 
 ```bash
 source ../env/md-mpi.sh
@@ -315,24 +225,25 @@ python3 tests/benchmark/run_benchmark.py --profile standard --engines dmgmd \
 ```
 
 CLI已有 `--steps/--warmup/--min-seconds/--timeout` 与重复的`--mpiexec-arg`用于覆盖；
-正式命令由C2将校准值写入，不复制manifest defaults。绑核策略用现有launcher参数，记录实际
-task affinity核验；不要把命令中的`--bind-to core`当成生效证据。C2前环境与正确性门槛照
+正式命令由C2将校准值写入，不复制manifest defaults。正式绑核策略使用绑定计划交付的
+一等参数并核验实际 task affinity；不要把命令中的`--bind-to core`当成生效证据。C2前环境与正确性门槛照
 AGENTS执行，CPU研究不代替数值正确性，GPUMD对照也不纳入rank线程总量。
 
-### 本轮验证
+### C0 当轮验证（历史）
 
 仅执行上面两条现有CLI的 `--dry-run`（加载同一环境入口，Python禁写bytecode），分别解析为
 8和80个计划trial；未访问GPU、未生成模型、未创建benchmark结果目录。
 文档空白检查与工作树内容哈希对比确认本轮仅本文件变化；参考仓库仍干净。
 这验证配置与改动范围，不是采样器测试或任何性能/数值通过声明。
 
-### 未决项与下一阶段入口
+### C0 交接时未知项（历史）
 
 运行时线程数/库归属、MPI轮询/后台进展、实际affinity/quota与祖先可见性、CPU使用率、
 observer扰动、适宜采样周期、8卡/多节点资源均 **UNKNOWN（未测）**。阶段trace/时钟配对、
 显式诊断开关尚未实现；当前只能形成进程观测窗口，不能宣称已能逐run/逐step归因。
-下一轮执行下方 **C1 prompt**，实现本节schema/映射/采样/解析及CPU-only测试与受控smoke；
-C2再校准pilot，O1复用同一接口补时间线。本轮C0到此停止，不自动推进C1/C2/O0。
+上述是 C0 交接时状态；C1 工具/测试/smoke 已在后续完成。当前先实施
+[MPI CPU 绑定 P0](./mpi-cpu-binding.md)，再按需要执行下方 **C2 prompt** 的 A/B 校准；
+O1 复用同一接口补时间线。本轮 C1 到此停止，不执行 C2 或 M2b。
 
 ## 可直接交给 Codex CLI 的阶段 prompts
 
@@ -380,6 +291,8 @@ GPU smoke 每个新 shell source ../env/md-mpi.sh，按 AGENTS.md 先环境预�
 ```text
 请执行 docs/plans/cpu-usage-study.md 的 C2。读 AGENTS.md、本计划及 C0/C1 交接，检查两个仓库状态，
 保留已有修改，不提交、不推送。使用 C1 实际实现的 CLI，先查看 --help/dry-run，不能杜撰选项。
+先确认 docs/plans/mpi-cpu-binding.md 的固定 K 核/NUMA 启动参数已实现并验收；
+当前只有 --mpiexec-arg 透传时不得宣称完成正式绑定后 CPU 研究。
 每个新 shell source ../env/md-mpi.sh，按 AGENTS.md 完成环境门槛；先 smoke，再 pilot。
 先用可用的 1/2/4 rank、HostStaged/CudaAware 跑 carbon_1m 与 water_400k，内存不足从 smoke 降级，
 记录 mode、实际后端、自检状态、CPU affinity、GPU UUID、quota 与独占条件。P=1 为基线，
@@ -399,6 +312,7 @@ GPU smoke 每个新 shell source ../env/md-mpi.sh，按 AGENTS.md 先环境预�
 ```text
 请执行 docs/plans/cpu-usage-study.md 的 C3。读 AGENTS.md、C0-C2 产物，检查两个仓库状态，
 保留已有修改，不提交、不推送。C2 映射和采样开销未验收时先解决问题，不扩大矩阵。
+固定 CPU 核数与 NUMA 策略须与 C2 相同，逐 trial 核对实际 affinity/cpuset。
 按已校准配置测 carbon_1m/water_400k，1/2/4/8 rank，两通信后端，至少 5 次独立重复；
 使用现有 manifest 与显式 CLI 覆盖，记录最终解析配置。每 shell source ../env/md-mpi.sh。
 不足 8 张 GPU、OOM、后端自检失败等保留日志并标 PARTIAL/BLOCKED，不补造数据。

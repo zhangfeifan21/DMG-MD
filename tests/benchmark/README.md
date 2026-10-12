@@ -2,26 +2,42 @@
 
 类别：测试操作说明。参数以本目录 `manifest.json` 为准；不改变 `long_nve` 正确性验收。
 
+当前 runner 支持 `gpumd,lammps,dmgmd`，并将 GPUMD 与 LAMMPS 一同作为 DMG-MD
+对照组。固定每 rank CPU 核数/NUMA 绑定与 LAMMPS 正式性能矩阵仍为 P0 后续工作，见
+[绑定计划](../../docs/plans/mpi-cpu-binding.md)与
+[LAMMPS benchmark 计划](../../docs/plans/lammps-multigpu-benchmark.md)。
+三引擎按物理量等价而非输入哈希相同判定，规则见
+[横向对照标准](../../docs/standards/cross-engine-reference.md)。
+
 ## 测量对象与公平性
 
 - DMG-MD：`mpiexec -n P dmg-md`，每 rank 一张 GPU；分别测 HostStaged / CudaAware。
 - GPUMD：一个 `gpumd` 进程，只暴露 P 张 GPU。P=1 自动 ordinary NEP，P>1 自动
   `NEP_MULTIGPU`，`potential nep.txt y` 固定长轴。**不能用 mpiexec 启动 P 份 GPUMD**。
-- 两者读取字节相同的 `model.xyz`、锁定势、显式速度，NVE、0.1 fs、seed 0；只有 GPUMD
+- LAMMPS/MatPL：`mpiexec -n P`，启动包装器按本机 rank 给每个进程唯一 GPU UUID，
+  每 rank 仅见一张 GPU，再以 `-k on g 1 -sf kk` 运行 `matpl/nep/kk`。runner 核验
+  GPU 绑定记录、pair style 的 `kokkos_device` 路径和两段 `Loop time`。
+- 三者使用同一 `model.xyz` 物理初态、锁定势、显式速度，NVE、0.1 fs、seed 0；
+  LAMMPS 从模型生成 `data.lmp`，把 Å/fs 转为 Å/ps、fs 转为 ps，势格式仅在证明
+  等价时归一化并记录前后哈希。GPUMD
   多卡输入增加分解轴参数。复用 long_nve 的确定性碳晶体/水初态生成器，按几何放大，保留密度。
   这是性能压力样本，不是已平衡的生产科学体系。碳晶体与水分别观察稳定邻域和迁移/重建成本。
 - 每次重复都是全新进程、相同初态；同进程先 `run warmup`，再 `run steps`，最后一步输出一次
   thermo，不输出轨迹/restart。速度初始化、读文件、MPI 启动不计入正式段。正式段保留实际
   积分、邻域重建、通信和全局归约。预热不等于热力学平衡。
 - DMG-MD 用第二条 `DMGMD_TIMING phase=run seconds_max`（所有 rank 中的最大同步耗时）；
-  GPUMD 用第二条 `Time used for this run`。两者计时边界并非逐条指令完全相同：DMG-MD 的
+  GPUMD 用第二条 `Time used for this run`；LAMMPS 用第二条 `Loop time`。三者计时边界
+  并非逐条指令完全相同：DMG-MD 的
   run 段包含自己的段内准备，GPUMD 在循环前做部分准备；这是各自实际 MD 段性能，不能解释为
   NEP kernel 微基准。最终 thermo 会读回 GPU 结果，避免把异步 kernel 发射时间当完成时间。
   同时记录整个子进程 wall time，不能拿它替代正式段。
 - 默认关闭 DMGMD_DOMAIN_TIMING/DIAGNOSTICS，通信日志间隔大于段长；不修改 runtime/NEP。
   清除继承的全部 `DMGMD_*` 开关后显式设置性能环境，避免调试模式混入正式测量。
 - 每轮随机化配置顺序，固定 order_seed；重复次数、步数、GPU 顺序与二进制必须统一。
-  同一行两种引擎使用同一 GPU UUID 前缀，不偷偷选择各自最快的卡组。
+  同一行三种引擎使用同一 GPU UUID 前缀，不偷偷选择各自最快的卡组。
+
+目前静态物理量门槛已对 baseline 与 7 个 long-NVE 势型验证；正式性能还需短程/长程
+三引擎正确性和固定 CPU/NUMA 绑定验收。smoke/pilot 仅验证编排，不发表效率结论。
 
 ## 规模与扩展性
 
@@ -75,7 +91,7 @@ python3 tests/benchmark/run_benchmark.py --profile smoke --devices 0,1,2,3,4,5,6
 # pilot 校准时间和显存，pilot 自身不发表性能结论
 python3 tests/benchmark/run_benchmark.py --profile pilot --output dmgmd-bench-pilot
 
-# 正式矩阵，216 个串行 trial，建议 tmux + 独占节点
+# 默认三引擎标准矩阵为 288 个串行 trial；CPU/NUMA 绑定 P0 完成后再作为正式结果
 python3 tests/benchmark/run_benchmark.py --profile standard --output dmgmd-bench-standard
 
 # 单独的大内存容量/近立方盒实验，不和主矩阵混跑
@@ -95,10 +111,12 @@ Docker 中的时间以容器时区为准。
 --candidate ./build-benchmark/dmg-md --reference ./build-benchmark-gpumd/gpumd
 ```
 
-默认 reference 是旧测试使用的 `../gpumd-reference/src/gpumd`。正式比较建议重新构建两者，
+默认 GPUMD reference 是 `../gpumd-reference/src/gpumd`，默认 LAMMPS 可执行文件是
+`./build-lammps-nep-kk-preserved/lmp`，也可用 `--lammps-bin` 指定 `newmd` 内的另一构建。
+正式比较建议用记录了构建参数的版本，
 使用相同 CUDA/GCC/架构与 Release 选项，保留构建日志。运行器检查参考 checkout commit、
-保存二进制 SHA-256，但不能仅凭旧二进制推断其一定来自该 checkout。其他 reference 路径也必须
-保留同级锁定 `gpumd-reference` 源码用于审计。
+保存二进制 SHA-256，但不能仅凭旧二进制推断其一定来自该 checkout。三个 reference
+checkout 严格只读；MatPL overlay 与构建物保存在 `newmd`。
 
 ### 在 Docker 中构建并运行
 
@@ -128,7 +146,7 @@ docker run --rm --gpus '"device=0,1"' --shm-size=1g --ulimit memlock=-1:-1 \
   dmgmd:cuda12.8 bash -c '
     set -e
     MD_ENV_FILE=/opt/dmgmd/env/md-mpi.sh bash scripts/build_benchmark.sh 89 8
-    python3 tests/benchmark/run_benchmark.py --profile smoke \
+    python3 tests/benchmark/run_benchmark.py --profile smoke --engines gpumd,dmgmd \
       --devices 0,1 --ranks 1,2 \
       --candidate ./build-benchmark/dmg-md \
       --reference ./build-benchmark-gpumd/gpumd \
@@ -177,8 +195,14 @@ python3 tests/benchmark/run_benchmark.py --profile standard \
   --output dmgmd-bench-carbon1m
 ```
 
-`--cases` 覆盖 profile 的 case 列表。`--engines gpumd` 或 `dmgmd` 可诊断单方；
-`--mpiexec-arg=--bind-to --mpiexec-arg=core` 可指定统一 MPI 绑核策略。
+`--cases` 覆盖 profile 的 case 列表。`--engines gpumd`、`lammps` 或
+`dmgmd` 可诊断单方；`--mpiexec-arg` 透传给 LAMMPS 和 DMG-MD 的
+`mpiexec`，不作用于直接启动的 GPUMD，也不
+验证实际 affinity。临时实验可用 Open MPI 5 的例如
+`--mpiexec-arg=--map-by --mpiexec-arg=core:PE=4 --mpiexec-arg=--bind-to --mpiexec-arg=core --mpiexec-arg=--report-bindings`
+指定每 rank 四个物理核心并打印映射；这取决于实际可用拓扑，必须再检查各 rank 的
+`Cpus_allowed_list` 与 CPU→core/NUMA 关系。该透传不是尚待实现的一等 P0 接口，
+不能据此宣称 GPUMD/DMG-MD/LAMMPS 已用相同 CPU 资源。
 `--timeout` 是每次启动的总时限（包括读入、预热），默认 7200 s。
 已有结果目录拒绝覆盖；结果逐 trial 原子写入，Ctrl-C 会终止当前启动进程及其后代（包括独立进程组的 MPI rank）并保留已完成项。
 当前没有自动续跑/合并：按 case 分批可缩小重跑范围；不要跨不同环境/步数手工拼接比值。
@@ -197,7 +221,8 @@ UCX 路径为准。若通过其他工具锁频/设置功率，双方保持一致
 - `metadata.json`：命令、profile、随机顺序、GPU UUID、源码 revision/dirty 状态、二进制与
   生成器哈希、MPI/UCX/CUDA、CPU、拓扑、完整 GPU 配置和相关环境变量。
 - `preflight.txt`：现有 MPI/CUDA 门槛，实际 device-buffer collective/p2p 自检；失败不启动矩阵。
-- `inputs/`：可复现初态和势；每 trial 有 `run.in`、输入哈希、stdout/stderr、telemetry、结果 JSON。
+- `inputs/`：可复现初态和势；LAMMPS trial 使用 `data.lmp`/`in.lmp`，
+  GPUMD/DMG-MD 使用 `run.in`，各自保留输入哈希、stdout/stderr、telemetry 与结果 JSON。
 - `results.json`：包括失败、OOM（查看原始 stderr）、超时和过短 trial。
 - `summary.{json,csv,md}`：只汇总有效样本，提供 min/median/max、相对范围、样本数和完成标记。
   只有重复次数完整的行与基线才能计算性能比。
@@ -208,6 +233,7 @@ UCX 路径为准。若通过其他工具锁频/设置功率，双方保持一致
 - 强扩展 speedup = `t1/tP`；效率 = `t1/(P×tP)`，只用同引擎同后端同 N 的单卡基线。
 - 弱扩展效率 = `t1(N1)/tP(P×N1)`；弱扩展不输出混淆含义的 speedup。
 - 同卡数 `DMGMD/GPUMD = t_GPUMD/t_DMGMD`，>1 表示 DMG-MD 更快。
+- 同卡数 `DMGMD/LAMMPS = t_LAMMPS/t_DMGMD`，>1 表示 DMG-MD 更快。
 - 缺失/失败/OOM 的 P=1 基线，其扩展指标留空；绝不改用 P=2 伪装单卡基线。
 
 此 suite 只检查最终 thermo 有限、模式和计时完整，不代替能量漂移/力误差验收。对生产代码
@@ -221,3 +247,64 @@ python3 tests/benchmark/test_benchmark.py
 
 CPU 测试覆盖几何门槛、预热排除、后端回退/错误绑定拒绝、受干扰数据排除、强弱扩展公式和
 缺失基线，不启动 GPU。亦注册为 CTest `dmgmd.benchmark_analysis`。
+
+## CPU 采样（C1）
+
+默认 `--cpu-sampling off`，保留原有 benchmark 启动行为。CPU 工具只支持单节点 Linux、
+Open MPI 的 DMG-MD rank；GPUMD 不在 rank 采样范围。指标、原始 schema、共享 quota 与
+缺失数据语义见 [CPU 采样合同](../../docs/standards/cpu-sampling.md)，
+本轮验证见 [C1 记录](../../docs/status/cpu-sampling-c1-20261009.md)。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_benchmark.py --help
+# 无 GPU、无文件写入；参数仍由现有 manifest/profile/CLI 决定
+python3 tests/benchmark/run_benchmark.py --profile smoke --engines dmgmd \
+  --devices 0,1 --ranks 1,2 --backends HostStaged,CudaAware \
+  --cpu-sampling proc --cpu-sample-interval .2 --dry-run
+
+# 先按 AGENTS.md 预检，smoke 只验接线，不是正式矩阵或开销校准
+python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1 --ranks 2
+python3 tests/benchmark/run_benchmark.py --profile smoke --engines dmgmd \
+  --devices 0,1 --ranks 1,2 --backends HostStaged,CudaAware \
+  --cpu-sampling proc --cpu-sample-interval .2 --output dmgmd-cpu-smoke
+
+# CPU-only 测试与离线重算；TRIAL_DIR 为上一步某个 trial 目录
+python3 tests/benchmark/test_cpu_sampling.py
+python3 tests/benchmark/analyze_cpu.py --help
+python3 tests/benchmark/analyze_cpu.py TRIAL_DIR --output /tmp/cpu-recomputed --dry-run
+python3 tests/benchmark/analyze_cpu.py TRIAL_DIR --output /tmp/cpu-recomputed
+```
+
+| 选项 | 行为 |
+|---|---|
+| `--cpu-sampling off\|proc` | 默认 off。proc 要求 `--engines dmgmd`，一个独立采样进程，不给 rank 新增采样线程。 |
+| `--cpu-sample-interval SECONDS` | 默认 1 s，正有限数；与已有 GPU `--sample-interval` 独立。smoke 示例的 .2 s 不是推荐正式频率。 |
+| `--cpu-output ROOT` | 默认 trial/cpu；自定义时为 ROOT/本次run目录名/trial-id，拒绝覆盖已有采样目录。 |
+| `--cpu-diagnostics none\|pidstat\|perf` | 默认 none。诊断命令/version/原始日志及退出码保存，缺工具或权限记 unavailable，基础 /proc 采样继续。 |
+| `--cpu-capacity-scope unknown\|host` | 默认 unknown；host 是对完整宿主 cgroup 层次可见性的人工声明，仅核验后使用；不是“原生模式”的同义词。 |
+
+后三个选项只允许在 proc 模式使用，防止以为诊断已开却静默不采。全部在 `--help` 和
+`--dry-run` 展示；dry-run 不验证 GPU/namespace/cgroup 权限。可选分析器 `--markers FILE`
+读取 schema v1 的可靠 monotonic marker；当前 runtime 未发射这种 marker，默认 phase/sequence
+与 run CPU 利用率为空。现有详细 domain timing 仍关闭，不能通过继承 DMGMD_* 打开。
+
+数据位置：上层 metadata/result 指向 cpu 目录，内含 config.json、samples.jsonl、
+rank-N.json、sampler.stderr、collector-exit.json，以及 summary.json/csv、intervals.json。
+保留原始数据可用分析器重算；跨目录搬移还需保留原 stdout、trial/input/metadata，
+config.metadata.trial_directory 是原绝对路径，若移动后不可见则 GPU 映射 unavailable，不能猜补。
+短命线程可能漏采、初始化/退出尾部删失。少于两个有效样本为 insufficient_samples；
+`cpu_status=ok` 仅代表采样接线/映射完整，不意味着阶段性能或采样开销达标。
+CPU partial 会使 runner 非零退出；数值 trial status 单独保留。Ctrl-C/SIGTERM、超时和异常早退
+保留部分结果并清理本次采样器；不要靠 SIGKILL 做常规停止。
+
+Docker 用前文父目录挂载和镜像 entrypoint 环境，在**容器内**执行相同命令；每个原生新 shell
+均需 source `../env/md-mpi.sh`。runner、collector 和 rank 必须同机、同 PID/mount/time/cgroup
+namespace；多节点远端 /proc、宿主跨 namespace 采容器不支持。cgroup v1/不可读层次仍提供
+rank ticks/affinity，quota 归一化为空；容器 root 的 cpu.max=max 不能证明没有宿主祖先上限。
+
+C2 从现有 pilot profile 进入，先核验固定 affinity/quota 与观测开销，再校准时间窗。
+A/B 正式研究须先采用[固定 CPU 绑定计划](../../docs/plans/mpi-cpu-binding.md)交付的
+每 rank K 核与 NUMA 策略；C1 采样本身不设置 affinity。
+A=off、B=proc，同输入、GPU telemetry 与绑定，随机化组序、至少五次；C1 smoke 不代替此项。
+未有可靠 marker 前仅分析 process_observed，不能按 DMGMD_TIMING 汇总日志推断逐步 CPU。

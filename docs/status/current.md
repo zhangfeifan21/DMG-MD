@@ -2,7 +2,7 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-10-08。
+更新日期：2026-10-09。
 
 本轮第一阶段修改前的 M2a 基线为 clean revision
 `27e07d92b84f0e02d08d99c400c52b795175341f`。Release 配置为
@@ -33,7 +33,7 @@ runtime（M1）与 M2a local-domain 路径：
   自动回退 M1 replicated-full（`DMGMD_DOMAIN mode=m1-fallback`），小盒继续可运行；
 - M2b（Fp/partial 分阶段交换）与 3D/triclinic local-domain 仍未实施；多节点物理验收按维护者要求暂缓。
 - 2026-09-26 另一台服务器完成单机 1/2/4/8 GPU benchmark，3 算例、两后端、五次重复全部有效；8 GPU strong-scaling speedup 为 carbon_200k 6.31–6.47×、carbon_1m 7.52–7.66×、water_400k 5.17–5.39×。完整记录见 [多 GPU benchmark 实测](./benchmark-multigpu-results-20260926.md)。这是单机结果，不代表多节点。
-- 近期研发优先级调整为：CPU 调度/使用率实测与通信计算重叠（并列 P0）；其余功能扩展、100000-step release 与多节点验收排在其后。详见 [CPU 使用研究计划](../plans/cpu-usage-study.md) 和 [通信计算重叠计划](../plans/communication-computation-overlap.md)。
+- 2026-10-09 近期 P0 更新为：固定 MPI 启动 CPU 核数/NUMA 绑定、LAMMPS 多 GPU + MPI NEP 性能对比、通信与计算重叠。CPU 采样 C1 已完成，C2/C3 改作绑定验证及性能归因的辅助工作；LAMMPS 输入、静态正确性检查和三引擎 smoke 已实现，固定 CPU/NUMA 下的正式效率矩阵尚未完成。计划分别见 [CPU 绑定](../plans/mpi-cpu-binding.md)、[LAMMPS 对比](../plans/lammps-multigpu-benchmark.md) 与 [通信重叠](../plans/communication-computation-overlap.md)。
 
 M2a 的 10000-step nightly profile 已于 2026-09-18 手动执行并通过验证：覆盖 7 个
 case、seed 0、1/2/4 rank、HostStaged/CudaAware 共 42 个配置，其中 2/4 rank 的
@@ -210,7 +210,7 @@ mixed-cutoff float 舍入上界、P=2 同 peer 去重、真正 `local_count=0`�
   变体按合同只执行静态/短轨迹；
 - R28 多节点 rank I/O 隔离的双物理节点验收按维护者要求暂缓，不作为当前研发阻塞项；详见
   [multi-node-io.md](../plans/multi-node-io.md)；
-- 优先新方向为 CPU 使用证据/调度研究与通信计算 overlap 原型；M2b、3D 分解、triclinic/非周期 local-domain、100000-step release 和多节点验证列为后续；
+- 当前缺少受控且可核验的每 rank CPU 核数/NUMA 启动接口；LAMMPS GPU NEP 已有静态正确性与编排 smoke，尚无固定 CPU/NUMA 下的正式效率结果；通信计算 overlap 原型未实施。M2b、3D 分解、triclinic/非周期 local-domain、100000-step release 和多节点验证列为后续；
 - M2a 的 debug 构建不变量断言（risk-and-backlog §5 全表）未实现为每步 assert，
   由 CPU 单测 + layout 记录 + 精确字节模型间接覆盖；
 - M2a device 数据面为 local，但每 rank 仍保留完整 `HostAtoms` identity/输出元数据，
@@ -251,6 +251,20 @@ capacity 分离；修正非零中心 ELL row offset；`neighbor.out` 改为在�
 2026-09-15 M0（删除每步 velocity Allgatherv）已实施并验收（详见 Git 历史与
 2026-09-15 的记录方式；基线二进制 A/B 逐字节一致）。M1（`10903db`）见 Git 历史。
 
-## 2026-10-08 方向与优先级更新
+## 2026-10-08 方向记录（已由 2026-10-09 调整）
 
 用户提供的 `dmgmd-bench-docker-confirm-20260926-174639` 已整理为独立实测记录。当前源码存在 CUDA/MPI/host 阶段计时，但没有 CPU 核心利用率/线程职责的阶段化证据；先按 CPU 研究计划完成静态调度清点与可复跑采样。halo 交换目前在 `MPI_Isend/Irecv` 后同步 `MPI_Waitall`，runtime 在 halo 返回后才进入域分片 NEP，因此下一项核心技术探索是安全 interior/boundary 划分与通信重叠。物理双节点验收暂缓。
+
+## 2026-10-09 P0 需求调整
+
+导师要求固定 MPI 启动时每 rank 的 CPU 核数，并支持多 NUMA 节点上的明确绑定，以便
+在相同 CPU 资源条件下统计 benchmark。当前只有原始 `--mpiexec-arg` 透传，尚无一等参数、
+绑定冲突/退化检查或各引擎统一资源配置。新增 LAMMPS 多 GPU + MPI NEP 对照；
+LAMMPS/MatPL 已安装并完成编排、静态物理量检查及 1/2 GPU smoke，详情见
+[验证记录](./lammps-reference-20261009.md)。跨软件以物理量等价为标准，允许
+可证明等价的格式转换，不以文件哈希相同作为通过条件；见
+[三引擎对照标准](../standards/cross-engine-reference.md)。正式性能矩阵尚未执行。
+通信与计算重叠目标保持不变。
+CPU C1 的 2026-10-09 接线验证见 [记录](./cpu-sampling-c1-20261009.md)，其观测结果不等于
+已控制 CPU 资源或完成正式 CPU 利用率研究。历史 benchmark 数值保留原测量条件，不追加
+“固定 CPU 核数”或 LAMMPS 对比结论。

@@ -48,6 +48,36 @@ class BenchmarkTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 bench.parse_timing(bad, 'dmgmd', 2, 1000, 20, 100, 'CudaAware')
 
+    def test_lammps_timing_requires_nep_device_style_and_unique_rank_gpus(self):
+        log = ('LAMMPS_GPU_BIND rank=0 local_rank=0 cuda_uuid=GPU-A\n'
+               'LAMMPS_GPU_BIND rank=1 local_rank=1 cuda_uuid=GPU-B\n'
+               'KOKKOS mode with Kokkos version 4.6.2 is enabled\n'
+               '  will use up to 1 GPU(s) per node\n'
+               'NEP Kokkos potential nep.txt loaded successfully\n'
+               '(1) pair matpl/nep/kk, perpetual\n'
+               'attributes: full, newton on, kokkos_device\n'
+               'Loop time of 3 on 2 procs for 20 steps with 1000 atoms\n'
+               'Loop time of 12 on 2 procs for 100 steps with 1000 atoms\n')
+        self.assertEqual(bench.parse_timing(log, 'lammps', 2, 1000, 20, 100,
+                                            'none', ['GPU-A', 'GPU-B']), 12)
+        for bad in (log.replace('cuda_uuid=GPU-B', 'cuda_uuid=GPU-A'),
+                    log.replace('kokkos_device', 'host'),
+                    log.replace('for 100 steps', 'for 90 steps')):
+            with self.assertRaises(ValueError):
+                bench.parse_timing(bad, 'lammps', 2, 1000, 20, 100,
+                                   'none', ['GPU-A', 'GPU-B'])
+
+    def test_lammps_thermo_uses_final_measured_step(self):
+        segment = ('Step Atoms Temp PotEng KinEng TotEng Press\n'
+                   '0 100 1 -10 1 -9 0\n1 100 2 -11 1 -10 0\n'
+                   'Loop time of 1 on 1 procs for 1 steps with 100 atoms\n')
+        text = segment + ('Step Atoms Temp PotEng KinEng TotEng Press\n'
+                          '1 100 2 -11 1 -10 0\n3 100 3 -12 1 -11 0\n'
+                          'Loop time of 2 on 1 procs for 2 steps with 100 atoms\n')
+        self.assertEqual(bench.parse_lammps_thermo(text, 3, 100)[0], 3)
+        with self.assertRaises(ValueError):
+            bench.parse_lammps_thermo(text, 4, 100)
+
     def test_summary_uses_matching_baselines_and_excludes_contamination(self):
         def row(p, seconds, scaling='strong', status='ok', engine='dmgmd'):
             return dict(case=scaling, scaling=scaling, engine=engine, backend='none' if engine == 'gpumd' else 'HostStaged',

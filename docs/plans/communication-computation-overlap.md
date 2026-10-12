@@ -1,6 +1,13 @@
 # 通信与计算并行研究/实施计划
 
-类别：待实施计划。状态：**PROPOSED**。优先级：P0（与 CPU 使用研究并列，当前主要研发方向）。
+类别：待实施计划。状态：**PROPOSED**。优先级：P0（与 MPI CPU 绑定、LAMMPS 对比并列；技术目标不变）。
+
+2026-10-09 的调整只改变实验前置条件：O1/O5 在同一固定每 rank CPU 核数、NUMA
+位置及 GPU 映射下比较同步/重叠路径，使用
+[MPI CPU 绑定计划](./mpi-cpu-binding.md)的可核验启动接口。既有
+[CPU 采样 C1](../standards/cpu-sampling.md)用于记录 CPU 成本；C2/C3 使用率研究是辅助
+诊断，不阻塞 O2/O3 正确性工作。LAMMPS 外部基线见
+[LAMMPS benchmark 计划](./lammps-multigpu-benchmark.md)，不充当 overlap 数值 oracle。
 
 ## 研究目标
 
@@ -95,9 +102,10 @@ P=1、M1 fallback、空 interior 必须有明确且可测试的同步行为。
 
 ### 联合执行顺序
 
-推荐派发顺序：**C0 → O0 → C1 → C2 → O1 → O2 → O3 → O4 → C3 → O5**。
-C0/O0 是独立审计，可在隔离工作树分别完成；C3 不依赖 overlap，资源允许时可提前。
-CPU 采样器、元数据 schema 和 benchmark 运行器由 CPU 线先交付，O1/O5 复用，避免两条线重复实现。
+更新后的顺序：**C0/C1、O0 已完成审计或工具准备 → 固定 CPU 绑定验收 → O1
+→ O2 → O3 → O4 → O5**。LAMMPS 安装与性能对比可独立开展；O5 可引用它作为外部
+参照，但不等待 LAMMPS 才能验证 DMG-MD 的同步/重叠 A/B。C2/C3 按需校准采样开销
+与 CPU 成本，复用现有工具，不作为 O2/O3 正确性工作的先决条件。
 GPU 正式实验在同一资源上串行调度；多个 agent 不同时修改公共 runtime/benchmark 文件。
 
 每次交接至少包含：实际 revision 与 dirty patch/哈希、改动文件、精确命令、已跑/未跑矩阵、
@@ -407,7 +415,8 @@ force-done，并含rank、step、key；复用C0单调时钟/CPU schema，不从1
 5. O3在立即finish模式重复同矩阵，验证request/buffer生命周期；O4才在延迟/不同progress调度下
    复验数据竞争与正确性，并给真实trace。O2性能只用于记录分类/双launch额外成本，不声称overlap收益。
 
-C0已规定CPU利用率分母/缺失数据和采样扰动；O1须等C1/C2工具与baseline，不能另造CPU采样器。
+C0/C1已规定CPU指标与采样接口；O1 使用固定 CPU 绑定与现有 C1 工具，必要时单独校准
+采样开销，不能另造CPU采样器。C2/C3 不作为 O1 开始的硬前置。
 本轮只做源码/文档核对，以上所有新测试与性能数据均为**NOT RUN**。
 
 ### 本轮静态校验
@@ -430,7 +439,8 @@ UNKNOWN：实际I/E比例和收益、mask/额外launch成本、CUDA-aware接收�
 目标栈细节、编译后bitwise表现、stream分离的实际重叠程度、诊断计时schema最终兼容方式。
 C0没有CPU实测，O0也没有；不由源码Isend或闭包证明推断运行时并行。
 
-下一入口按联合顺序为 **C1 → C2 → O1**；维护者确认本方向、O1基线及所需前置验收齐备后，
+本段记录的是 2026-10-08 的 O0 交接；C1 后续已完成。当前下一入口是**固定 CPU 绑定验收
+→ O1**；维护者确认本方向、O1基线及所需前置验收齐备后，
 再执行本计划O2。O2可直接以本节集合/读写表/日程/反例为实现合同；不确定依赖回退full，
 不得擅自扩大I、改变halo或跳过辅助producer。本轮不自动进入任何下一阶段。
 
@@ -463,8 +473,10 @@ C0没有CPU实测，O0也没有；不由源码Isend或闭包证明推断运行�
 ### O1：串行 baseline 与实验编排
 
 ```text
-请执行 docs/plans/communication-computation-overlap.md 的 O1。读 AGENTS.md、本计划、O0 和 CPU C0-C2
-交接，检查两个仓库状态，保留用户修改，不提交、不推送。缺少 CPU 工具时先明确接口缺口，不另造一套。
+请执行 docs/plans/communication-computation-overlap.md 的 O1。读 AGENTS.md、本计划、O0、
+CPU C0/C1 与 MPI CPU 绑定交接，检查两个仓库状态，保留用户修改，不提交、不推送。
+正式性能基线固定每 rank 物理核心数、NUMA 与 GPU 映射，并核验实际 affinity；
+CPU C2/C3 尚未完成时复用 C1 工具按需校准，不另造一套。
 审计现有 DMGMD_DOMAIN_TIMING：pack、staging、MPI 等待、unpack、NEP、同步调用的真实计时范围。
 补齐必要且默认关闭的 trace/时间戳；明确 CUDA event 与 host 单调时钟如何关联。
 不加 profiler barrier/强制同步来制造假 baseline；分别跑详细 trace 与关闭 profiler 的性能组。
@@ -544,9 +556,11 @@ rebuild/迁移、空 interior、P=1/M1 等回退有机器可读原因；开关�
 ### O5：收益归因、强扩展与采用决策
 
 ```text
-请执行 docs/plans/communication-computation-overlap.md 的 O5。读 AGENTS.md、O0-O4 和 CPU C2/C3 产物，
+请执行 docs/plans/communication-computation-overlap.md 的 O5。读 AGENTS.md、O0-O4、固定 CPU
+绑定记录与可用的 CPU 采样产物，
 检查两个仓库状态，保留已有修改，不提交、不推送。O4 正确性门槛未过时不发表性能结论。
-复用 benchmark 与 CPU 采样工具，先 pilot，再在同输入/初态/二进制/绑定/步数下随机化 A/B 顺序。
+复用 benchmark 与 CPU 采样工具，先 pilot，再在同输入/初态/二进制/固定 K 核与 NUMA
+绑定/步数下随机化 A/B 顺序，并逐 trial 核验实际 affinity。
 矩阵至少 carbon_200k/carbon_1m/water_400k、1/2/4/8 GPU、两后端；P=1 标为单卡基线，
 M1 fallback 不混入 M2a 收益。资源不足保留缺口，单节点结果不能写成跨节点结论。
 warmup/steps 使用 manifest 和显式覆盖，正式重复至少 5 次，保存解析配置和预先确定的统计方法。

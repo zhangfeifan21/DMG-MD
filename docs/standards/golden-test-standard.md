@@ -22,7 +22,7 @@
 
 ### 2.1 CPU/CTest
 
-`ctest --test-dir build --output-on-failure` 当前注册五项：
+`ctest --test-dir build --output-on-failure` 当前注册九项：
 
 | test | 当前覆盖 |
 | --- | --- |
@@ -30,9 +30,23 @@
 | `dmgmd.model_parser` | model schema、类型、质量、盒和输入错误 |
 | `dmgmd.spatial_ownership` | M1 slab 纯逻辑：s=0/s=1/内部边界及两侧、周期首尾迁移、一步跨多 slab、空 owned list 与 N<P、cube/最长轴 tie（含负向 lattice edge）、owner 唯一覆盖、index 排序、mask/list 一致、malformed global_id，以及非 canonical displacement/local send count/非 permutation scatter plan 拒绝（取代 M0 的 balanced owned range 测试） |
 | `dmgmd.domain_layout` | M2a 纯逻辑：typewise 半径、eligibility/fallback reason、ghost 分类边界（恰在 d_dep/d_coord）、P=2 同 peer 去重、空 rank/N<P、确定性槽位序、malformed exchange/migration plan 拒绝、一步跨多 slab 路由、membership 记录布局 |
+| `dmgmd.domain_neighbor_cuda` | CUDA 容器与邻域索引；无 GPU 环境返回 skip |
 | `dmgmd.long_nve_analysis` | fixture/potential 生成、哈希、统计量、checkpoint、重试和失败分类 |
+| `dmgmd.benchmark_analysis` | 三引擎 benchmark 日志解析、统计与报告 |
+| `dmgmd.cpu_sampling` | CPU 采样和记录解析 |
+| `dmgmd.lammps_reference` | 势格式等价转换、输入单位与物理量比较器 |
 
 CTest 不会自动启动 baseline GPU、MPI differential 或长程 GPU 矩阵。
+
+### 2.5 GPUMD/LAMMPS/DMG-MD 横向对照
+
+LAMMPS 输入生成器与静态物理量比较器位于 `tests/lammps_reference/`，三引擎
+benchmark 编排位于 `tests/benchmark/`。这一路径以**相同物理体系和物理量等价**
+作为通过条件，允许经证明等价的势格式与单位转换，不要求不同软件的输入或输出
+文件哈希相同。逐原子能量、力、virial 和总势能的现行机器门槛见
+`tests/lammps_reference/manifest.json`；完整规则见
+[三引擎对照标准](./cross-engine-reference.md)。短程/长程三引擎动力学与固定
+CPU/NUMA 下的正式性能矩阵仍待验收。
 
 ### 2.2 单 GPU committed baseline
 
@@ -111,7 +125,7 @@ HostStaged/CudaAware（36 组），每个 case 先运行同输入 P=1 M1 oracle�
 
 ## 3. 比较层级
 
-### 3.1 必须完全一致
+### 3.1 必须完全一致（GPUMD committed golden 兼容性回归）
 
 - 成功/失败分类；
 - 文件集合、文件名、frame 数、输出 step；
@@ -122,7 +136,8 @@ HostStaged/CudaAware（36 组），每个 case 先运行同输入 P=1 M1 oracle�
 - ownership 覆盖（无遗漏/无重叠/owned counts 覆盖）、rank 0 唯一输出等结构不变量。
 
 reference 在锁定环境中还要求与 committed golden byte-exact。不能由此推导 candidate、跨
-GPU 架构或跨 MPI reduction tree 必须 byte-exact。
+GPU 架构或跨 MPI reduction tree 必须 byte-exact；上述输入哈希要求也不适用于
+经证明等价的跨软件格式转换。
 
 ### 3.2 使用确定性数值容差
 
@@ -184,6 +199,8 @@ candidate stage 还必须存在结构合法的 `DMGMD_TIMING phase=run/total` �
 | M2a 域分解 owned/ghost halo | 已实现并通过（`run_mpi_domain.py`：2/4 rank × 双后端大盒矩阵，含两跳链、迁移/周期/多 slab、restart 跨 rank 数、P=1 oracle 差分与逐字段通信字节断言；nightly 长程矩阵另有完整通过记录） | MPI domain runner |
 | M2a 长程守恒 nightly | 已通过（2026-09-18 手动执行：7 个 case、seed 0、1/2/4 rank、HostStaged/CudaAware，共 42 个配置；其中 M2a 2/4 rank 共 28 个配置） | long-NVE runner 扩展 |
 | 分区面精确边界、周期 ghost 的大盒边界 fixture | 已实现（`run_mpi_domain.py` 的 chain/crossings fixtures） | MPI domain runner |
+| LAMMPS 与 GPUMD 静态物理量对照 | 已实现；2026-10-09 baseline 4 case 与 long-NVE 7 case smoke 静态通过 | `tests/lammps_reference/` |
+| 三引擎 benchmark 编排 | 已实现；1/2 GPU smoke 通过，固定 CPU/NUMA 正式矩阵待执行 | `tests/benchmark/` |
 | 多节点本地 scratch/故障注入 | 自动化已定义；严格双节点验收 IN PROGRESS | `tests/mpi/run_rank_io_isolation.py`、`docs/plans/multi-node-io.md` |
 | 完整 malformed/invalid compatibility corpus | 未完成 | `docs/plans/risk-and-backlog.md` |
 

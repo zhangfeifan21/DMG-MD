@@ -5,6 +5,14 @@
 参考；DMG-MD 在相同初态上接受短程严格比较、长期守恒、温度/RDF/MSD统计、双向构型回放和
 跨 rank restart 检查。
 
+同一 fixture 已可通过
+[`tests/lammps_reference/lammps_inputs.py`](../lammps_reference/README.md)
+生成 LAMMPS 静态与短 NVE 输入；GPUMD、LAMMPS、DMG-MD 的横向比较以物理量
+等价为准，允许可证明等价的格式与单位转换，不要求文件哈希相同。
+当前三引擎静态 smoke 验证与后续短程/长程、正式效率门槛见
+[对照标准](../../docs/standards/cross-engine-reference.md)和
+[LAMMPS 计划](../../docs/plans/lammps-multigpu-benchmark.md)。
+
 ## 固定体系
 
 `manifest.json` 为可复用 fixture 库锁定 10 组显式速度初态；默认 release profile 从中选择

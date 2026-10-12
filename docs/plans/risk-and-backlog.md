@@ -2,12 +2,14 @@
 
 类别：待实施计划。状态：IN PROGRESS（持续登记）。本文只登记仍影响未来实现的风险和待决事项。
 
-## 当前开发优先级（2026-10-08）
+## 当前开发优先级（2026-10-09）
 
-1. **P0 并列：CPU 调度/使用率证据**（[cpu-usage-study.md](./cpu-usage-study.md)）；先测量线程、CPU 时间和按阶段利用率，再决定是否需要 CPU 侧优化。
-2. **P0 并列：通信与计算并行**（[communication-computation-overlap.md](./communication-computation-overlap.md)）；先做依赖证明和 interior overlap 原型。
-3. **P1 后续：** 100000-step release、M2b、3D/local-domain 扩展、兼容性 backlog。
-4. **暂缓：** R28 双物理节点 I/O/restart 验收（[multi-node-io.md](./multi-node-io.md)）。用户已说明物理双节点暂不验证。
+1. **P0 并列：固定 MPI 启动 CPU 核数与 NUMA 绑定**（[mpi-cpu-binding.md](./mpi-cpu-binding.md)）；提供启动参数并核验每 rank 的实际物理核心集合。
+2. **P0 并列：LAMMPS 多 GPU + MPI NEP benchmark**（[lammps-multigpu-benchmark.md](./lammps-multigpu-benchmark.md)）；版本锁定、同初态静态物理量及 GPU 路径已验证，短程/长程三引擎正确性和固定 CPU/NUMA 的正式性能矩阵待完成。
+3. **P0 并列：通信与计算重叠**（[communication-computation-overlap.md](./communication-computation-overlap.md)）；原目标不变，使用固定 CPU 绑定做 A/B。
+4. **辅助诊断：** [CPU 使用率研究](./cpu-usage-study.md)已有 C0/C1；C2/C3 在绑定入口完成后校准并复用，不作为当前独立 P0。
+5. **P1 后续：** 100000-step release、M2b、3D/local-domain 扩展、兼容性 backlog。
+6. **暂缓：** R28 双物理节点 I/O/restart 验收（[multi-node-io.md](./multi-node-io.md)）。用户已说明物理双节点暂不验证。
 
 ## 1. 风险评级
 
@@ -166,10 +168,11 @@ halo selection = physical cutoff relative to triclinic rank faces
 
 ## 7. 未决事项
 
-性能实施路线（2026-09-21 批准）按以下顺序推进：第一阶段日志降噪与 GPU capacity 复用
+2026-09-21 批准的历史性能实施路线按以下顺序推进：第一阶段日志降噪与 GPU capacity 复用
 已完成实现与验收；第二阶段减少重建并分别测量普通步/重建步；第三阶段实现并比较 M2b 与
 MatPL 式 ghost 力回传。通信计算重叠、3D 分解、动态负载均衡、triclinic/非周期扩展均不在
-前三阶段内。第一阶段不改变 M2a 迁移触发、两跳 halo、force assembly 或统计频率。
+前三阶段内。该路线的第三阶段尚未实施；2026-10-09 的三项 P0 优先于此历史路线。
+第一阶段不改变 M2a 迁移触发、两跳 halo、force assembly 或统计频率。
 第二阶段的缓存有效性证明、统一重建判定与计时口径已实施，批准设计见
 [cache-validity-and-step-timing.md](./cache-validity-and-step-timing.md)，现行合同见
 [replicated-mpi.md](../standards/replicated-mpi.md)，实测与瓶颈见

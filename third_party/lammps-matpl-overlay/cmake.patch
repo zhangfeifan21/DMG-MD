@@ -1,0 +1,116 @@
+diff --git a/cmake/CMakeLists.txt b/cmake/CMakeLists.txt
+index 035299d..9e5393a 100644
+--- a/cmake/CMakeLists.txt
++++ b/cmake/CMakeLists.txt
+@@ -31,7 +31,7 @@ endif()
+ project(lammps
+         DESCRIPTION "The LAMMPS Molecular Dynamics Simulator"
+         HOMEPAGE_URL "https://www.lammps.org"
+-        LANGUAGES CXX C)
++        LANGUAGES CXX C CUDA)
+ set(SOVERSION 0)
+ get_property(BUILD_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+ 
+@@ -734,6 +734,102 @@ foreach(PKG_WITH_INCL CORESHELL DPD-BASIC DPD-SMOOTH MC MISC PHONON QEQ OPENMP K
+   endif()
+ endforeach()
+ 
++
++######################################################################
++# package of NEP with KOKKOS
++######################################################################
++if(PKG_NEP_KK)
++  # Mandatory dependency check
++  if(NOT PKG_KOKKOS)
++    message(FATAL_ERROR "NEP_KK requires KOKKOS package. Enable with -DPKG_KOKKOS=yes")
++  endif()
++  
++  if(NOT Kokkos_ENABLE_CUDA)
++    message(FATAL_ERROR "NEP_KK requires CUDA support. Enable with -DKokkos_ENABLE_CUDA=yes")
++  endif()
++
++  find_package(CUDAToolkit REQUIRED)
++  
++  message(STATUS "NEP_KK: Building with mandatory KOKKOS and CUDA")
++  
++  # Collect source files
++  file(GLOB NEP_KK_SOURCES
++    ${LAMMPS_SOURCE_DIR}/nep_gpu/force/*.cu
++    ${LAMMPS_SOURCE_DIR}/nep_gpu/utilities/*.cu
++  )
++  
++  file(GLOB NEP_KOKKOS_SOURCES 
++    ${LAMMPS_SOURCE_DIR}/KOKKOS/pair_nep_kokkos.cpp
++  )
++  # Simply add to compilation - let Kokkos configuration handle these files
++  target_sources(lammps PRIVATE ${NEP_KOKKOS_SOURCES} ${NEP_KK_SOURCES})
++  target_link_libraries(lammps PUBLIC CUDA::cufft)
++  # Only set include directories
++  target_include_directories(lammps PRIVATE 
++    ${LAMMPS_SOURCE_DIR}/KOKKOS
++    ${LAMMPS_SOURCE_DIR}/nep_gpu/force
++    ${LAMMPS_SOURCE_DIR}/nep_gpu/utilities
++  )
++endif()
++
++#####################################################################
++# package of NEP with double precision
++#####################################################################
++option(PREC_NEPINFER "Use double precision" OFF)
++if(PREC_NEPINFER AND PKG_NEP_KK)
++    message(STATUS "PREC_NEPINFER is ON: Using double precision for NEP model.")
++    add_compile_definitions(PREC_NEPINFER)
++endif()
++
++######################################################################
++# package of DP with KOKKOS
++######################################################################
++if(PKG_MATPLDP)
++  # 1. 查找 PyTorch
++  find_package(Torch REQUIRED)
++  # 2. 链接 PyTorch 库到 LAMMPS 库（使用 PUBLIC 以便传递给可执行文件）
++  target_link_libraries(lammps PUBLIC ${TORCH_LIBRARIES})
++  # 3. 添加包源文件（假设文件位于 src/MATPLDP/ 下）
++  file(GLOB MATPLDP_SOURCES ${LAMMPS_SOURCE_DIR}/MATPLDP/*.cpp)
++  target_sources(lammps PRIVATE ${MATPLDP_SOURCES})
++  # 4. 添加包含目录（如果头文件需要被其他源文件引用）
++  target_include_directories(lammps PRIVATE ${LAMMPS_SOURCE_DIR}/MATPLDP)
++  RegisterStyles(${LAMMPS_SOURCE_DIR}/MATPLDP)
++endif()
++
++######################################################################
++# package of D3
++######################################################################
++if(PKG_MATPLD3)
++  # ==================== CUDA 强制检查（和 NEP_KK 一样） ====================
++  find_package(CUDAToolkit REQUIRED)
++  if(NOT CMAKE_CUDA_COMPILER)
++    message(FATAL_ERROR "PKG_MATPLD3 requires CUDA (nvcc). 请确保 CUDA 已安装！")
++  endif()
++  
++  message(STATUS "PKG_MATPLD3: Building with CUDA (toolkit ${CUDAToolkit_VERSION})")
++
++  file(GLOB MATPLD3_SOURCES ${CONFIGURE_DEPENDS}
++    ${LAMMPS_SOURCE_DIR}/MATPLD3/*.cu
++    ${LAMMPS_SOURCE_DIR}/MATPLD3/*.cpp
++  )
++
++  message(STATUS "LAMMPS_SOURCE_DIR = ${LAMMPS_SOURCE_DIR}")
++  message(STATUS "Looking for MATPLD3 files in: ${LAMMPS_SOURCE_DIR}/MATPLD3")
++  if(MATPLD3_SOURCES)
++    message(STATUS "MATPLD3 sources found: ${MATPLD3_SOURCES}")
++  else()
++    message(FATAL_ERROR "No source files found in ${LAMMPS_SOURCE_DIR}/MATPLD3")
++  endif()
++  target_sources(lammps PRIVATE ${MATPLD3_SOURCES})
++  target_include_directories(lammps PRIVATE 
++    ${LAMMPS_SOURCE_DIR}/MATPLD3
++    ${CUDAToolkit_INCLUDE_DIRS}
++  )
++  RegisterStyles(${LAMMPS_SOURCE_DIR}/MATPLD3)
++endif()
++
++######################################################################
+ if(PKG_PLUGIN)
+   target_compile_definitions(lammps PRIVATE -DLMP_PLUGIN)
+ endif()

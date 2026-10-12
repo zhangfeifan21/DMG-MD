@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
   "reference_commit": "9d23496e41319b9e2af5221a7df6285387401d1e",
+  "lammps_commit": "611ca3b7f8525ba802373b04f9e3d632d515f7e3",
+  "matpl_commit": "21fabf34eadc57a717f4c7fbce9bb80aad5fd991",
   "seed": 0,
   "order_seed": 20260922,
   "ranks": [1, 2, 4, 8],
