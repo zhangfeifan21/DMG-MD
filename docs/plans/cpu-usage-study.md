@@ -192,7 +192,8 @@ C0 静态审计保留在上文；原拟定接口的历史版本可由 Git 查看
 
 C1 只提供本机进程观测窗口；线程归属/等待原因、跨 rank 同步阶段边界、完整 observer 扰动
 仍 UNKNOWN。CPU 指标支持关闭；生产 runtime、NEP、manifest 参数均未修改。
-C2 需要补时间线时与 O1 共用 marker 合同，另行授权生产标记；详细 timing 显式开关仍未接入。
+C1 交接当时尚无生产 marker；O1 已在 2026-10-12 接入默认关闭的 M2a trace 与
+benchmark marker 转换，实测见 [O1 记录](../status/overlap-baseline-20261012.md)。
 
 ### 最小 pilot 与完整矩阵配置设计（均未运行）
 

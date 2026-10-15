@@ -439,6 +439,25 @@ scientific output 和 remaining。默认关闭时不创建 event、不输出逐�
 interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端性能仍以详细计时关闭时的
 `DMGMD_TIMING phase=run seconds_max` 为准。
 
+`DMGMD_DOMAIN_TRACE=1` 仅在同时设置 `DMGMD_DOMAIN_TIMING=1` 的 M2a 路径有效，默认关闭。
+`DMGMD_DOMAIN_DIAGNOSTICS` 启动记录中的 `timing`/`trace` 是程序实际模式。每 rank/步
+输出 `DMGMD_DOMAIN_TRACE`：`CLOCK_MONOTONIC` 的整数纳秒记录 step、decision、rebuild、
+ordinary halo、NEP host enqueue 和 thermo readiness 边界；ordinary halo 还记录 pack/unpack
+enqueue、HostStaged D2H/H2D、CudaAware 输入/输出同步、MPI post 与 `MPI_Waitall` 调用边界。
+rebuild 的同类内部阶段目前只在整体 rebuild host 区间内，未单独拆出。缺席阶段用零时间戳，
+不得解释为耗时零。每行带 rank/PID、sequence/global step、当前步各类通信字节和整段 NEP
+CUDA event 耗时；`DMGMD_DOMAIN_TRACE_SEGMENT` 给出可与同一 clock namespace 的 C1 样本关联
+的 run loop 边界。trace 的逐行输出本身有开销，不能用作无诊断性能基线。
+
+`halo_transfer_wait` 从 pack enqueue 后至 unpack enqueue 前计 host wall，含 pinned staging、
+CudaAware 的既有 `cudaDeviceSynchronize` 和 MPI；`mpi_wait` 是所有被计量 MPI 调用的 host
+耗时总和，不是纯网络传输时间。trace 的 `mpi_waitall_*` 只括住 `MPI_Waitall` 调用；
+post 至完成是请求在途窗口，不证明网卡正在传输。pack/unpack/NEP 的 CUDA event 给出同一
+stream 上的设备耗时，不携带 `CLOCK_MONOTONIC` 绝对时间。host enqueue 时间与既有 thermo
+D2H/段末同步提供先后及就绪边界，无法从这些字段给设备事件构造精确主机时间戳；跨 CPU/GPU
+重叠只能在更强的时钟校准或外部 profiler 证据下声称。诊断没有新增逐步 barrier 或同步；
+段末只执行原有一次 device synchronization，随后读取末个 event。
+
 ### 验证入口（M2a）
 
 `tests/mpi/run_mpi_domain.py` 在 `check_environment` 门槛后运行 2/4 rank ×

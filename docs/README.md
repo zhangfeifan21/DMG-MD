@@ -27,6 +27,7 @@
 这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
 
 - [CPU 采样 C1 验证（2026-10-09）](./status/cpu-sampling-c1-20261009.md)
+- [通信/计算重叠 O1 串行基线（2026-10-12）](./status/overlap-baseline-20261012.md)
 - [LAMMPS/MatPL 三引擎静态与 smoke 验证（2026-10-09）](./status/lammps-reference-20261009.md)
 - [当前实现进度](./status/current.md)
 - [多 GPU Benchmark 实测结果（2026-09-26）](./status/benchmark-multigpu-results-20260926.md)

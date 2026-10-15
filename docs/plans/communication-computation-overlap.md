@@ -2,9 +2,10 @@
 
 类别：待实施计划。状态：**PROPOSED**。优先级：P0（与 MPI CPU 绑定、LAMMPS 对比并列；技术目标不变）。
 
-2026-10-09 的调整只改变实验前置条件：O1/O5 在同一固定每 rank CPU 核数、NUMA
-位置及 GPU 映射下比较同步/重叠路径，使用
-[MPI CPU 绑定计划](./mpi-cpu-binding.md)的可核验启动接口。既有
+O1/O5 在同一固定每 rank CPU 核数、NUMA 位置及 GPU 映射下比较同步/重叠路径。
+2026-10-12 维护者澄清：[MPI CPU 绑定计划](./mpi-cpu-binding.md)是后续 benchmark
+复现的工程化改动，不是 O1 算法基线的前置条件；O1 使用显式 Open MPI 映射参数并以
+实际 task affinity 核验。既有
 [CPU 采样 C1](../standards/cpu-sampling.md)用于记录 CPU 成本；C2/C3 使用率研究是辅助
 诊断，不阻塞 O2/O3 正确性工作。LAMMPS 外部基线见
 [LAMMPS benchmark 计划](./lammps-multigpu-benchmark.md)，不充当 overlap 数值 oracle。
@@ -102,8 +103,9 @@ P=1、M1 fallback、空 interior 必须有明确且可测试的同步行为。
 
 ### 联合执行顺序
 
-更新后的顺序：**C0/C1、O0 已完成审计或工具准备 → 固定 CPU 绑定验收 → O1
-→ O2 → O3 → O4 → O5**。LAMMPS 安装与性能对比可独立开展；O5 可引用它作为外部
+更新后的顺序：**C0/C1、O0 已完成审计或工具准备 → O1 → O2 → O3 → O4
+→ O5**。固定 CPU 绑定入口可并行实施，O1 的资源映射由显式启动参数和 C1 实测核验；
+O5 扩展矩阵复用验收后的统一入口。LAMMPS 安装与性能对比可独立开展；O5 可引用它作为外部
 参照，但不等待 LAMMPS 才能验证 DMG-MD 的同步/重叠 A/B。C2/C3 按需校准采样开销
 与 CPU 成本，复用现有工具，不作为 O2/O3 正确性工作的先决条件。
 GPU 正式实验在同一资源上串行调度；多个 agent 不同时修改公共 runtime/benchmark 文件。
@@ -439,8 +441,8 @@ UNKNOWN：实际I/E比例和收益、mask/额外launch成本、CUDA-aware接收�
 目标栈细节、编译后bitwise表现、stream分离的实际重叠程度、诊断计时schema最终兼容方式。
 C0没有CPU实测，O0也没有；不由源码Isend或闭包证明推断运行时并行。
 
-本段记录的是 2026-10-08 的 O0 交接；C1 后续已完成。当前下一入口是**固定 CPU 绑定验收
-→ O1**；维护者确认本方向、O1基线及所需前置验收齐备后，
+本段记录的是 2026-10-08 的 O0 交接；C1 后续已完成。原“固定 CPU 绑定验收→O1”
+顺序已由上方 2026-10-12 澄清取代。维护者确认本方向、O1基线及所需前置验收齐备后，
 再执行本计划O2。O2可直接以本节集合/读写表/日程/反例为实现合同；不确定依赖回退full，
 不得擅自扩大I、改变halo或跳过辅助producer。本轮不自动进入任何下一阶段。
 
@@ -471,6 +473,10 @@ C0没有CPU实测，O0也没有；不由源码Isend或闭包证明推断运行�
 ```
 
 ### O1：串行 baseline 与实验编排
+
+**O1 COMPLETE（2026-10-12）**：默认关闭的时间线、A/B 编排、固定资源下的普通/重建
+串行基线与 CPU 样本见 [实测记录](../status/overlap-baseline-20261012.md)。O2–O5 尚未执行，
+本计划总体仍为 PROPOSED；O0 的分区实现方向确认点继续适用于 O2。
 
 ```text
 请执行 docs/plans/communication-computation-overlap.md 的 O1。读 AGENTS.md、本计划、O0、

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <ctime>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -39,6 +40,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unistd.h>
 
 namespace dmgmd {
 namespace detail {
@@ -306,6 +308,7 @@ struct DomainState {
   bool neighbor_cache_valid = false;
   bool detailed_logging = false;
   bool timing_enabled = false;
+  bool trace_enabled = false;
   DomainDeviceAtoms device;
   // Workspace bookkeeping: the NEP workspaces are re-sized only when
   // local_count changes; every layout change still forces a Verlet rebuild.
@@ -364,6 +367,41 @@ struct SegmentTiming {
   double setup_cell_neighbor_device = 0.0;
   double setup_nep_device = 0.0;
 };
+
+struct StepTrace {
+  std::uint64_t begin_ns = 0;
+  std::uint64_t decision_begin_ns = 0;
+  std::uint64_t decision_end_ns = 0;
+  std::uint64_t rebuild_begin_ns = 0;
+  std::uint64_t rebuild_end_ns = 0;
+  std::uint64_t halo_begin_ns = 0;
+  std::uint64_t halo_end_ns = 0;
+  std::uint64_t nep_begin_ns = 0;
+  std::uint64_t nep_end_ns = 0;
+  std::uint64_t thermo_end_ns = 0;
+  std::uint64_t end_ns = 0;
+  double pack_device_seconds = 0.0;
+  double unpack_device_seconds = 0.0;
+  double nep_device_seconds = 0.0;
+};
+
+[[nodiscard]] std::uint64_t monotonic_ns()
+{
+  timespec stamp{};
+  if (clock_gettime(CLOCK_MONOTONIC, &stamp) != 0) {
+    throw std::runtime_error("read CLOCK_MONOTONIC for domain trace failed");
+  }
+  return static_cast<std::uint64_t>(stamp.tv_sec) * 1000000000ULL +
+         static_cast<std::uint64_t>(stamp.tv_nsec);
+}
+
+[[nodiscard]] bool domain_trace_enabled()
+{
+  const char* value = std::getenv("DMGMD_DOMAIN_TRACE");
+  if (value == nullptr || value[0] == '\0' || std::strcmp(value, "0") == 0) return false;
+  if (std::strcmp(value, "1") == 0) return true;
+  throw std::runtime_error("DMGMD_DOMAIN_TRACE must be 0 or 1");
+}
 
 [[nodiscard]] int timing_histogram_bucket(double seconds)
 {
@@ -563,6 +601,59 @@ void log_segment_timing(
     std::cout << '\n';
   }
   std::cout.flush();
+}
+
+void log_step_trace(
+    const DomainState& state, std::uint64_t sequence, std::uint64_t step,
+    TimedStepClass step_class, const StepTrace& trace,
+    const P2pTimingEvents& halo, const CommunicationVolume& volume)
+{
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(9)
+       << "DMGMD_DOMAIN_TRACE rank=" << state.rank << " pid=" << getpid()
+       << " sequence=" << sequence << " step=" << step
+       << " class=" << (step_class == TimedStepClass::ordinary ? "ordinary" : "rebuild")
+       << " clock=CLOCK_MONOTONIC"
+       << " begin_ns=" << trace.begin_ns
+       << " decision_begin_ns=" << trace.decision_begin_ns
+       << " decision_end_ns=" << trace.decision_end_ns
+       << " rebuild_begin_ns=" << trace.rebuild_begin_ns
+       << " rebuild_end_ns=" << trace.rebuild_end_ns
+       << " halo_begin_ns=" << trace.halo_begin_ns
+       << " halo_end_ns=" << trace.halo_end_ns
+       << " nep_begin_ns=" << trace.nep_begin_ns
+       << " nep_end_ns=" << trace.nep_end_ns
+       << " thermo_end_ns=" << trace.thermo_end_ns
+       << " end_ns=" << trace.end_ns
+       << " pack_enqueue_begin_ns=" << halo.pack_enqueue_begin_ns
+       << " pack_enqueue_end_ns=" << halo.pack_enqueue_end_ns
+       << " d2h_begin_ns=" << halo.d2h_begin_ns
+       << " d2h_end_ns=" << halo.d2h_end_ns
+       << " input_sync_begin_ns=" << halo.input_sync_begin_ns
+       << " input_sync_end_ns=" << halo.input_sync_end_ns
+       << " mpi_post_begin_ns=" << halo.mpi_post_begin_ns
+       << " mpi_waitall_begin_ns=" << halo.mpi_waitall_begin_ns
+       << " mpi_waitall_end_ns=" << halo.mpi_waitall_end_ns
+       << " h2d_begin_ns=" << halo.h2d_begin_ns
+       << " h2d_end_ns=" << halo.h2d_end_ns
+       << " output_sync_begin_ns=" << halo.output_sync_begin_ns
+       << " output_sync_end_ns=" << halo.output_sync_end_ns
+       << " unpack_enqueue_begin_ns=" << halo.unpack_enqueue_begin_ns
+       << " unpack_enqueue_end_ns=" << halo.unpack_enqueue_end_ns
+       << " pack_device_seconds=" << trace.pack_device_seconds
+       << " unpack_device_seconds=" << trace.unpack_device_seconds
+       << " nep_device_seconds=" << trace.nep_device_seconds
+       << " halo_send_bytes_local=" << volume.halo_send_bytes_local
+       << " halo_recv_bytes_local=" << volume.halo_recv_bytes_local
+       << " migration_send_bytes_local=" << volume.migration_send_bytes_local
+       << " migration_recv_bytes_local=" << volume.migration_recv_bytes_local
+       << " control_send_bytes_local=" << volume.control_send_bytes_local
+       << " control_recv_bytes_local=" << volume.control_recv_bytes_local
+       << " collective_calls=" << volume.collective_calls
+       << " mpi_input_bytes_global=" << volume.mpi_input_bytes_global
+       << " mpi_output_bytes_global=" << volume.mpi_output_bytes_global
+       << " mpi_call_seconds_local=" << volume.mpi_wait_seconds_local;
+  std::cout << line.str() << '\n';
 }
 
 [[nodiscard]] bool domain_diagnostics_enabled()
@@ -1496,8 +1587,16 @@ void run_domain_segment(
                  "record NEP timing marker");
     };
   }
+  const std::uint64_t trace_segment_begin_ns =
+      state.trace_enabled ? monotonic_ns() : 0;
   const auto step_loop_started = begin_detailed_timing(state.timing_enabled);
   for (int step = 0; step < steps; ++step) {
+    StepTrace trace;
+    if (state.trace_enabled) trace.begin_ns = monotonic_ns();
+    if (state.timing_enabled) {
+      halo_events = P2pTimingEvents{halo_events.pack_begin, halo_events.pack_end,
+                                    halo_events.unpack_begin, halo_events.unpack_end};
+    }
     const auto step_started = begin_detailed_timing(state.timing_enabled);
     double accounted_host = 0.0;
     CommunicationVolume communication;
@@ -1550,6 +1649,7 @@ void run_domain_segment(
     // 5. One globally consistent cache decision. A geometric slab crossing
     // alone only marks the eventual route; manager ownership remains fixed
     // until the displacement cache itself must be rebuilt.
+    if (state.trace_enabled) trace.decision_begin_ns = monotonic_ns();
     const auto decision_started = begin_detailed_timing(state.timing_enabled);
     state.decision_state = DomainDecisionState::undetermined;
     double local_max_squared = 0.0;
@@ -1593,6 +1693,7 @@ void run_domain_segment(
                                    : DomainDecisionState::confirmed_reuse;
     const TimedStepClass step_class =
         rebuild ? TimedStepClass::rebuild : TimedStepClass::ordinary;
+    if (state.trace_enabled) trace.decision_end_ns = monotonic_ns();
     if (state.timing_enabled) {
       const double seconds = elapsed_since(decision_started);
       add_seconds(segment_timing, step_class, kIntegrationHost,
@@ -1604,6 +1705,7 @@ void run_domain_segment(
     gpumd_compat::DomainNeighborAction neighbor_action =
         gpumd_compat::DomainNeighborAction::confirmed_reuse;
     if (rebuild) {
+      if (state.trace_enabled) trace.rebuild_begin_ns = monotonic_ns();
       const auto rebuild_started = begin_detailed_timing(state.timing_enabled);
       if (state.timing_enabled) ++segment_timing.displacement_rebuilds;
       if ((global_reasons & kOwnerRoutingNeeded) != 0) {
@@ -1620,12 +1722,14 @@ void run_domain_segment(
       ++state.rebuild_steps;
       neighbor_action = gpumd_compat::DomainNeighborAction::must_rebuild;
       if (state.timing_enabled) accounted_host += elapsed_since(rebuild_started);
+      if (state.trace_enabled) trace.rebuild_end_ns = monotonic_ns();
     } else {
       // 6. Ordinary step: manager/layout/mapping stay fixed and only ghost
       // coordinates are refreshed through the cached face plan.
-      halo_events.transfer_wait_seconds = 0.0;
+      if (state.trace_enabled) trace.halo_begin_ns = monotonic_ns();
       refresh_ghost_positions(
           state, mpi, communication, state.timing_enabled ? &halo_events : nullptr);
+      if (state.trace_enabled) trace.halo_end_ns = monotonic_ns();
       if (state.timing_enabled) {
         add_seconds(segment_timing, step_class, kHaloTransferWait,
                     halo_events.transfer_wait_seconds);
@@ -1634,7 +1738,9 @@ void run_domain_segment(
     }
     // 8. Domain NEP: dependency-center neighbor/descriptor/partial, owned
     // radial force / many-body / ZBL, all with the local stride.
+    if (state.trace_enabled) trace.nep_begin_ns = monotonic_ns();
     launch_domain_force(state, box, nep, neighbor_action);
+    if (state.trace_enabled) trace.nep_end_ns = monotonic_ns();
     // 9. VV second half over the owned prefix.
     const auto integration_second_started = begin_detailed_timing(state.timing_enabled);
     if (state.timing_enabled) {
@@ -1664,6 +1770,7 @@ void run_domain_segment(
       add_seconds(segment_timing, step_class, kThermoHost, seconds);
       accounted_host += seconds;
     }
+    if (state.trace_enabled) trace.thermo_end_ns = monotonic_ns();
     // 11. Thermostat over the owned prefix.
     const auto thermostat_started = begin_detailed_timing(state.timing_enabled);
     if (state.timing_enabled) {
@@ -1704,8 +1811,9 @@ void run_domain_segment(
       accounted_host += seconds;
       add_seconds(segment_timing, step_class, kCellNeighborDevice,
                   event_seconds(nep_events[0], nep_events[1]));
+      trace.nep_device_seconds = event_seconds(nep_events[2], nep_events[3]);
       add_seconds(segment_timing, step_class, kNepDevice,
-                  event_seconds(nep_events[2], nep_events[3]));
+                  trace.nep_device_seconds);
       add_seconds(segment_timing, step_class, kIntegrationDevice,
                   event_seconds(integration_events[0], integration_events[1]) +
                       event_seconds(integration_events[2], integration_events[3]));
@@ -1713,12 +1821,14 @@ void run_domain_segment(
                   event_seconds(thermo_events[0], thermo_events[1]) +
                       event_seconds(thermo_events[2], thermo_events[3]));
       if (!rebuild) {
-        add_seconds(segment_timing, step_class, kHaloPackDevice,
-                    event_seconds(reinterpret_cast<cudaEvent_t>(halo_events.pack_begin),
-                                  reinterpret_cast<cudaEvent_t>(halo_events.pack_end)));
-        add_seconds(segment_timing, step_class, kHaloUnpackDevice,
-                    event_seconds(reinterpret_cast<cudaEvent_t>(halo_events.unpack_begin),
-                                  reinterpret_cast<cudaEvent_t>(halo_events.unpack_end)));
+        trace.pack_device_seconds = event_seconds(
+            reinterpret_cast<cudaEvent_t>(halo_events.pack_begin),
+            reinterpret_cast<cudaEvent_t>(halo_events.pack_end));
+        trace.unpack_device_seconds = event_seconds(
+            reinterpret_cast<cudaEvent_t>(halo_events.unpack_begin),
+            reinterpret_cast<cudaEvent_t>(halo_events.unpack_end));
+        add_seconds(segment_timing, step_class, kHaloPackDevice, trace.pack_device_seconds);
+        add_seconds(segment_timing, step_class, kHaloUnpackDevice, trace.unpack_device_seconds);
       }
     }
     // 12. Outputs.
@@ -1785,12 +1895,25 @@ void run_domain_segment(
       add_seconds(segment_timing, step_class, kRemainingHost,
                   std::max(0.0, remaining));
     }
+    if (state.trace_enabled) {
+      trace.end_ns = monotonic_ns();
+      log_step_trace(state, sequence, global_step, step_class, trace, halo_events,
+                     communication);
+    }
   }
+  const std::uint64_t trace_segment_end_ns =
+      state.trace_enabled ? monotonic_ns() : 0;
+  if (state.trace_enabled) {
+    std::cout << "DMGMD_DOMAIN_TRACE_SEGMENT rank=" << state.rank
+              << " pid=" << getpid() << " sequence=" << sequence
+              << " clock=CLOCK_MONOTONIC begin_ns=" << trace_segment_begin_ns
+              << " end_ns=" << trace_segment_end_ns << '\n';
+  }
+  // This is the production segment-boundary readiness point. Resolve the
+  // optional final CUDA event after it; detailed timing must not add another
+  // device-wide synchronization or a per-step profiler barrier.
+  check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
   if (state.timing_enabled) {
-    // The production caller already synchronizes at this segment boundary.
-    // Resolve the final deferred event here so the timing reduction sees a
-    // complete ledger, without synchronizing after individual kernels.
-    check_cuda(cudaDeviceSynchronize(), "resolve domain timing events at segment end");
     if (pending_thermostat_timing) {
       add_seconds(segment_timing, *pending_thermostat_timing, kIntegrationDevice,
                   event_seconds(integration_events[4], integration_events[5]));
@@ -1867,17 +1990,23 @@ void run_local_domain(
   state.group_method_count = identity.group_labels.size();
   state.detailed_logging = detail::domain_diagnostics_enabled();
   state.timing_enabled = detail::domain_timing_enabled();
+  state.trace_enabled = detail::domain_trace_enabled();
+  if (state.trace_enabled && !state.timing_enabled) {
+    throw std::runtime_error("DMGMD_DOMAIN_TRACE=1 requires DMGMD_DOMAIN_TIMING=1");
+  }
   mpi.assert_same_fingerprint(
       state.detailed_logging ? 1 : 0, "domain diagnostics configuration");
   mpi.assert_same_fingerprint(
-      state.timing_enabled ? 1 : 0, "domain timing configuration");
+      (state.timing_enabled ? 1 : 0) | (state.trace_enabled ? 2 : 0),
+      "domain timing/trace configuration");
   state.allocation_origin = gpumd_compat::gpu_vector_allocation_count();
   state.device.thermo.resize_reuse(8);
   if (mpi.is_root()) {
     std::cout << "DMGMD_DOMAIN_DIAGNOSTICS detailed="
               << (state.detailed_logging ? "on" : "off")
               << " summary=run-segment timing="
-              << (state.timing_enabled ? "on" : "off") << '\n';
+              << (state.timing_enabled ? "on" : "off")
+              << " trace=" << (state.trace_enabled ? "on" : "off") << '\n';
   }
 
   // Ownership is computed from the raw input coordinates (slab ownership
@@ -2144,7 +2273,6 @@ void run_local_domain(
         detail::run_domain_segment(
             run_sequence, run->steps, time_step, maximum_distance, *ensemble, velocity_correction,
             measurements, global_time, global_step, box, identity, nep, state, mpi);
-        detail::check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
         const double segment_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - segment_started).count();
         mpi.log_timing(

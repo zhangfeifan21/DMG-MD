@@ -71,7 +71,8 @@ core equivalent=`(U+S)/W`、one-core CPU%=100×core equivalent；不加 child/gu
 job 默认是所有已观测**进程** CPU seconds subtotal，P>1 异步读取的窗口一般不完全重合，
 status=partial，job core-equivalent/峰值为空；`sum_rank_mean_core_equivalent` 明确是不同窗口
 rank 均值之和。只有各 rank 存在完全相同的实际起止时间才给 common_exact_windows job 均值和带宽度的窗口峰值；
-不插值、不将各 rank 峰值相加。C2/O1 若要正式阶段/job 指标，必须补同步 marker/计数边界。
+不插值、不将各 rank 峰值相加。O1 已有 rank-local run marker；若要正式的跨 rank
+同一窗口 job 指标，仍需同步 marker/计数边界。
 C1 不发布跨 trial CPU 性能统计：进程窗口含初始化、预热和退出，尚不能冒充正式 run 段。
 
 observer 汇总与 rank 平行；collector 周期样本包含读取/写入/注册核验的 CPU 成本，但初始化、
@@ -104,8 +105,12 @@ cgroup v1、不可读/逃逸路径保留原因，CPU ticks 仍可用。
 process_start_ticks/clock_domain_id/clock_id/t_ns/sequence/phase/edge(begin|end)，可带
 global_step/epoch。按身份+sequence+phase配对；缺端、重复begin、非正窗口、时钟错误记 issue。
 只纳入两端读取区间完全在窗内的样本，不按比例切割边界区间。嵌套阶段可以重叠，不能相加。
-无 marker 则 phase/sequence/run_cpu_utilization=null。当前生产 runtime 没有这个接口的发射点，
-`DMGMD_TIMING`/`DMGMD_DOMAIN_TIMING` 不能替代绝对时钟 marker；详细诊断开关仍不支持。
+无 marker 则 phase/sequence/run_cpu_utilization=null。M2a 的 O1 trace 模式现在由
+`DMGMD_DOMAIN_TRACE=1` 发射 `CLOCK_MONOTONIC` 整数纳秒；benchmark runner 校验
+rank/PID/start ticks/clock domain 后把 raw stdout 转成 `cpu/markers.jsonl`，再传给现有
+`analyze_cpu`。它给 run-loop 与逐步 ordinary/rebuild 窗口；短步没有完整采样区间时
+CPU 值仍为 null。默认关闭，`DMGMD_TIMING`/`DMGMD_DOMAIN_TIMING` 的相对耗时
+本身仍不能替代绝对 marker；具体 trace 范围见 [M2a 合同](./replicated-mpi.md)。
 
 正常结束、timeout、KeyboardInterrupt/SIGTERM 均回收本次 launcher 后代与 collector。
 launcher 沿已有 ancestry+PID/starttime 清理；collector/诊断工具只通过本次 Popen handle 回收，

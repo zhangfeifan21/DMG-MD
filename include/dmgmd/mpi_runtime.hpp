@@ -86,6 +86,24 @@ struct P2pTimingEvents {
   void* unpack_begin = nullptr;
   void* unpack_end = nullptr;
   double transfer_wait_seconds = 0.0;
+  // CLOCK_MONOTONIC host brackets. Zero means the stage does not apply.
+  // These are observations of the existing synchronous path, not GPU event
+  // timestamps or evidence that a posted request made network progress.
+  std::uint64_t pack_enqueue_begin_ns = 0;
+  std::uint64_t pack_enqueue_end_ns = 0;
+  std::uint64_t d2h_begin_ns = 0;
+  std::uint64_t d2h_end_ns = 0;
+  std::uint64_t input_sync_begin_ns = 0;
+  std::uint64_t input_sync_end_ns = 0;
+  std::uint64_t mpi_post_begin_ns = 0;
+  std::uint64_t mpi_waitall_begin_ns = 0;
+  std::uint64_t mpi_waitall_end_ns = 0;
+  std::uint64_t h2d_begin_ns = 0;
+  std::uint64_t h2d_end_ns = 0;
+  std::uint64_t output_sync_begin_ns = 0;
+  std::uint64_t output_sync_end_ns = 0;
+  std::uint64_t unpack_enqueue_begin_ns = 0;
+  std::uint64_t unpack_enqueue_end_ns = 0;
 };
 
 // Communication plan for the M1 indexed collectives. M1 spatial ownership is

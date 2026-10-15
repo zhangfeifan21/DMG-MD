@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / 'tests/lammps_reference'))
 import long_nve_common as fixtures
 import lammps_inputs
 from check_environment import validate_environment
-from cpu_sampling import Session as CpuSession, sample as cpu_sample
+from cpu_sampling import Session as CpuSession, sample as cpu_sample, cpu_set
 from analyze_cpu import analyze as analyze_cpu
 
 
@@ -197,6 +197,108 @@ def parse_timing(text, engine, ranks, atoms, warmup, steps, backend, selected=No
     return seconds
 
 
+def actual_dmgmd_profiling(text, requested):
+    """Require the runtime's mode record, not an inherited/exported environment."""
+    modes = [fields(line) for line in text.splitlines()
+             if line.startswith('DMGMD_DOMAIN_DIAGNOSTICS detailed=')]
+    if len(modes) != 1:
+        raise ValueError('missing or duplicate DMGMD domain diagnostic mode')
+    expected = 'on' if requested == 'trace' else 'off'
+    if (modes[0].get('timing'), modes[0].get('trace')) != (expected, expected):
+        raise ValueError('runtime profiling mode differs from requested configuration')
+    trace = [line for line in text.splitlines() if line.startswith('DMGMD_DOMAIN_TRACE rank=')]
+    timing = [line for line in text.splitlines() if line.startswith('DMGMD_DOMAIN_TIMING sequence=')]
+    if requested == 'trace' and (not trace or len(timing) != 4):
+        raise ValueError('trace mode lacks step trace or both segment timing summaries')
+    if requested == 'off' and (trace or timing):
+        raise ValueError('profiling output appeared in off mode')
+    return {'timing': modes[0]['timing'], 'trace': modes[0]['trace'],
+            'step_trace_rows': len(trace), 'timing_summary_rows': len(timing)}
+
+
+def write_trace_markers(text, cpu_directory):
+    """Join runtime timestamps to C1's verified PID/start identity for reuse by its analyzer."""
+    cpu_directory = Path(cpu_directory)
+    config = json.loads((cpu_directory / 'config.json').read_text())
+    registrations = {rank: json.loads((cpu_directory / f'rank-{rank}.json').read_text())
+                     for rank in range(config['ranks'])}
+    markers = []
+    for line in text.splitlines():
+        if not line.startswith(('DMGMD_DOMAIN_TRACE rank=', 'DMGMD_DOMAIN_TRACE_SEGMENT rank=')):
+            continue
+        record = fields(line)
+        rank = int(record['rank'])
+        registration = registrations[rank]
+        if int(record['pid']) != registration['pid'] or record['clock'] != 'CLOCK_MONOTONIC':
+            raise ValueError('trace PID or clock differs from C1 rank registration')
+        segment = line.startswith('DMGMD_DOMAIN_TRACE_SEGMENT rank=')
+        phase = 'run' if segment else 'step_' + record['class']
+        sequence = int(record['sequence']) if segment else f'{record["sequence"]}:{record["step"]}'
+        begin, end = int(record['begin_ns']), int(record['end_ns'])
+        if begin <= 0 or end <= begin:
+            raise ValueError('invalid trace marker window')
+        common = dict(schema_version=1, rank=rank, pid=registration['pid'],
+                      process_start_ticks=registration['process_start_ticks'],
+                      clock_domain_id=registration['clock_domain_id'],
+                      clock_id='CLOCK_MONOTONIC', sequence=sequence, phase=phase)
+        for edge, stamp in (('begin', begin), ('end', end)):
+            markers.append(dict(common, edge=edge, t_ns=stamp))
+    if not markers:
+        raise ValueError('no runtime trace markers to join with C1 samples')
+    path = cpu_directory / 'markers.jsonl'
+    path.write_text(''.join(json.dumps(marker) + '\n' for marker in markers))
+    return path
+
+
+def verify_cpu_binding(cpu_directory, physical_cores, numa_node):
+    """Check observed task masks against the C1 topology snapshot, including SMT siblings."""
+    cpu_directory = Path(cpu_directory)
+    config = json.loads((cpu_directory / 'config.json').read_text())
+    topology = {}
+    for path, value in config['topology'].items():
+        match = re.search(r'/cpu(\d+)/topology/(core_id|physical_package_id)$', path)
+        if match and value is not None:
+            topology.setdefault(int(match[1]), {})[match[2]] = int(value)
+    nodes = {}
+    for path, value in config['numa'].items():
+        match = re.search(r'/node(\d+)/cpulist$', path)
+        if match and value is not None:
+            for cpu in cpu_set(value):
+                nodes[cpu] = int(match[1])
+    rows = [json.loads(line) for line in (cpu_directory / 'samples.jsonl').read_text().splitlines()]
+    verified = []
+    for rank in range(config['ranks']):
+        process = [row for row in rows if row.get('type') == 'proc_sample' and
+                   row.get('rank') == rank and row.get('status') == 'ok']
+        if not process:
+            raise ValueError(f'rank {rank}: no valid C1 process affinity sample')
+        masks = {tuple(row['affinity']) for row in process}
+        if len(masks) != 1:
+            raise ValueError(f'rank {rank}: process affinity changed during trial')
+        mask = set(next(iter(masks)))
+        tasks = [row for row in rows if row.get('type') == 'task_sample' and
+                 row.get('rank') == rank and row.get('status') == 'ok']
+        if not tasks or any(not set(row['affinity']) <= mask for row in tasks):
+            raise ValueError(f'rank {rank}: task affinity unavailable or exceeds process mask')
+        if not mask or any(cpu not in topology or cpu not in nodes or
+                           not {'core_id', 'physical_package_id'} <= topology[cpu].keys()
+                           for cpu in mask):
+            raise ValueError(f'rank {rank}: incomplete CPU topology for observed mask')
+        cores = {(topology[cpu]['physical_package_id'], topology[cpu]['core_id']) for cpu in mask}
+        actual_nodes = {nodes[cpu] for cpu in mask}
+        if len(cores) != physical_cores or actual_nodes != {numa_node}:
+            raise ValueError(f'rank {rank}: observed {len(cores)} physical cores on NUMA '
+                             f'{sorted(actual_nodes)}, expected {physical_cores} on {numa_node}')
+        verified.append(dict(rank=rank, logical_cpus=sorted(mask), physical_cores=len(cores),
+                             physical_core_ids=sorted([list(core) for core in cores]),
+                             numa_nodes=sorted(actual_nodes), process_samples=len(process),
+                             task_samples=len(tasks)))
+    if any(set(a['logical_cpus']) & set(b['logical_cpus'])
+           for i, a in enumerate(verified) for b in verified[i + 1:]):
+        raise ValueError('ranks share CPUs under the requested fixed binding')
+    return verified
+
+
 GPU_FIELDS = ('index,uuid,name,pci.bus_id,driver_version,memory.total,memory.used,'
               'utilization.gpu,temperature.gpu,power.draw,power.limit,clocks.sm,clocks.mem')
 
@@ -287,11 +389,12 @@ def summary(results, repeats):
     groups = {}
     for result in results:
         if result['status'] == 'ok':
-            key = tuple(result[k] for k in ('case', 'scaling', 'engine', 'backend', 'ranks', 'atoms'))
+            key = tuple(result[k] for k in ('case', 'scaling', 'engine', 'backend', 'ranks', 'atoms')) + \
+                  (result.get('profiling', 'off'),)
             groups.setdefault(key, []).append(result['seconds'])
     rows = []
     for key, times in sorted(groups.items()):
-        row = dict(zip(('case', 'scaling', 'engine', 'backend', 'ranks', 'atoms'), key))
+        row = dict(zip(('case', 'scaling', 'engine', 'backend', 'ranks', 'atoms', 'profiling'), key))
         row.update(samples=len(times), complete=len(times) == repeats,
                    seconds_median=statistics.median(times), seconds_min=min(times), seconds_max=max(times),
                    relative_range=(max(times)-min(times))/statistics.median(times))
@@ -301,7 +404,8 @@ def summary(results, repeats):
         rows.append(row)
     for row in rows:
         baseline = next((r for r in rows if r['case'] == row['case'] and r['engine'] == row['engine']
-                         and r['backend'] == row['backend'] and r['ranks'] == 1 and r['complete']), None)
+                         and r['backend'] == row['backend'] and r['profiling'] == row['profiling']
+                         and r['ranks'] == 1 and r['complete']), None)
         row['speedup'] = row['efficiency'] = None
         row['dmgmd_over_gpumd'] = row['dmgmd_over_lammps'] = None
         if row['complete'] and baseline:
@@ -311,12 +415,12 @@ def summary(results, repeats):
         reference = next((r for r in rows if r['case'] == row['case'] and r['engine'] == 'gpumd'
                           and r['ranks'] == row['ranks'] and r['atoms'] == row['atoms']
                           and r['complete']), None)
-        if row['engine'] == 'dmgmd' and row['complete'] and reference:
+        if row['engine'] == 'dmgmd' and row['profiling'] == 'off' and row['complete'] and reference:
             row['dmgmd_over_gpumd'] = reference['seconds_median'] / row['seconds_median']
         lammps = next((r for r in rows if r['case'] == row['case'] and r['engine'] == 'lammps'
                        and r['ranks'] == row['ranks'] and r['atoms'] == row['atoms']
                        and r['complete']), None)
-        if row['engine'] == 'dmgmd' and row['complete'] and lammps:
+        if row['engine'] == 'dmgmd' and row['profiling'] == 'off' and row['complete'] and lammps:
             row['dmgmd_over_lammps'] = lammps['seconds_median'] / row['seconds_median']
     return rows
 
@@ -330,12 +434,12 @@ def report(output, results, repeats):
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-    lines = ['# Benchmark results', '', '| case | engine/backend | GPUs | atoms | samples | ms/step | atom-step/s | speedup | efficiency | DMG/GPUMD | DMG/LAMMPS |',
+    lines = ['# Benchmark results', '', '| case | engine/backend/profile | GPUs | atoms | samples | ms/step | atom-step/s | speedup | efficiency | DMG/GPUMD | DMG/LAMMPS |',
              '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     def fmt(value):
         return '—' if value is None else f'{value:.4g}'
     for r in rows:
-        lines.append(f'| {r["case"]} | {r["engine"]}/{r["backend"]} | {r["ranks"]} | {r["atoms"]} | '
+        lines.append(f'| {r["case"]} | {r["engine"]}/{r["backend"]}/{r["profiling"]} | {r["ranks"]} | {r["atoms"]} | '
                      f'{r["samples"]}/{repeats} | {fmt(r["ms_per_step"])} | {fmt(r["atom_steps_per_second"])} | '
                      f'{fmt(r["speedup"])} | {fmt(r["efficiency"])} | {fmt(r["dmgmd_over_gpumd"])} | '
                      f'{fmt(r["dmgmd_over_lammps"])} |')
@@ -361,6 +465,13 @@ def main():
     p.add_argument('--lammps-bin', type=Path, default=ROOT / 'build-lammps-nep-kk-preserved/lmp')
     p.add_argument('--mpiexec', default='mpiexec')
     p.add_argument('--mpiexec-arg', action='append', default=[])
+    p.add_argument('--dmgmd-profiling', default='off',
+                   help='comma-separated DMG-MD modes: off,trace; trace enables detailed timing '
+                        'and per-step CLOCK_MONOTONIC timeline (M2a ranks > 1 only)')
+    p.add_argument('--expected-cores-per-rank', type=int,
+                   help='verify this many observed physical cores per rank from C1 samples')
+    p.add_argument('--expected-numa-node', type=int,
+                   help='verify every observed rank affinity remains on this NUMA node')
     p.add_argument('--output', type=Path, default=ROOT / 'dmgmd-benchmark',
                    help='output directory prefix; appends local YYYYMMDD-HHMMSS and a counter on collision')
     for name in ('warmup', 'steps', 'repeats'):
@@ -388,10 +499,17 @@ def main():
         p.error('CPU sampling supports --engines dmgmd only')
     if args.cpu_sampling == 'off' and (args.cpu_output or args.cpu_diagnostics != 'none' or args.cpu_capacity_scope != 'unknown'):
         p.error('CPU output/diagnostics/capacity options require --cpu-sampling proc')
+    if (args.expected_cores_per_rank is None) != (args.expected_numa_node is None):
+        p.error('both --expected-cores-per-rank and --expected-numa-node are required together')
+    if args.expected_cores_per_rank is not None and (args.cpu_sampling != 'proc' or
+            args.expected_cores_per_rank <= 0 or args.expected_numa_node < 0):
+        p.error('fixed affinity verification requires --cpu-sampling proc and valid core/NUMA counts')
     cpu_options = dict(mode=args.cpu_sampling, interval=args.cpu_sample_interval,
                        output=str(args.cpu_output.resolve()) if args.cpu_output else 'TRIAL/cpu',
                        diagnostics=args.cpu_diagnostics, capacity_scope=args.cpu_capacity_scope,
-                       support='single-node, same PID/mount/time/cgroup namespaces')
+                       support='single-node, same PID/mount/time/cgroup namespaces',
+                       expected_cores_per_rank=args.expected_cores_per_rank,
+                       expected_numa_node=args.expected_numa_node)
     profile = dict(manifest['profiles'][args.profile])
     for key in ('warmup', 'steps', 'repeats', 'min_seconds'):
         if getattr(args, key) is not None:
@@ -400,6 +518,11 @@ def main():
     devices = args.devices.split(',')
     cases = args.cases.split(',') if args.cases else profile['cases']
     engines, backends = args.engines.split(','), args.backends.split(',')
+    profiling = args.dmgmd_profiling.split(',')
+    if not profiling or len(set(profiling)) != len(profiling) or not set(profiling) <= {'off', 'trace'}:
+        p.error('--dmgmd-profiling must be a unique comma-separated subset of off,trace')
+    if 'trace' in profiling and ('dmgmd' not in engines or 1 in ranks):
+        p.error('trace requires --engines dmgmd and M2a ranks > 1')
     if (not set(ranks) <= set(manifest['ranks']) or len(ranks) != len(set(ranks))
             or len(devices) < max(ranks) or len(devices) != len(set(devices))):
         p.error('unique ranks must be 1/2/4/8, with enough distinct devices')
@@ -420,9 +543,10 @@ def main():
             case, lengths = geometry(spec, rank)
             for engine in engines:
                 for backend in (backends if engine == 'dmgmd' else ['none']):
-                    plan.append(dict(case=name, scaling=spec['scaling'], ranks=rank, atoms=case['atoms'],
-                                     cells=case['cells'], box_A=lengths, engine=engine, backend=backend,
-                                     steps=profile['steps']))
+                    for mode in (profiling if engine == 'dmgmd' else ['off']):
+                        plan.append(dict(case=name, scaling=spec['scaling'], ranks=rank, atoms=case['atoms'],
+                                         cells=case['cells'], box_A=lengths, engine=engine, backend=backend,
+                                         profiling=mode, steps=profile['steps']))
     trials = []
     rng = random.Random(manifest['order_seed'])
     for repeat in range(profile['repeats']):
@@ -430,9 +554,17 @@ def main():
         rng.shuffle(batch)
         trials.extend(batch)
     for i, job in enumerate(trials):
-        job['id'] = f'{i:04d}-{job["case"]}-{job["engine"]}-{job["backend"]}-p{job["ranks"]}-r{job["repeat"]}'
+        job['id'] = (f'{i:04d}-{job["case"]}-{job["engine"]}-{job["backend"]}'
+                     f'-p{job["ranks"]}-r{job["repeat"]}' +
+                     (f'-{job["profiling"]}' if len(profiling) > 1 or job['profiling'] != 'off' else ''))
     if args.dry_run:
-        print(json.dumps({'profile': profile, 'trials': trials, 'cpu_sampling': cpu_options}, indent=2))
+        print(json.dumps({'profile': profile, 'trials': trials, 'cpu_sampling': cpu_options,
+                          'dmgmd_profiling': profiling,
+                          'dmgmd_launch_environment': {
+                              mode: {'DMGMD_DOMAIN_TIMING': str(int(mode == 'trace')),
+                                     'DMGMD_DOMAIN_TRACE': str(int(mode == 'trace')),
+                                     'DMGMD_DOMAIN_DIAGNOSTICS': '0'} for mode in profiling},
+                          'mpiexec_args': args.mpiexec_arg}, indent=2))
         return 0
     output = create_output_directory(args.output)
     print(f'Output: {output}', flush=True)
@@ -444,6 +576,7 @@ def main():
     save(output / 'initial-gpus.json', snap)
     metadata = {'schema_version': 1, 'profile_name': args.profile, 'profile': profile,
                 'hostname': socket.gethostname(), 'argv': sys.argv, 'devices': selected,
+                'dmgmd_profiling': profiling, 'mpiexec_args': args.mpiexec_arg,
                 'binaries': identity, 'manifest': manifest, 'plan': trials,
                 'environment': {k: v for k, v in os.environ.items()
                                 if k.startswith(('CUDA_', 'OMPI_', 'UCX_', 'PMIX_', 'DMGMD_', 'OMP_'))
@@ -469,17 +602,17 @@ def main():
             metadata[name] = command_output(cmd)
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
             metadata[name] = str(error)
+    metadata['cpu_sampling'] = cpu_options
     if args.cpu_sampling == 'proc':
-        metadata['cpu_sampling'] = cpu_options
         for path in (HERE / 'cpu_sampling.py', HERE / 'analyze_cpu.py'):
             metadata['sources'][str(path.relative_to(ROOT))] = sha(path)
-        patch = command_output(['git', '-C', str(ROOT), 'diff', 'HEAD', '--binary'])
-        (output / 'source-dirty.patch').write_text(patch)
-        metadata['dirty_patch_sha256'] = sha(output / 'source-dirty.patch')
-        untracked = command_output(['git', '-C', str(ROOT), 'ls-files', '--others', '--exclude-standard', '-z'])
-        metadata['untracked_source_sha256'] = {f: sha(ROOT / f) for f in untracked.split('\0')
-                                               if f and (ROOT / f).is_file() and
-                                               f.startswith(('tests/', 'scripts/', 'src/', 'include/', 'docs/'))}
+    patch = command_output(['git', '-C', str(ROOT), 'diff', 'HEAD', '--binary'])
+    (output / 'source-dirty.patch').write_text(patch)
+    metadata['dirty_patch_sha256'] = sha(output / 'source-dirty.patch')
+    untracked = command_output(['git', '-C', str(ROOT), 'ls-files', '--others', '--exclude-standard', '-z'])
+    metadata['untracked_source_sha256'] = {f: sha(ROOT / f) for f in untracked.split('\0')
+                                           if f and (ROOT / f).is_file() and
+                                           f.startswith(('tests/', 'scripts/', 'src/', 'include/', 'docs/'))}
     save(output / 'metadata.json', metadata)
     if 'gpumd' in engines and metadata['reference_revision'].strip() != manifest['reference_commit']:
         raise RuntimeError('reference checkout does not match pinned commit')
@@ -543,9 +676,13 @@ def main():
                                    OMP_NUM_THREADS='1')
                 command = [str(binaries[job['engine']])]
                 if job['engine'] == 'dmgmd':
-                    environment.update(DMGMD_COMM_BACKEND=job['backend'], DMGMD_DOMAIN_TIMING='0',
+                    detailed = job['profiling'] == 'trace'
+                    environment.update(DMGMD_COMM_BACKEND=job['backend'],
+                                       DMGMD_DOMAIN_TIMING=str(int(detailed)),
+                                       DMGMD_DOMAIN_TRACE=str(int(detailed)),
                                        DMGMD_DOMAIN_DIAGNOSTICS='0',
-                                       DMGMD_COMM_LOG_INTERVAL=str(max(profile['warmup'], profile['steps']) + 1))
+                                       DMGMD_COMM_LOG_INTERVAL=('1' if detailed else
+                                           str(max(profile['warmup'], profile['steps']) + 1)))
                     if args.cpu_sampling == 'proc':
                         cpu_dir = (args.cpu_output.resolve() / output.name / job['id']
                                    if args.cpu_output else directory / 'cpu')
@@ -587,6 +724,9 @@ def main():
                 seconds = parse_timing((directory / 'stdout.txt').read_text(), job['engine'], job['ranks'],
                                        job['atoms'], profile['warmup'], profile['steps'], job['backend'],
                                        visible if job['engine'] == 'lammps' else None)
+                if job['engine'] == 'dmgmd' and job['ranks'] > 1:
+                    result['actual_profiling'] = actual_dmgmd_profiling(
+                        (directory / 'stdout.txt').read_text(), job['profiling'])
                 if job['engine'] == 'lammps':
                     thermo = parse_lammps_thermo((directory / 'stdout.txt').read_text(),
                                                   profile['warmup'] + profile['steps'], job['atoms'])
@@ -607,12 +747,26 @@ def main():
                 if cpu_session:
                     cpu_session.stop(result.get('error', result['status']))
                     try:
-                        cpu_summary = analyze_cpu(cpu_session.directory)
+                        markers = None
+                        if job['profiling'] == 'trace' and result['status'] == 'ok':
+                            markers = write_trace_markers(
+                                (directory / 'stdout.txt').read_text(), cpu_session.directory)
+                            result['cpu_markers'] = str(markers)
+                        cpu_summary = analyze_cpu(cpu_session.directory, markers_path=markers)
                         result['cpu_status'] = ('ok' if cpu_summary['collector_complete'] and
                                                 all(m['status'] == 'verified' for m in cpu_summary['mappings'])
                                                 else 'partial')
+                        if result['status'] == 'ok' and result['cpu_status'] != 'ok':
+                            result.update(status='invalid_cpu_observation',
+                                          error='C1 collector or rank/GPU mapping was incomplete')
+                        if args.expected_cores_per_rank is not None:
+                            result['cpu_binding'] = verify_cpu_binding(
+                                cpu_session.directory, args.expected_cores_per_rank,
+                                args.expected_numa_node)
                     except (OSError, ValueError, KeyError) as error:
                         result.update(cpu_status='partial', cpu_error=str(error))
+                        if args.expected_cores_per_rank is not None:
+                            result.update(status='invalid_cpu_binding', error=str(error))
                 results.append(result)
                 save(directory / 'result.json', result)
                 report(output, results, profile['repeats'])

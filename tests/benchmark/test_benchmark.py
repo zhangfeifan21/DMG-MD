@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import run_benchmark as bench
+import run_overlap_rebuild as rebuild
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -94,6 +95,79 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIsNone(weak['speedup'])
         self.assertAlmostEqual(weak['efficiency'], 0.8)
         self.assertTrue(all(r['speedup'] is None and r['efficiency'] is None for r in bench.summary(data, 3)))
+
+    def test_profiling_modes_remain_separate_and_require_runtime_evidence(self):
+        off = ('DMGMD_DOMAIN_DIAGNOSTICS detailed=off summary=run-segment '
+               'timing=off trace=off\n')
+        trace = ('DMGMD_DOMAIN_DIAGNOSTICS detailed=off summary=run-segment '
+                 'timing=on trace=on\n' +
+                 'DMGMD_DOMAIN_TRACE rank=0 pid=123 sequence=1 step=1 class=ordinary '
+                 'clock=CLOCK_MONOTONIC begin_ns=100 end_ns=200\n' +
+                 ''.join(f'DMGMD_DOMAIN_TIMING sequence={s} class={c}\n'
+                         for s in (0, 1) for c in ('ordinary', 'rebuild')))
+        self.assertEqual(bench.actual_dmgmd_profiling(off, 'off')['trace'], 'off')
+        self.assertEqual(bench.actual_dmgmd_profiling(trace, 'trace')['step_trace_rows'], 1)
+        with self.assertRaises(ValueError):
+            bench.actual_dmgmd_profiling(off, 'trace')
+        with self.assertRaises(ValueError):
+            bench.actual_dmgmd_profiling(trace, 'off')
+        trials = [dict(case='x', scaling='strong', engine='dmgmd', backend='HostStaged',
+                       ranks=2, atoms=100, steps=10, seconds=1, status='ok', profiling=mode)
+                  for mode in ('off', 'trace')]
+        self.assertEqual({r['profiling'] for r in bench.summary(trials, 1)}, {'off', 'trace'})
+
+    def test_trace_markers_use_c1_identity_and_reject_wrong_pid(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cpu = Path(temp)
+            (cpu / 'config.json').write_text(json.dumps({'ranks': 1}))
+            (cpu / 'rank-0.json').write_text(json.dumps({
+                'pid': 123, 'process_start_ticks': 456,
+                'clock_domain_id': 'boot:time:[1]'}))
+            trace = ('DMGMD_DOMAIN_TRACE rank=0 pid=123 sequence=1 step=3 '
+                     'class=rebuild clock=CLOCK_MONOTONIC begin_ns=100 end_ns=200\n'
+                     'DMGMD_DOMAIN_TRACE_SEGMENT rank=0 pid=123 sequence=1 '
+                     'clock=CLOCK_MONOTONIC begin_ns=50 end_ns=250\n')
+            markers = [json.loads(line) for line in
+                       bench.write_trace_markers(trace, cpu).read_text().splitlines()]
+            self.assertEqual(len(markers), 4)
+            self.assertEqual({m['phase'] for m in markers}, {'run', 'step_rebuild'})
+            self.assertEqual({m['process_start_ticks'] for m in markers}, {456})
+            with self.assertRaises(ValueError):
+                bench.write_trace_markers(trace.replace('pid=123', 'pid=124'), cpu)
+
+    def test_cpu_binding_counts_physical_cores_and_rejects_numa_drift(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cpu = Path(temp)
+            topology = {}
+            for logical, core in ((0, 0), (1, 1), (4, 0), (5, 1)):
+                base = f'/sys/devices/system/cpu/cpu{logical}/topology/'
+                topology[base + 'core_id'] = str(core)
+                topology[base + 'physical_package_id'] = '0'
+            (cpu / 'config.json').write_text(json.dumps({
+                'ranks': 1, 'topology': topology,
+                'numa': {'/sys/devices/system/node/node0/cpulist': '0-1,4-5'}}))
+            rows = [dict(type=kind, rank=0, status='ok', affinity=[0, 1, 4, 5])
+                    for kind in ('proc_sample', 'task_sample')]
+            (cpu / 'samples.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+            self.assertEqual(bench.verify_cpu_binding(cpu, 2, 0)[0]['physical_cores'], 2)
+            with self.assertRaises(ValueError):
+                bench.verify_cpu_binding(cpu, 4, 0)
+            with self.assertRaises(ValueError):
+                bench.verify_cpu_binding(cpu, 2, 1)
+
+    def test_rebuild_diagnostic_requires_real_rebuild_steps(self):
+        log = ('DMGMD_DOMAIN_DIAGNOSTICS detailed=off summary=run-segment timing=on trace=on\n'
+               'DMGMD_DOMAIN mode=m2a axis=x\n' +
+               ''.join(f'DMGMD_TIMING phase=run sequence={s} steps=4 backend=HostStaged seconds_max=1\n'
+                       for s in (0, 1)) +
+               ''.join(f'DMGMD_DOMAIN_TIMING sequence={s} class={c}\n'
+                       for s in (0, 1) for c in ('ordinary', 'rebuild')) +
+               ''.join(f'DMGMD_DOMAIN_TRACE rank={r} class=rebuild\n'
+                       for r in (0, 1) for _ in range(8)))
+        self.assertEqual(rebuild.validate_trace(log, 'HostStaged')['classes'],
+                         {'ordinary': 0, 'rebuild': 16})
+        with self.assertRaises(ValueError):
+            rebuild.validate_trace(log.replace('class=rebuild', 'class=ordinary'), 'HostStaged')
 
     def test_uuid_mapping(self):
         snap = {'gpus': [dict(index='2', uuid='GPU-A', **{'memory.used': '12', 'utilization.gpu': '0'})],

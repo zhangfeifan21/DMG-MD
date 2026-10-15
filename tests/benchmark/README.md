@@ -31,7 +31,7 @@
   run 段包含自己的段内准备，GPUMD 在循环前做部分准备；这是各自实际 MD 段性能，不能解释为
   NEP kernel 微基准。最终 thermo 会读回 GPU 结果，避免把异步 kernel 发射时间当完成时间。
   同时记录整个子进程 wall time，不能拿它替代正式段。
-- 默认关闭 DMGMD_DOMAIN_TIMING/DIAGNOSTICS，通信日志间隔大于段长；不修改 runtime/NEP。
+- 默认关闭 DMGMD_DOMAIN_TIMING/TRACE/DIAGNOSTICS，通信日志间隔大于段长；不修改 NEP 数值路径。
   清除继承的全部 `DMGMD_*` 开关后显式设置性能环境，避免调试模式混入正式测量。
 - 每轮随机化配置顺序，固定 order_seed；重复次数、步数、GPU 顺序与二进制必须统一。
   同一行三种引擎使用同一 GPU UUID 前缀，不偷偷选择各自最快的卡组。
@@ -207,6 +207,67 @@ python3 tests/benchmark/run_benchmark.py --profile standard \
 已有结果目录拒绝覆盖；结果逐 trial 原子写入，Ctrl-C 会终止当前启动进程及其后代（包括独立进程组的 MPI rank）并保留已完成项。
 当前没有自动续跑/合并：按 case 分批可缩小重跑范围；不要跨不同环境/步数手工拼接比值。
 
+### O1 串行时间线与 A/B 配置
+
+`--dmgmd-profiling off,trace` 把两个诊断模式作为同一 benchmark 矩阵中的独立配置，沿用
+manifest 输入、固定 seed、随机 trial 顺序和结果保存。默认只有 `off`。`trace` 只支持
+`--engines dmgmd` 的 M2a（rank 数 >1）；它显式设置 `DMGMD_DOMAIN_TIMING=1`、
+`DMGMD_DOMAIN_TRACE=1`、每步通信日志。`off` 显式设置两者为 0。runner 先清除继承的
+全部 `DMGMD_*`，再把这三个诊断开关、backend 和通信日志间隔列入每 trial
+`launch_environment`；成功判定还检查程序 `DMGMD_DOMAIN_DIAGNOSTICS` 实际模式记录，
+trace 缺行、off 意外出行均拒绝。`summary` 按模式分组，trace 的秒数只用于诊断开销，
+正式性能使用 off 行。
+
+本机有 4 张 GPU 邻近 NUMA0 时，可选 GPU0/1、同 NUMA 的每 rank 4 个物理核心：
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_benchmark.py --help
+python3 tests/benchmark/run_benchmark.py --profile smoke --engines dmgmd \
+  --devices 0,1 --ranks 2 --backends HostStaged,CudaAware \
+  --dmgmd-profiling off,trace --cpu-sampling proc --cpu-sample-interval .05 \
+  --expected-cores-per-rank 4 --expected-numa-node 0 \
+  --mpiexec-arg=--map-by --mpiexec-arg=ppr:2:numa:PE=4 \
+  --mpiexec-arg=--bind-to --mpiexec-arg=core --mpiexec-arg=--report-bindings \
+  --dry-run
+# 去掉 --dry-run 并指定 --output 后运行；先过 AGENTS.md 环境与正确性门槛。
+```
+
+`--expected-cores-per-rank` 与 `--expected-numa-node` 必须一起给，且要求
+`--cpu-sampling proc`。它们不负责绑定，只从 C1 的实际 task affinity、SMT core/package ID
+及 NUMA cpulist 核验每 rank 的物理核心数、NUMA 和 rank 间不重叠；不符的 trial 记
+`invalid_cpu_binding`，不会进入性能汇总。GPU UUID 由现有 `DMGMD_MPI`/C1 映射核验。
+这两个选项只适用于所有 rank 固定在同一 NUMA 的配置；跨 NUMA 映射可保留 C1 原始
+affinity，在报告中逐 rank 离线核验。`--report-bindings` 只是辅助原始证据，不能代替 C1。
+
+trace 原始行在 trial `stdout.txt`；同时采 CPU 时，runner 将 rank/PID/start ticks 与
+trace 单调纳秒关联为 `cpu/markers.jsonl`，C1 `summary.json` 包含 `run`、
+`step_ordinary`、`step_rebuild` 阶段的有效采样窗口。短步可能没有完整窗口，CPU 值保持
+`null`，不能补算。时间字段的语义、CUDA event 与 host 时钟的关联限制见
+[M2a 现行合同](../../docs/standards/replicated-mpi.md)。trace 组的逐行日志和 event 会扰动
+性能；性能组保持 profiler off，CPU sampler 开销需另用 off 模式的 proc/off 配对校准。
+
+重建步使用已有 `tests/mpi/run_mpi_domain.py` 的 `CROSSINGS_MODEL/CROSSINGS_RUN` 定向
+fixture，通过 `run_overlap_rebuild.py` 调度；它复用本目录的 C1 sampler、trace marker
+转换、affinity 核验、环境预检与结果保存，随机化两后端顺序，并要求 8 个重建步均出现。
+普通步由上面的 benchmark smoke/pilot 记录。
+它是诊断运行，8 个短步的 CPU 阶段窗口可能不可观测。
+`--fixture carbon-drift --warmup 10 --steps 100` 从 benchmark 的 `carbon_200k` 输入派生，
+给所有原子的 y 速度统一增加 2 Å/fs，在保留相对初态的同时触发持续重建；原始派生
+`model.xyz`、`run.in`、势及哈希均保存。这是 CPU 阶段窗口和重建成本诊断，不作为
+科学正确性 oracle，也不与无漂移普通步直接比较速度。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_rebuild.py --help
+python3 tests/benchmark/run_overlap_rebuild.py --devices 0,1 \
+  --expected-cores-per-rank 4 --expected-numa-node 0 \
+  --mpiexec-arg=--map-by --mpiexec-arg=ppr:2:numa:PE=4 \
+  --mpiexec-arg=--bind-to --mpiexec-arg=core --dry-run
+# 去掉 --dry-run 并指定 --output 后运行。
+# 需要可采样的重建窗口时加 --fixture carbon-drift --cpu-sample-interval .1。
+```
+
 ## 共享服务器与可审计输出
 
 由使用者自行选择空闲服务器。脚本不查询 GPU 计算进程，也不根据已用显存或利用率阻止运行，
@@ -286,8 +347,9 @@ python3 tests/benchmark/analyze_cpu.py TRIAL_DIR --output /tmp/cpu-recomputed
 
 后三个选项只允许在 proc 模式使用，防止以为诊断已开却静默不采。全部在 `--help` 和
 `--dry-run` 展示；dry-run 不验证 GPU/namespace/cgroup 权限。可选分析器 `--markers FILE`
-读取 schema v1 的可靠 monotonic marker；当前 runtime 未发射这种 marker，默认 phase/sequence
-与 run CPU 利用率为空。现有详细 domain timing 仍关闭，不能通过继承 DMGMD_* 打开。
+读取 schema v1 的可靠 monotonic marker；默认 phase/sequence 与 run CPU 利用率为空。
+O1 的显式 `--dmgmd-profiling trace` 会产生 M2a marker 并自动传给解析器；
+详细 domain timing 不能通过继承 `DMGMD_*` 打开。
 
 数据位置：上层 metadata/result 指向 cpu 目录，内含 config.json、samples.jsonl、
 rank-N.json、sampler.stderr、collector-exit.json，以及 summary.json/csv、intervals.json。
