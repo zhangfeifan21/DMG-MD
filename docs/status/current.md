@@ -2,7 +2,7 @@
 
 类别：进度与实测备忘。
 
-更新日期：2026-10-09。
+更新日期：2026-10-15。
 
 本轮第一阶段修改前的 M2a 基线为 clean revision
 `27e07d92b84f0e02d08d99c400c52b795175341f`。Release 配置为
@@ -21,6 +21,14 @@ gitignored 目录 `dmgmd-nightly-20260918-171122/report.json`。修改前工作�
 `d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02`。
 
 ## 当前结论
+
+2026-10-15 的 O2/O3 增量：默认关闭的普通步串行分区已完成；halo 已拆成
+begin/progress/finish，但在原位置立即 finish，仍无计算重叠。O3 完整数值矩阵与生命周期/
+错误路径、golden/CTest/long_nve smoke 均通过，未提交/推送。两后端通信字节和默认策略
+不变；单槽位额外 payload 为 0，固定 host 对象 +264 B/rank，另有四个 opaque CUDA event。
+精确 revision/dirty 身份、命令、环境、原始证据与成本见
+[O2](./overlap-partition-20261015.md) / [O3](./halo-lifecycle-20261015.md)。
+O4/O5、progress thread 和跨节点 overlap 未实施。
 
 `dmg-md` 已完成 single-rank 路径、一 MPI rank 一 GPU 的 replicated-data MPI
 runtime（M1）与 M2a local-domain 路径：

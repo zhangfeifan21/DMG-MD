@@ -1,7 +1,7 @@
 # M2a 普通步串行 NEP 分区
 
-类别：现行实验接口合同。默认关闭；O2 只改变中心调度。halo 的 MPI 请求仍立即
-Waitall，unpack 与全部计算依次排入同一默认 stream，没有通信/计算 overlap。
+类别：现行实验接口合同。默认关闭；O2 只改变中心调度。halo 在 O3 的 begin 后立即
+finish（Waitall + unpack event 完成），unpack 与全部计算依次排入同一默认 stream，没有通信/计算 overlap。
 方向由维护者于 2026-10-15 在 O2 会话明确确认；证明与反例来源为
 [O0](../plans/communication-computation-overlap.md#o0-证据闭包与串行分区设计2026-10-08)。
 本轮实测与验证范围见 [O2 状态](../status/overlap-partition-20261015.md)。
@@ -16,9 +16,9 @@ stream 后续计算有序可见时生效。P=1/M1、段首 force、rebuild/迁�
 
 `NEP::compute_domain` 保留未选择的完整 M2a 路径；可选 `DomainForceContext` 传入模式、
 ordinary 标志、本步编号和 halo_ready_step。runtime 在 `refresh_ghost_positions` 返回后
-发布本步 ready token；这是 MPI completion + 默认 stream unpack 顺序的证明，不是单独用
+发布本步 ready token；这是 MPI completion + O3 unpack event 物理完成的证明，不是单独用
 `refreshed_epoch` 推断本步完成。O2 的 `DomainForceTicket` 约束 early/late 恰一次及顺序，
-仅存在于一次 compute 内；尚不提供异步 begin/progress/finish。
+仅存在于一次 compute 内；NEP force ticket 不提供异步计算接口；通信接口见 [halo 生命周期](./halo-lifecycle.md)。
 
 owned 为 O=[0,owned)，dependency 为 D=[0,owned+dep)，L=local_count。owned=0 时 D 为空。
 V 是未按 typewise cutoff 过滤、含 skin 带的实际完整 Verlet 行：

@@ -106,6 +106,23 @@ struct P2pTimingEvents {
   std::uint64_t unpack_enqueue_end_ns = 0;
 };
 
+// Runtime-owned, single-slot halo exchange. Tokens are valid until the next
+// begin; they never own/free requests. All methods run on MPI's initial thread.
+struct HaloExchangeToken {
+  std::uint64_t generation = 0;
+};
+
+struct HaloExchangeState {
+  std::uint64_t generation = 0;
+  bool pack_ready = false;
+  bool send_source_ready = false;
+  bool sends_complete = false;       // MPI no longer reads the send buffer
+  bool receives_complete = false;    // independent of send completion
+  bool receive_gpu_ready = false;    // H2D/target MPI visibility contract
+  bool unpack_complete = false;
+  bool reusable = true;              // both MPI sides AND unpack complete
+};
+
 // Communication plan for the M1 indexed collectives. M1 spatial ownership is
 // a non-contiguous subset of the replicated slots, so an Allgatherv/Gatherv
 // can no longer be described by a contiguous OwnedRange (M0). The plan is
@@ -329,6 +346,26 @@ class MpiRuntime {
       int right_peer,
       CommunicationVolume& volume,
       P2pTimingEvents* timing = nullptr) const;
+
+  // O3: begin completes pack/send-source readiness and posts four requests;
+  // progress tests each MPI direction group and advances H2D/unpack readiness;
+  // finish waits for all requests and physical unpack completion, idempotently.
+  // No overlap scheduling is enabled. Keep values, index/slot arrays, volume
+  // and optional timing alive and unchanged through finish. A new begin or
+  // host face exchange before reuse, stale token, or transport error aborts
+  // the job without a diagnostic collective. Destruction with active work
+  // also aborts; requests may never be silently discarded.
+  HaloExchangeToken begin_p2p_indexed_device_soa(
+      double* device_values, int components, std::size_t stride,
+      const int* send_left_indices, int send_left_count,
+      const int* send_right_indices, int send_right_count,
+      const int* recv_left_slots, int recv_left_count,
+      const int* recv_right_slots, int recv_right_count,
+      int left_peer, int right_peer, CommunicationVolume& volume,
+      P2pTimingEvents* timing = nullptr) const;
+  HaloExchangeState progress_halo(HaloExchangeToken token) const;
+  HaloExchangeState finish_halo(HaloExchangeToken token) const;
+  HaloExchangeState halo_state(HaloExchangeToken token) const;
 
   // Host-memory p2p with the same tag scheme, used for the rebuild-time face
   // membership records (40 bytes per atom, halo class) and the one-int face

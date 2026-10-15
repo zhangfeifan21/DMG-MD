@@ -392,6 +392,10 @@ bootstrap 新 epoch。
 
 ### 通信后端与字节口径
 
+O3 的 begin/progress/finish、单槽位、FUNNELED、请求/事件完成与错误合同见
+[halo 生命周期](./halo-lifecycle.md)。生产仍立即 finish，无实际 overlap。两后端 payload
+与请求数量不变；finish 现在等待物理 unpack 完成才释放槽位。
+
 `HostStaged` 与 `CudaAware` 都为 p2p 扩展了同一 tag 方案（左右方向独立 tag 与
 buffer，P=2 同 peer 安全；P=1 无操作；零 count 合法）。CudaAware 启用门新增
 真实 device-buffer p2p Send/Recv 自检（自检失败回退 HostStaged），由
@@ -433,7 +437,7 @@ max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须
 设置 `DMGMD_DOMAIN_TIMING=1` 后，每个积分步恰好分类为 `ordinary` 或 `rebuild`，并用固定
 CUDA event 集与 host monotonic clock 记录 decision、migration、membership/layout、
 allocation/upload、halo pack/transfer-wait/unpack、cell/neighbor、NEP、integration、thermo、
-scientific output 和 remaining。默认关闭时不创建 event、不输出逐步记录、也不增加计时专用
+scientific output 和 remaining。默认关闭时不创建计时 event（O3 生命周期 event 始终存在）、不输出逐步记录、也不增加计时专用
 同步；开启时只在既有 thermo D2H/段末 device synchronization 读取 event，并在每个 run 段末
 各做一次 SUM/MIN/MAX 归约，输出有界 summary/histogram。device interval、host critical-path
 interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端性能仍以详细计时关闭时的
@@ -443,7 +447,7 @@ interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端
 `DMGMD_DOMAIN_DIAGNOSTICS` 启动记录中的 `timing`/`trace` 是程序实际模式。每 rank/步
 输出 `DMGMD_DOMAIN_TRACE`：`CLOCK_MONOTONIC` 的整数纳秒记录 step、decision、rebuild、
 ordinary halo、NEP host enqueue 和 thermo readiness 边界；ordinary halo 还记录 pack/unpack
-enqueue、HostStaged D2H/H2D、CudaAware 输入/输出同步、MPI post 与 `MPI_Waitall` 调用边界。
+enqueue、HostStaged D2H（含完成等待）/H2D enqueue、CudaAware 输入/输出同步、MPI post 与 `MPI_Waitall` 调用边界。
 rebuild 的同类内部阶段目前只在整体 rebuild host 区间内，未单独拆出。缺席阶段用零时间戳，
 不得解释为耗时零。每行带 rank/PID、sequence/global step、当前步各类通信字节和整段 NEP
 CUDA event 耗时；`DMGMD_DOMAIN_TRACE_SEGMENT` 给出可与同一 clock namespace 的 C1 样本关联

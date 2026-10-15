@@ -22,7 +22,7 @@
 
 ### 2.1 CPU/CTest
 
-`ctest --test-dir build --output-on-failure` 当前注册九项：
+`ctest --test-dir build --output-on-failure` 当前注册十项：
 
 | test | 当前覆盖 |
 | --- | --- |
@@ -30,6 +30,7 @@
 | `dmgmd.model_parser` | model schema、类型、质量、盒和输入错误 |
 | `dmgmd.spatial_ownership` | M1 slab 纯逻辑：s=0/s=1/内部边界及两侧、周期首尾迁移、一步跨多 slab、空 owned list 与 N<P、cube/最长轴 tie（含负向 lattice edge）、owner 唯一覆盖、index 排序、mask/list 一致、malformed global_id，以及非 canonical displacement/local send count/非 permutation scatter plan 拒绝（取代 M0 的 balanced owned range 测试） |
 | `dmgmd.domain_layout` | M2a 纯逻辑：typewise 半径、eligibility/fallback reason、ghost 分类边界（恰在 d_dep/d_coord）、P=2 同 peer 去重、空 rank/N<P、确定性槽位序、malformed exchange/migration plan 拒绝、一步跨多 slab 路由、membership 记录布局 |
+| `dmgmd.domain_partition` | O2 图闭包/两跳分类 CPU oracle |
 | `dmgmd.domain_neighbor_cuda` | CUDA 容器与邻域索引；无 GPU 环境返回 skip |
 | `dmgmd.long_nve_analysis` | fixture/potential 生成、哈希、统计量、checkpoint、重试和失败分类 |
 | `dmgmd.benchmark_analysis` | 三引擎 benchmark 日志解析、统计与报告 |
@@ -214,3 +215,9 @@ candidate stage 还必须存在结构合法的 `DMGMD_TIMING phase=run/total` �
 
 未来计划不得提前写入本标准的“当前通过矩阵”。实现并通过验证后，再把生效合同迁入
 `docs/standards/`，并在 `docs/status/` 记录实际结果。
+
+O3 生命周期验收由 `tests/mpi/run_halo_lifecycle.py` 独立执行，不注册为自动 CTest GPU
+作业；须先通过环境门槛。验证两后端 P=1/2/4、发送/接收独立完成、物理 unpack 与复用、
+零 count/增长/重复 finish，以及单 rank 故障的整作业退出。生产立即 finish 的数值验收
+复用完整 O2 domain off/serial/verify 矩阵并对锁定 O2 输出逐字节核对，不放宽容差。
+接口和同步依据见 [halo 生命周期](./halo-lifecycle.md)。

@@ -1,6 +1,6 @@
 # 通信与计算并行研究/实施计划
 
-类别：分阶段实施计划。状态：**IN PROGRESS**（O2 串行分区完成；O3–O5 未执行）。优先级：P0（与 MPI CPU 绑定、LAMMPS 对比并列；技术目标不变）。
+类别：分阶段实施计划。状态：**IN PROGRESS**（O2 串行分区与 O3 立即 finish 生命周期完成；O4–O5 未执行）。优先级：P0（与 MPI CPU 绑定、LAMMPS 对比并列；技术目标不变）。
 
 O1/O5 在同一固定每 rank CPU 核数、NUMA 位置及 GPU 映射下比较同步/重叠路径。
 2026-10-12 维护者澄清：[MPI CPU 绑定计划](./mpi-cpu-binding.md)是后续 benchmark
@@ -16,7 +16,12 @@ O1/O5 在同一固定每 rank CPU 核数、NUMA 位置及 GPU 映射下比较同
 
 ## 当前实现与可并行区域
 
-当前 halo 交换在 `src/mpi_runtime.cu` 的 `p2p_exchange_bytes` 里排入左右 `MPI_Isend/Irecv`，随后马上 `MPI_Waitall`。上层 `MpiRuntime::exchange_p2p_indexed_device_soa` 先打包并完成这次交换，再解包；`src/domain_runtime.cu` 在 `refresh_ghost_positions` 返回后才运行域分片 NEP。CUDA 路径含同步/设备就绪约束，当前默认 stream 与阻塞语义没有跨越通信等待的在途计算。因此这是明确的优化机会，但已有 `Isend/Irecv` 不等于 overlap。
+O3 已将普通 halo 拆成 `MpiRuntime::begin_p2p_indexed_device_soa` / `progress_halo` /
+`finish_halo`。`refresh_ghost_positions` 在原位置 begin 后立即 finish，等待四个 MPI
+请求和物理 unpack 完成后才计算 NEP；仍无通信/计算 overlap。HostStaged pinned staging
+使用显式事件，CudaAware 保留原输入/输出 device synchronize 与自检；单在途槽位、
+收/发独立完成和错误合同见 [halo 生命周期标准](../standards/halo-lifecycle.md)。
+O4 尚未移动任何 interior 计算到请求在途区间。
 
 NEP 数据依赖由 `docs/standards/kernel-inventory.md` 与 `docs/plans/domain-decomposition.md` 描述：owned 力中心需要本地坐标 halo；边界 descriptor/partial 还涉及 dependency centers。任何重叠必须证明正在算的 interior 原子不会读取未到达 halo，也不能让 MPI 读写 buffer 时 GPU 改写它。
 
@@ -448,7 +453,8 @@ C0没有CPU实测，O0也没有；不由源码Isend或闭包证明推断运行�
 
 ## O2 方向确认与实施入口（2026-10-15）
 
-状态：**O2 COMPLETE**。正确性、失效/回退、compat 回归与成本实测见状态报告；O3–O5 未执行。维护者在本次会话明确回复“确认此方向，继续实施 O2”：
+状态：**O2 COMPLETE**。正确性、失效/回退、compat 回归与成本实测见状态报告。
+本节记录 O2 当时的授权边界；后续 O3 由维护者本轮另行授权，结果见下方 O3 交接。维护者在本次会话明确回复“确认此方向，继续实施 O2”：
 仅 M2a 普通步，默认关闭，基于旧完整 Verlet 图的两跳 mask；增加 early/late 中心选择与
 一次逻辑 force ticket，保持粒子布局、L stride、半径、owned 语义、每中心公式/累加顺序，
 保留 full M2a oracle；本轮 halo 先完成后串行计算，不进入 O3/O4。
@@ -538,22 +544,12 @@ skin rebuild/迁移及项目已支持的 NEP 变体。核对 per-atom energy/for
 
 ### O3：异步通信生命周期，保持同步调度
 
-```text
-请执行 docs/plans/communication-computation-overlap.md 的 O3。读 AGENTS.md、O0-O2 设计与验收，
-检查两个仓库状态，保留用户修改，不提交、不推送；O2 正确性未通过时不推进。
-把 halo 操作拆成 begin/progress/finish（名称可依项目风格），先在原位置 begin 后立即 finish，
-保持同步执行结果。所有 MPI 调用仍在初始化线程，遵守 MPI_THREAD_FUNNELED，不新增进度线程。
-显式定义状态与事件：pack 就绪、发送源可交 MPI、收发完成、接收数据可供 GPU、unpack 完成、可复用。
-HostStaged 处理 pinned buffer 和 D2H/H2D 事件；CudaAware 遵循目标 MPI/UCX completion 契约与自检，
-不能直接假定 stream-aware，不得先删全局同步再补证明。每项同步替换都要标明依赖依据。
-请求在途时禁止 buffer reserve/resize/free/覆盖；说明单在途槽位是否足够，不机械引入双缓冲。
-接收就绪和发送 buffer 可复用是不同条件；处理零计数、P=2 同 peer 的方向 tag、重复 finish、
-多段 run、退出和失败路径，错误时避免其他 rank 永久等待；禁止在途请求静默丢弃。
-复用 O2 数值矩阵并新增生命周期/错误路径测试；每 shell source ../env/md-mpi.sh，按 GPU 门槛验证。
-记录两后端的字节数/调用契约变化、额外内存与串行性能成本；更新实际变更的 standards 和 status。
-验收：立即 finish 模式与 O2 数值一致，请求/缓冲区完成和复用有证据，无默认策略改变。
-最后交接状态机、测试、命令和未解决项；不要启动 O4 或 MPI progress thread。
-```
+**O3 COMPLETE（2026-10-15）**：由维护者本轮明确要求执行。最终状态机与同步依据迁入
+[halo 生命周期标准](../standards/halo-lifecycle.md)；68 个生命周期/错误作业、完整 192 组
+O2 矩阵、808 次 O2/O3 科学文件逐字节对比、golden/CTest/long_nve smoke，以及内存和
+串行成本见 [O3 状态与精确命令](../status/halo-lifecycle-20261015.md)。
+生产仅 begin 后立即 finish，单槽位，FUNNELED，无新 stream/progress thread；默认后端与
+分区策略不变。O4/O5 未执行，O3 完成不自动授权下一阶段。
 
 ### O4：普通步真实 overlap 与完整正确性验证
 

@@ -986,13 +986,15 @@ void refresh_ghost_positions(
   const int send_right = checked_int(state.plan.face[kFaceRight].send_slots.size(), "send right");
   const int recv_left = checked_int(state.plan.face[kFaceLeft].recv_slots.size(), "recv left");
   const int recv_right = checked_int(state.plan.face[kFaceRight].recv_slots.size(), "recv right");
-  mpi.exchange_p2p_indexed_device_soa(
+  const auto halo = mpi.begin_p2p_indexed_device_soa(
       state.device.position.data(), 3, state.local_count(),
       state.device.send_slots[kFaceLeft].data(), send_left,
       state.device.send_slots[kFaceRight].data(), send_right,
       state.device.recv_slots[kFaceLeft].data(), recv_left,
       state.device.recv_slots[kFaceRight].data(), recv_right,
       left_peer, right_peer, communication, timing);
+  // O3 keeps synchronous scheduling: no computation while halo is in flight.
+  mpi.finish_halo(halo);
   state.refreshed_epoch = state.mapping_epoch;
 }
 

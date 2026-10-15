@@ -19,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -144,6 +145,7 @@ class DeviceBuffer {
 
   void reserve(std::size_t size)
   {
+    if (leased_) throw std::logic_error("reserve of an in-flight MPI device buffer");
     if (size <= capacity_) return;
     if (data_ != nullptr) check_cuda(cudaFree(data_), "free MPI device buffer");
     data_ = nullptr;
@@ -155,10 +157,12 @@ class DeviceBuffer {
 
   [[nodiscard]] T* data() noexcept { return data_; }
   [[nodiscard]] const T* data() const noexcept { return data_; }
+  void lease(bool value) noexcept { leased_ = value; }
 
  private:
   T* data_ = nullptr;
   std::size_t capacity_ = 0;
+  bool leased_ = false;
 };
 
 template <typename T>
@@ -175,6 +179,7 @@ class PinnedBuffer {
 
   void reserve(std::size_t size)
   {
+    if (leased_) throw std::logic_error("reserve of an in-flight MPI pinned buffer");
     if (size <= capacity_) return;
     if (data_ != nullptr) check_cuda(cudaFreeHost(data_), "free MPI pinned buffer");
     data_ = nullptr;
@@ -187,10 +192,12 @@ class PinnedBuffer {
 
   [[nodiscard]] T* data() noexcept { return data_; }
   [[nodiscard]] const T* data() const noexcept { return data_; }
+  void lease(bool value) noexcept { leased_ = value; }
 
  private:
   T* data_ = nullptr;
   std::size_t capacity_ = 0;
+  bool leased_ = false;
 };
 
 // M1 indexed pack: item = atom-major AoS position of one owned slot's
@@ -267,10 +274,10 @@ __global__ void unpack_prefix_soa(
 }
 
 // M2a point-to-point tags. Directions are independent so P=2's identical
-// left/right peer can never mismatch messages; the self-test uses its own tag.
+// left/right peer can never mismatch messages. Startup self-test finishes
+// before any production exchange uses the same direction tags.
 constexpr int kTagSendLeft = 1101;
 constexpr int kTagSendRight = 1102;
-constexpr int kTagP2pSelfTest = 2101;
 
 std::string cuda_uuid_string(const cudaUUID_t& uuid)
 {
@@ -299,6 +306,14 @@ class MpiRuntime::Impl {
       if (provided < MPI_THREAD_FUNNELED) {
         MPI_Finalize();
         throw std::runtime_error("MPI does not provide MPI_THREAD_FUNNELED");
+      }
+    } else {
+      int initial_thread = 0;
+      int provided = MPI_THREAD_SINGLE;
+      check_mpi(MPI_Is_thread_main(&initial_thread), "MPI_Is_thread_main");
+      check_mpi(MPI_Query_thread(&provided), "MPI_Query_thread");
+      if (!initial_thread || provided < MPI_THREAD_FUNNELED) {
+        throw std::runtime_error("MpiRuntime requires MPI's initial FUNNELED thread");
       }
     }
     try {
@@ -366,8 +381,64 @@ class MpiRuntime::Impl {
 
   ~Impl()
   {
+    if (std::this_thread::get_id() != initial_thread) std::abort();
+    if (!halo.state.reusable) fail_halo("destroying runtime with unfinished halo");
+    for (auto event : halo.events) {
+      if (event != nullptr) cudaEventDestroy(event);
+    }
     cleanup_mpi();
   }
+
+  void require_initial_thread() const
+  {
+    if (std::this_thread::get_id() != initial_thread) {
+      throw std::logic_error("halo operation requires MPI's initial thread");
+    }
+  }
+
+  [[noreturn]] void fail_halo(const char* message) const noexcept
+  {
+    // Never wait/cancel only the locally posted subset: a peer may already
+    // be waiting for an unposted operation. Abort before freeing any buffer.
+    std::fprintf(stderr, "DMGMD_ERROR rank=%d category=halo message=\"%s\"\n", rank, message);
+    std::fflush(stderr);
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    std::abort();
+  }
+
+  void require_reusable() const
+  {
+    if (!halo.state.reusable) throw std::logic_error("halo slot is not reusable");
+  }
+
+  void lease_halo(bool value)
+  {
+    device_p2p_send.lease(value);
+    device_p2p_receive.lease(value);
+    host_p2p_send.lease(value);
+    host_p2p_receive.lease(value);
+  }
+
+  struct HaloSlot {
+    HaloExchangeState state;
+    std::array<MPI_Request, 4> requests = {
+        MPI_REQUEST_NULL, MPI_REQUEST_NULL, MPI_REQUEST_NULL, MPI_REQUEST_NULL};
+    // pack, send source (D2H), receive on GPU (H2D), unpack completion.
+    std::array<cudaEvent_t, 4> events{};
+    double* values = nullptr;
+    std::array<const int*, 2> recv_slots{};
+    std::array<int, 2> recv_counts{};
+    std::array<std::size_t, 2> send_elements{}, recv_elements{};
+    int stride = 0, components = 0;
+    bool unpack_queued = false;
+    CommunicationVolume* volume = nullptr;
+    P2pTimingEvents* timing = nullptr;
+    MpiWaitClock::time_point transfer_started{};
+  } halo;
+
+  // Called only by progress/finish on the initial thread; finish uses the
+  // original four-request Waitall. Test tracks send and receive independently.
+  HaloExchangeState advance_halo(HaloExchangeToken token, bool wait);
 
   void cleanup_mpi() noexcept
   {
@@ -524,16 +595,27 @@ class MpiRuntime::Impl {
       const int right_peer = (rank + 1) % size;
       MPI_Request requests[4] = {MPI_REQUEST_NULL, MPI_REQUEST_NULL,
                                  MPI_REQUEST_NULL, MPI_REQUEST_NULL};
-      bool p2p_pass = MPI_Isend(p2p_send.data(), 1, MPI_DOUBLE, left_peer,
-                                kTagSendLeft, MPI_COMM_WORLD, &requests[0]) == MPI_SUCCESS;
-      p2p_pass = p2p_pass && MPI_Isend(p2p_send.data() + 1, 1, MPI_DOUBLE, right_peer,
-                                       kTagSendRight, MPI_COMM_WORLD, &requests[1]) == MPI_SUCCESS;
-      p2p_pass = p2p_pass && MPI_Irecv(p2p_receive.data(), 1, MPI_DOUBLE, left_peer,
-                                       kTagSendRight, MPI_COMM_WORLD, &requests[2]) == MPI_SUCCESS;
-      p2p_pass = p2p_pass && MPI_Irecv(p2p_receive.data() + 1, 1, MPI_DOUBLE, right_peer,
-                                       kTagSendLeft, MPI_COMM_WORLD, &requests[3]) == MPI_SUCCESS;
-      MPI_Status statuses[4];
-      p2p_pass = p2p_pass && MPI_Waitall(4, requests, statuses) == MPI_SUCCESS;
+      try {
+        check_mpi(MPI_Isend(p2p_send.data(), 1, MPI_DOUBLE, left_peer,
+                            kTagSendLeft, MPI_COMM_WORLD, &requests[0]),
+                  "self-test left send");
+        check_mpi(MPI_Isend(p2p_send.data() + 1, 1, MPI_DOUBLE, right_peer,
+                            kTagSendRight, MPI_COMM_WORLD, &requests[1]),
+                  "self-test right send");
+        check_mpi(MPI_Irecv(p2p_receive.data(), 1, MPI_DOUBLE, left_peer,
+                            kTagSendRight, MPI_COMM_WORLD, &requests[2]),
+                  "self-test left receive");
+        check_mpi(MPI_Irecv(p2p_receive.data() + 1, 1, MPI_DOUBLE, right_peer,
+                            kTagSendLeft, MPI_COMM_WORLD, &requests[3]),
+                  "self-test right receive");
+        MPI_Status statuses[4];
+        check_mpi(MPI_Waitall(4, requests, statuses), "self-test MPI_Waitall");
+      } catch (const std::exception& error) {
+        fail_halo(error.what());
+      } catch (...) {
+        fail_halo("unknown p2p self-test failure");
+      }
+      bool p2p_pass = true;
       p2p_pass = p2p_pass && cudaDeviceSynchronize() == cudaSuccess;
       double received[2] = {-1.0, -1.0};
       p2p_pass = p2p_pass && cudaMemcpy(received, p2p_receive.data(), 2 * sizeof(double),
@@ -724,30 +806,38 @@ class MpiRuntime::Impl {
       int right_peer,
       P2pTimingEvents* timing = nullptr) const
   {
-    static const char kUnused = 0;
-    const void* left_buffer = send_left_bytes == 0 ? &kUnused : send_left;
-    const void* right_buffer = send_right_bytes == 0 ? &kUnused : send_right;
-    void* left_receive = recv_left_bytes == 0 ? const_cast<char*>(&kUnused) : recv_left;
-    void* right_receive = recv_right_bytes == 0 ? const_cast<char*>(&kUnused) : recv_right;
-    MPI_Request requests[4] = {MPI_REQUEST_NULL, MPI_REQUEST_NULL,
-                               MPI_REQUEST_NULL, MPI_REQUEST_NULL};
-    if (timing != nullptr) timing->mpi_post_begin_ns = monotonic_ns();
-    check_mpi(MPI_Isend(const_cast<void*>(left_buffer), send_left_bytes, MPI_BYTE,
-                        left_peer, kTagSendLeft, MPI_COMM_WORLD, &requests[0]),
-              "point-to-point MPI_Isend to the left peer");
-    check_mpi(MPI_Isend(const_cast<void*>(right_buffer), send_right_bytes, MPI_BYTE,
-                        right_peer, kTagSendRight, MPI_COMM_WORLD, &requests[1]),
-              "point-to-point MPI_Isend to the right peer");
-    check_mpi(MPI_Irecv(left_receive, recv_left_bytes, MPI_BYTE, left_peer,
-                        kTagSendRight, MPI_COMM_WORLD, &requests[2]),
-              "point-to-point MPI_Irecv from the left peer");
-    check_mpi(MPI_Irecv(right_receive, recv_right_bytes, MPI_BYTE, right_peer,
-                        kTagSendLeft, MPI_COMM_WORLD, &requests[3]),
-              "point-to-point MPI_Irecv from the right peer");
-    MPI_Status statuses[4];
-    if (timing != nullptr) timing->mpi_waitall_begin_ns = monotonic_ns();
-    check_mpi(MPI_Waitall(4, requests, statuses), "point-to-point MPI_Waitall");
-    if (timing != nullptr) timing->mpi_waitall_end_ns = monotonic_ns();
+    require_initial_thread();
+    require_reusable();
+    try {
+      static const char kUnused = 0;
+      const void* left_buffer = send_left_bytes == 0 ? &kUnused : send_left;
+      const void* right_buffer = send_right_bytes == 0 ? &kUnused : send_right;
+      void* left_receive = recv_left_bytes == 0 ? const_cast<char*>(&kUnused) : recv_left;
+      void* right_receive = recv_right_bytes == 0 ? const_cast<char*>(&kUnused) : recv_right;
+      MPI_Request requests[4] = {MPI_REQUEST_NULL, MPI_REQUEST_NULL,
+                                 MPI_REQUEST_NULL, MPI_REQUEST_NULL};
+      if (timing != nullptr) timing->mpi_post_begin_ns = monotonic_ns();
+      check_mpi(MPI_Isend(const_cast<void*>(left_buffer), send_left_bytes, MPI_BYTE,
+                          left_peer, kTagSendLeft, MPI_COMM_WORLD, &requests[0]),
+                "point-to-point MPI_Isend to the left peer");
+      check_mpi(MPI_Isend(const_cast<void*>(right_buffer), send_right_bytes, MPI_BYTE,
+                          right_peer, kTagSendRight, MPI_COMM_WORLD, &requests[1]),
+                "point-to-point MPI_Isend to the right peer");
+      check_mpi(MPI_Irecv(left_receive, recv_left_bytes, MPI_BYTE, left_peer,
+                          kTagSendRight, MPI_COMM_WORLD, &requests[2]),
+                "point-to-point MPI_Irecv from the left peer");
+      check_mpi(MPI_Irecv(right_receive, recv_right_bytes, MPI_BYTE, right_peer,
+                          kTagSendLeft, MPI_COMM_WORLD, &requests[3]),
+                "point-to-point MPI_Irecv from the right peer");
+      MPI_Status statuses[4];
+      if (timing != nullptr) timing->mpi_waitall_begin_ns = monotonic_ns();
+      check_mpi(MPI_Waitall(4, requests, statuses), "point-to-point MPI_Waitall");
+      if (timing != nullptr) timing->mpi_waitall_end_ns = monotonic_ns();
+    } catch (const std::exception& error) {
+      fail_halo(error.what());
+    } catch (...) {
+      fail_halo("unknown host face exchange failure");
+    }
   }
 
   void validate_peers(int left_peer, int right_peer) const
@@ -766,6 +856,7 @@ class MpiRuntime::Impl {
   }
 
   bool owns_mpi = false;
+  const std::thread::id initial_thread = std::this_thread::get_id();
   int rank = 0;
   int size = 1;
   int local_rank = 0;
@@ -1317,127 +1408,286 @@ void MpiRuntime::exchange_p2p_indexed_device_soa(
     CommunicationVolume& volume,
     P2pTimingEvents* timing) const
 {
-  if (world_size() <= 1) return;
-  if (components <= 0) {
-    throw std::invalid_argument("invalid p2p exchange component count");
-  }
-  impl_->validate_peers(left_peer, right_peer);
-  const std::size_t send_left_elements =
-      static_cast<std::size_t>(send_left_count) * static_cast<std::size_t>(components);
-  const std::size_t send_right_elements =
-      static_cast<std::size_t>(send_right_count) * static_cast<std::size_t>(components);
-  const std::size_t recv_left_elements =
-      static_cast<std::size_t>(recv_left_count) * static_cast<std::size_t>(components);
-  const std::size_t recv_right_elements =
-      static_cast<std::size_t>(recv_right_count) * static_cast<std::size_t>(components);
-  static_cast<void>(checked_mpi_count(send_left_elements, "p2p left send items"));
-  static_cast<void>(checked_mpi_count(send_right_elements, "p2p right send items"));
-  static_cast<void>(checked_mpi_count(recv_left_elements, "p2p left receive items"));
-  static_cast<void>(checked_mpi_count(recv_right_elements, "p2p right receive items"));
-  const std::size_t send_elements = send_left_elements + send_right_elements;
-  const std::size_t recv_elements = recv_left_elements + recv_right_elements;
-  const int mpi_stride = checked_mpi_count(stride, "SoA stride");
-  impl_->device_p2p_send.reserve(std::max<std::size_t>(send_elements, 1));
-  impl_->device_p2p_receive.reserve(std::max<std::size_t>(recv_elements, 1));
-  if (timing != nullptr) {
-    timing->pack_enqueue_begin_ns = monotonic_ns();
-    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->pack_begin)),
-               "record halo pack start");
-  }
-  if (send_left_elements != 0) {
-    pack_indexed_soa<<<(send_left_elements + kThreads - 1) / kThreads, kThreads>>>(
-        send_left_indices, send_left_count, mpi_stride, components, device_values,
-        impl_->device_p2p_send.data());
-    check_cuda(cudaGetLastError(), "pack left halo send list");
-  }
-  if (send_right_elements != 0) {
-    pack_indexed_soa<<<(send_right_elements + kThreads - 1) / kThreads, kThreads>>>(
-        send_right_indices, send_right_count, mpi_stride, components, device_values,
-        impl_->device_p2p_send.data() + send_left_elements);
-    check_cuda(cudaGetLastError(), "pack right halo send list");
-  }
-  if (timing != nullptr) {
-    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->pack_end)),
-               "record halo pack end");
-    timing->pack_enqueue_end_ns = monotonic_ns();
-  }
+  const auto token = begin_p2p_indexed_device_soa(
+      device_values, components, stride, send_left_indices, send_left_count,
+      send_right_indices, send_right_count, recv_left_slots, recv_left_count,
+      recv_right_slots, recv_right_count, left_peer, right_peer, volume, timing);
+  finish_halo(token);
+}
 
-  const auto transfer_started =
-      timing != nullptr ? std::chrono::steady_clock::now()
-                        : std::chrono::steady_clock::time_point{};
-  if (backend() == CommunicationBackend::host_staged) {
-    impl_->host_p2p_send.reserve(std::max<std::size_t>(send_elements, 1));
-    impl_->host_p2p_receive.reserve(std::max<std::size_t>(recv_elements, 1));
-    if (timing != nullptr) timing->d2h_begin_ns = monotonic_ns();
-    if (send_elements != 0) {
-      check_cuda(cudaMemcpy(impl_->host_p2p_send.data(), impl_->device_p2p_send.data(),
-                            checked_bytes(send_elements), cudaMemcpyDeviceToHost),
-               "stage halo send list from CUDA device to pinned host");
+HaloExchangeToken MpiRuntime::begin_p2p_indexed_device_soa(
+    double* device_values,
+    int components,
+    std::size_t stride,
+    const int* send_left_indices,
+    int send_left_count,
+    const int* send_right_indices,
+    int send_right_count,
+    const int* recv_left_slots,
+    int recv_left_count,
+    const int* recv_right_slots,
+    int recv_right_count,
+    int left_peer,
+    int right_peer,
+    CommunicationVolume& volume,
+    P2pTimingEvents* timing) const
+{
+  impl_->require_initial_thread();
+  try {
+    impl_->require_reusable();
+    auto& h = impl_->halo;
+    if (h.state.generation == std::numeric_limits<std::uint64_t>::max()) {
+      throw std::overflow_error("halo generation exhausted");
     }
-    if (timing != nullptr) timing->d2h_end_ns = monotonic_ns();
-  const auto mpi_started = begin_mpi_wait(volume);
-    impl_->p2p_exchange_bytes(
-        impl_->host_p2p_send.data(), checked_mpi_count(checked_bytes(send_left_elements), "p2p send bytes"),
-        impl_->host_p2p_send.data() + send_left_elements,
-        checked_mpi_count(checked_bytes(send_right_elements), "p2p send bytes"),
-        impl_->host_p2p_receive.data(), checked_mpi_count(checked_bytes(recv_left_elements), "p2p recv bytes"),
-        impl_->host_p2p_receive.data() + recv_left_elements,
-        checked_mpi_count(checked_bytes(recv_right_elements), "p2p recv bytes"),
-        left_peer, right_peer, timing);
-  end_mpi_wait(volume, mpi_started);
-    if (recv_elements != 0) {
+    const auto generation = h.state.generation + 1;
+    h.state = HaloExchangeState{};
+    h.state.generation = generation;
+    h.state.reusable = false;
+    h.unpack_queued = false;
+    h.volume = &volume;
+    h.timing = timing;
+    if (world_size() <= 1) {
+      h.state = {generation, true, true, true, true, true, true, true};
+      return {generation};
+    }
+    impl_->validate_peers(left_peer, right_peer);
+    if (components <= 0 || send_left_count < 0 || send_right_count < 0 ||
+        recv_left_count < 0 || recv_right_count < 0) {
+      throw std::invalid_argument("invalid halo components/counts");
+    }
+    const std::array<int, 4> counts = {
+        send_left_count, send_right_count, recv_left_count, recv_right_count};
+    const std::array<const int*, 4> indices = {
+        send_left_indices, send_right_indices, recv_left_slots, recv_right_slots};
+    for (int i = 0; i < 4; ++i) {
+      if (static_cast<std::size_t>(counts[i]) > stride ||
+          (counts[i] != 0 && (indices[i] == nullptr || device_values == nullptr))) {
+        throw std::invalid_argument("halo count/pointer exceeds local shape");
+      }
+    }
+    h.stride = checked_mpi_count(stride, "halo SoA stride");
+    h.components = components;
+    h.values = device_values;
+    h.recv_slots = {recv_left_slots, recv_right_slots};
+    h.recv_counts = {recv_left_count, recv_right_count};
+    h.send_elements = {std::size_t(send_left_count) * components,
+                       std::size_t(send_right_count) * components};
+    h.recv_elements = {std::size_t(recv_left_count) * components,
+                       std::size_t(recv_right_count) * components};
+    std::array<int, 4> bytes{};
+    for (int i = 0; i < 4; ++i) {
+      const auto elements = i < 2 ? h.send_elements[i] : h.recv_elements[i - 2];
+      checked_mpi_count(elements, "halo kernel item count");
+      bytes[i] = checked_mpi_count(checked_bytes(elements), "halo MPI byte count");
+    }
+    const auto ns = h.send_elements[0] + h.send_elements[1];
+    const auto nr = h.recv_elements[0] + h.recv_elements[1];
+    // All capacity changes precede both CUDA use and MPI posting. The lease
+    // lasts through BOTH send completion and physical unpack completion.
+    impl_->device_p2p_send.reserve(std::max<std::size_t>(ns, 1));
+    impl_->device_p2p_receive.reserve(std::max<std::size_t>(nr, 1));
+    if (backend() == CommunicationBackend::host_staged) {
+      impl_->host_p2p_send.reserve(std::max<std::size_t>(ns, 1));
+      impl_->host_p2p_receive.reserve(std::max<std::size_t>(nr, 1));
+    }
+    for (auto& event : h.events) {
+      if (event == nullptr) check_cuda(cudaEventCreateWithFlags(&event, cudaEventDisableTiming),
+                                      "create halo lifecycle event");
+    }
+    impl_->lease_halo(true);
+    if (timing != nullptr) {
+      timing->pack_enqueue_begin_ns = monotonic_ns();
+      check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->pack_begin)),
+                 "record halo pack start");
+    }
+    for (int face = 0; face < 2; ++face) {
+      const auto n = h.send_elements[face];
+      if (n == 0) continue;
+      pack_indexed_soa<<<(n + kThreads - 1) / kThreads, kThreads>>>(
+          indices[face], counts[face], h.stride, components, device_values,
+          impl_->device_p2p_send.data() + (face == 0 ? 0 : h.send_elements[0]));
+      check_cuda(cudaGetLastError(), "pack halo face");
+    }
+    check_cuda(cudaEventRecord(h.events[0]), "record halo pack ready");
+    if (timing != nullptr) {
+      check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->pack_end)),
+                 "record halo pack end");
+      timing->pack_enqueue_end_ns = monotonic_ns();
+      h.transfer_started = MpiWaitClock::now();
+    }
+    if (backend() == CommunicationBackend::host_staged) {
+      if (timing != nullptr) timing->d2h_begin_ns = monotonic_ns();
+      if (ns != 0) {
+        check_cuda(cudaMemcpyAsync(impl_->host_p2p_send.data(), impl_->device_p2p_send.data(),
+                                    checked_bytes(ns), cudaMemcpyDeviceToHost, 0),
+                   "stage halo D2H to pinned host");
+      }
+      check_cuda(cudaEventRecord(h.events[1]), "record halo send source ready");
+      // Replaces blocking D2H: same default stream orders pack -> D2H ->
+      // event, and host waits before handing pinned memory to MPI. Also
+      // covers the zero-send case without launching a zero-size kernel.
+      check_cuda(cudaEventSynchronize(h.events[1]), "wait for halo send source");
+      if (timing != nullptr) timing->d2h_end_ns = monotonic_ns();
+    } else {
+      if (timing != nullptr) timing->input_sync_begin_ns = monotonic_ns();
+      // Preserve O2's conservative visibility contract. CUDA-aware is NOT
+      // stream-aware. Gate remains capability + device p2p numerical self-test.
+      check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware p2p input");
+      if (timing != nullptr) timing->input_sync_end_ns = monotonic_ns();
+    }
+    h.state.pack_ready = h.state.send_source_ready = true;
+    auto* send = backend() == CommunicationBackend::host_staged
+                     ? impl_->host_p2p_send.data() : impl_->device_p2p_send.data();
+    auto* recv = backend() == CommunicationBackend::host_staged
+                     ? impl_->host_p2p_receive.data() : impl_->device_p2p_receive.data();
+    // Persistent requests belong to h even if posting fails partway. The
+    // catch aborts before any leased buffer is freed; no local recovery wait.
+    const auto mpi_started = begin_mpi_wait(volume);
+    if (timing != nullptr) timing->mpi_post_begin_ns = monotonic_ns();
+    check_mpi(MPI_Isend(send, bytes[0], MPI_BYTE, left_peer, kTagSendLeft,
+                        MPI_COMM_WORLD, &h.requests[0]), "post halo left send");
+    check_mpi(MPI_Isend(send + h.send_elements[0], bytes[1], MPI_BYTE, right_peer,
+                        kTagSendRight, MPI_COMM_WORLD, &h.requests[1]), "post halo right send");
+    check_mpi(MPI_Irecv(recv, bytes[2], MPI_BYTE, left_peer, kTagSendRight,
+                        MPI_COMM_WORLD, &h.requests[2]), "post halo left receive");
+    check_mpi(MPI_Irecv(recv + h.recv_elements[0], bytes[3], MPI_BYTE, right_peer,
+                        kTagSendLeft, MPI_COMM_WORLD, &h.requests[3]), "post halo right receive");
+    end_mpi_wait(volume, mpi_started);
+    return {generation};
+  } catch (const std::exception& error) {
+    impl_->fail_halo(error.what());
+  } catch (...) {
+    impl_->fail_halo("unknown halo begin failure");
+  }
+}
+
+HaloExchangeState MpiRuntime::Impl::advance_halo(HaloExchangeToken token, bool wait)
+{
+  auto& h = halo;
+  if (token.generation == 0 || token.generation != h.state.generation) {
+    throw std::logic_error("stale or invalid halo token");
+  }
+  if (h.state.reusable) return h.state;
+  auto& volume = *h.volume;
+  auto* timing = h.timing;
+  if (!h.state.sends_complete || !h.state.receives_complete) {
+    const auto mpi_started = begin_mpi_wait(volume);
+    MPI_Status statuses[4];
+    if (wait) {
+      if (timing != nullptr) timing->mpi_waitall_begin_ns = monotonic_ns();
+      check_mpi(MPI_Waitall(4, h.requests.data(), statuses), "finish halo MPI_Waitall");
+      if (timing != nullptr) timing->mpi_waitall_end_ns = monotonic_ns();
+      h.state.sends_complete = h.state.receives_complete = true;
+    } else {
+      int sends_done = 0, receives_done = 0;
+      check_mpi(MPI_Testall(2, h.requests.data(), &sends_done, statuses), "test halo sends");
+      check_mpi(MPI_Testall(2, h.requests.data() + 2, &receives_done, statuses + 2),
+                "test halo receives");
+      h.state.sends_complete = sends_done != 0;
+      h.state.receives_complete = receives_done != 0;
+    }
+    end_mpi_wait(volume, mpi_started);
+  }
+  const auto nr = h.recv_elements[0] + h.recv_elements[1];
+  if (h.state.receives_complete && !h.unpack_queued) {
+    if (backend == CommunicationBackend::host_staged) {
       if (timing != nullptr) timing->h2d_begin_ns = monotonic_ns();
-      check_cuda(cudaMemcpy(impl_->device_p2p_receive.data(), impl_->host_p2p_receive.data(),
-                            checked_bytes(recv_elements), cudaMemcpyHostToDevice),
-               "stage halo receive stream from pinned host to CUDA device");
-      if (timing != nullptr) timing->h2d_end_ns = monotonic_ns();
+      if (nr != 0) {
+        check_cuda(cudaMemcpyAsync(device_p2p_receive.data(), host_p2p_receive.data(),
+                                    checked_bytes(nr), cudaMemcpyHostToDevice, 0),
+                   "stage halo H2D from pinned host");
+      }
+    } else {
+      if (timing != nullptr) timing->output_sync_begin_ns = monotonic_ns();
+      // MPI receive completion, THEN the retained O2 visibility fence. No
+      // assumption about MPI's internal streams or background progress.
+      check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware p2p output");
+      h.state.receive_gpu_ready = true;
+      if (timing != nullptr) timing->output_sync_end_ns = monotonic_ns();
     }
-  } else {
-    if (timing != nullptr) timing->input_sync_begin_ns = monotonic_ns();
-    check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware p2p input");
-    if (timing != nullptr) timing->input_sync_end_ns = monotonic_ns();
-  const auto mpi_started = begin_mpi_wait(volume);
-    impl_->p2p_exchange_bytes(
-        impl_->device_p2p_send.data(), checked_mpi_count(checked_bytes(send_left_elements), "p2p send bytes"),
-        impl_->device_p2p_send.data() + send_left_elements,
-        checked_mpi_count(checked_bytes(send_right_elements), "p2p send bytes"),
-        impl_->device_p2p_receive.data(), checked_mpi_count(checked_bytes(recv_left_elements), "p2p recv bytes"),
-        impl_->device_p2p_receive.data() + recv_left_elements,
-        checked_mpi_count(checked_bytes(recv_right_elements), "p2p recv bytes"),
-        left_peer, right_peer, timing);
-  end_mpi_wait(volume, mpi_started);
-    if (timing != nullptr) timing->output_sync_begin_ns = monotonic_ns();
-    check_cuda(cudaDeviceSynchronize(), "synchronize CudaAware p2p output");
-    if (timing != nullptr) timing->output_sync_end_ns = monotonic_ns();
+    check_cuda(cudaEventRecord(h.events[2]), "record halo GPU receive ready");
+    if (timing != nullptr) {
+      // H2D brackets now cover enqueue; physical readiness is events[2].
+      if (backend == CommunicationBackend::host_staged) timing->h2d_end_ns = monotonic_ns();
+      timing->transfer_wait_seconds += std::chrono::duration<double>(
+          MpiWaitClock::now() - h.transfer_started).count();
+      timing->unpack_enqueue_begin_ns = monotonic_ns();
+      check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->unpack_begin)),
+                 "record halo unpack start");
+    }
+    for (int face = 0; face < 2; ++face) {
+      const auto n = h.recv_elements[face];
+      if (n == 0) continue;
+      // Replaces blocking H2D's consumer dependency: same stream orders
+      // H2D -> receive-ready event -> unpack. Host need not wait in between.
+      unpack_indexed_soa<<<(n + kThreads - 1) / kThreads, kThreads>>>(
+          h.recv_slots[face], h.recv_counts[face], h.stride, h.components,
+          device_p2p_receive.data() + (face == 0 ? 0 : h.recv_elements[0]), h.values);
+      check_cuda(cudaGetLastError(), "unpack halo face");
+    }
+    if (timing != nullptr) {
+      check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->unpack_end)),
+                 "record halo unpack end");
+      timing->unpack_enqueue_end_ns = monotonic_ns();
+    }
+    check_cuda(cudaEventRecord(h.events[3]), "record halo unpack complete");
+    h.unpack_queued = true;
   }
-  if (timing != nullptr) {
-    timing->transfer_wait_seconds += std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - transfer_started).count();
-    timing->unpack_enqueue_begin_ns = monotonic_ns();
-    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->unpack_begin)),
-               "record halo unpack start");
+  if (h.unpack_queued && !h.state.unpack_complete) {
+    if (wait) {
+      // O3 strengthens finish to physical completion before releasing the
+      // lease (O2 only enqueued unpack). No new device-wide synchronization.
+      check_cuda(cudaEventSynchronize(h.events[3]), "finish halo unpack");
+      h.state.receive_gpu_ready = h.state.unpack_complete = true;
+    } else {
+      const auto receive_status = cudaEventQuery(h.events[2]);
+      if (receive_status != cudaErrorNotReady) {
+        check_cuda(receive_status, "query halo GPU receive ready");
+        h.state.receive_gpu_ready = true;
+      }
+      const auto unpack_status = cudaEventQuery(h.events[3]);
+      if (unpack_status != cudaErrorNotReady) {
+        check_cuda(unpack_status, "query halo unpack complete");
+        h.state.receive_gpu_ready = h.state.unpack_complete = true;
+      }
+    }
   }
+  if (h.state.sends_complete && h.state.receives_complete && h.state.unpack_complete) {
+    for (auto request : h.requests) {
+      if (request != MPI_REQUEST_NULL) throw std::logic_error("completed halo retains a request");
+    }
+    volume.p2p_calls += 4;
+    volume.add_p2p_bytes(ByteClass::halo,
+        checked_bytes(h.send_elements[0] + h.send_elements[1]), checked_bytes(nr));
+    lease_halo(false);
+    h.state.reusable = true;
+  }
+  return h.state;
+}
 
-  if (recv_left_elements != 0) {
-    unpack_indexed_soa<<<(recv_left_elements + kThreads - 1) / kThreads, kThreads>>>(
-        recv_left_slots, recv_left_count, mpi_stride, components,
-        impl_->device_p2p_receive.data(), device_values);
-    check_cuda(cudaGetLastError(), "unpack left halo receive stream");
+HaloExchangeState MpiRuntime::halo_state(HaloExchangeToken token) const
+{
+  impl_->require_initial_thread();
+  if (token.generation == 0 || token.generation != impl_->halo.state.generation) {
+    impl_->fail_halo("stale or invalid halo token");
   }
-  if (recv_right_elements != 0) {
-    unpack_indexed_soa<<<(recv_right_elements + kThreads - 1) / kThreads, kThreads>>>(
-        recv_right_slots, recv_right_count, mpi_stride, components,
-        impl_->device_p2p_receive.data() + recv_left_elements, device_values);
-    check_cuda(cudaGetLastError(), "unpack right halo receive stream");
-  }
-  if (timing != nullptr) {
-    check_cuda(cudaEventRecord(reinterpret_cast<cudaEvent_t>(timing->unpack_end)),
-               "record halo unpack end");
-    timing->unpack_enqueue_end_ns = monotonic_ns();
-  }
-  volume.p2p_calls += 4;
-  volume.add_p2p_bytes(ByteClass::halo, checked_bytes(send_elements),
-                       checked_bytes(recv_elements));
+  return impl_->halo.state;
+}
+
+HaloExchangeState MpiRuntime::progress_halo(HaloExchangeToken token) const
+{
+  impl_->require_initial_thread();
+  try { return impl_->advance_halo(token, false); }
+  catch (const std::exception& error) { impl_->fail_halo(error.what()); }
+  catch (...) { impl_->fail_halo("unknown halo progress failure"); }
+}
+
+HaloExchangeState MpiRuntime::finish_halo(HaloExchangeToken token) const
+{
+  impl_->require_initial_thread();
+  try { return impl_->advance_halo(token, true); }
+  catch (const std::exception& error) { impl_->fail_halo(error.what()); }
+  catch (...) { impl_->fail_halo("unknown halo finish failure"); }
 }
 
 void MpiRuntime::exchange_p2p_host_bytes(
@@ -1454,6 +1704,8 @@ void MpiRuntime::exchange_p2p_host_bytes(
     ByteClass byte_class,
     CommunicationVolume& volume) const
 {
+  impl_->require_initial_thread();
+  if (!impl_->halo.state.reusable) impl_->fail_halo("host face exchange during active halo");
   if (world_size() <= 1) return;
   impl_->validate_peers(left_peer, right_peer);
   const auto mpi_started = begin_mpi_wait(volume);

@@ -50,3 +50,11 @@ add_test(
   NAME dmgmd.lammps_reference
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lammps_reference/test_lammps_reference.py
 )
+
+# Launched by tests/mpi/run_halo_lifecycle.py after the GPU environment gate.
+# Link wrappers inject transport errors only into this test executable.
+add_executable(dmgmd_mpi_halo_lifecycle_tests mpi_halo_lifecycle_tests.cu)
+target_link_libraries(dmgmd_mpi_halo_lifecycle_tests PRIVATE dmgmd_runtime)
+target_link_options(dmgmd_mpi_halo_lifecycle_tests PRIVATE
+  -Wl,--wrap=MPI_Isend -Wl,--wrap=MPI_Waitall -Wl,--wrap=MPI_Testall
+  -Wl,--wrap=cudaEventSynchronize -Wl,--wrap=cudaMemcpyAsync)

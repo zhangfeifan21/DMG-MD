@@ -268,3 +268,7 @@ P>1 由 differential 与迁移矩阵验证；M2a 由大盒 domain 矩阵验证�
 沿用原布局、L stride、行序、半径和每中心累加。集合、辅助产物唯一写入、epoch/连续位移
 缓存有效性、fallback、诊断与 split timing 口径以
 [串行分区合同](./domain-partition.md)为准；不引入异步通信或 overlap。
+
+O3 halo 的专用 device/pinned staging 采用单在途槽位，lease 期间禁止 reserve/覆盖/释放，
+直到 MPI 两组请求与 unpack event 都完成；详见 [halo 生命周期](./halo-lifecycle.md)。
+粒子 SoA、stride、owned/ghost 身份与通信字节不变。
