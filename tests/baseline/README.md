@@ -55,3 +55,8 @@ python3 tests/baseline/run_baselines.py --calibrate 30
 本目录继续只承担 8/9 原子、最多 6 个连续 NVE steps 的短程 committed golden。4096/12288/
 5000 原子、100000-step、五初态 release、双向构型回放和跨 rank restart 位于
 [`tests/long_nve/`](../long_nve/README.md)，两套基线不会互相覆盖或更新。
+
+O2 的 compat 中心选择修改同样要求本套单 rank golden 与 long_nve 重验，不更新 golden 或
+放宽容差。P1/M1 对显式分区开关的同步 fallback 由 MPI domain runner 专项验证；
+分区逐原子量、有效中间产物及 poison 的验收合同见
+[串行分区标准](../../docs/standards/domain-partition.md)。

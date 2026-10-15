@@ -46,6 +46,7 @@ Adaptations for this replica are listed at the bottom of this header block.
 ----------------------------------------------------------------------------*/
 
 #include "neighbor.cuh"
+#include "domain_partition.cuh"
 #include "potential.cuh"
 #include "common.cuh"
 #include "gpu_vector.cuh"
@@ -179,7 +180,8 @@ public:
     GPU_Vector<double>& virial,
     const GPU_Vector<unsigned long long>& global_id,
     const DomainNeighborAction neighbor_action,
-    const std::uint64_t layout_epoch);
+    const std::uint64_t layout_epoch,
+    const DomainForceContext& context = {});
 
   // Updates every logical per-atom NEP workspace size/stride and invalidates
   // the neighbor rebuild reference. Physical capacity is reused when large
@@ -202,6 +204,11 @@ public:
   std::function<void(int /*0=neighbor start, 1=neighbor end,
                             2=NEP start, 3=NEP end*/)>
       domain_timing_marker;
+  // O2 diagnostics are emitted only when the experimental selector is on.
+  std::function<void(const std::string&)> domain_partition_sink;
+  // Cumulative per-instance counters; no allocations/events on the off path.
+  std::uint64_t partition_split_calls = 0, partition_full_calls = 0;
+  std::uint64_t partition_classifications = 0;
 
   const GPU_Vector<int>& get_NN_radial_ptr() override;
 
@@ -213,6 +220,8 @@ private:
   ZBL zbl;
   ExpandedBox ebox;
   Neighbor neighbor;
+  DomainPartition partition_;
+  std::uint64_t workspace_generation_ = 0;
 
   void update_potential(float* parameters, ANN& ann);
 

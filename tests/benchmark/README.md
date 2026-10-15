@@ -370,3 +370,12 @@ A/B 正式研究须先采用[固定 CPU 绑定计划](../../docs/plans/mpi-cpu-b
 每 rank K 核与 NUMA 策略；C1 采样本身不设置 affinity。
 A=off、B=proc，同输入、GPU telemetry 与绑定，随机化组序、至少五次；C1 smoke 不代替此项。
 未有可靠 marker 前仅分析 process_observed，不能按 DMGMD_TIMING 汇总日志推断逐步 CPU。
+
+## O2 串行分区成本
+
+`--dmgmd-partition off|serial` 默认 off。runner 清除继承的 DMGMD 环境后显式白名单传递
+`DMGMD_DOMAIN_PARTITION`，在 dry-run/plan、launch_environment 和 metadata 保存模式，
+并用程序的 CONFIG 与累计执行 SUMMARY 检查实际模式，结果写 actual_partition。
+serial 仍先完成 halo，再分区串行运行；它没有 overlap。正式成本比较使用相同输入与
+CPU/NUMA/GPU、关闭详细 profiler，另用 trace 组诊断，禁止用 verify 的双计算测速度。
+O2 原始成本样本与限制见 [状态](../../docs/status/overlap-partition-20261015.md)。

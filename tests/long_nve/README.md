@@ -247,3 +247,11 @@ restart 不保存 global time 且使用文本量化，本测试不要求它与�
 `DMGMD_DOMAIN_DIAGNOSTICS=1`，以验证每 rank 的 step-0 `DMGMD_DOMAIN_LAYOUT`；
 `--performance` 显式关闭该详细日志，并把通信汇总降为每段末一次，但仍验证启动、mode、
 唯一 owner、通信记账、数值结果和 `DMGMD_TIMING`。reference 环境不携带任何 DMGMD 专属变量。
+
+## O2 分区模式
+
+`--partition-mode off|serial|verify` 默认 off，显式写入 candidate 环境与 checkpoint 的
+环境身份，父 shell 的旧 mask 实验开关不能代替该参数。GPUMD reference 不接收候选模式。
+修改 compat 后仍按原 manifest 执行 smoke/nightly/release 对应验收，不能更改容差；
+smoke 通过只代表 smoke。分区专用 P2/4 逐原子/中间量/poison 矩阵入口见
+[串行分区标准](../../docs/standards/domain-partition.md)。

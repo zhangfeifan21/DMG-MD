@@ -596,6 +596,7 @@ void Neighbor::find_neighbor_domain(
   const DomainNeighborAction action,
   const std::uint64_t layout_epoch)
 {
+  if (action == DomainNeighborAction::must_rebuild) ++domain_generation_;
   static_cast<void>(type);  // kept for interface parity; rows are untyped
   const int N = num_candidates;
   if (center_begin < 0 || center_end < center_begin || center_end > N) {
@@ -733,6 +734,7 @@ void Neighbor::find_neighbor_domain(
 
 void Neighbor::initialize(const double rc, const int num_atoms, const int num_neighbors)
 {
+  ++domain_generation_;
   const double rc_plus_skin = rc + skin;
   const int MN = num_neighbors * rc_plus_skin * rc_plus_skin * rc_plus_skin / (rc * rc * rc);
   row_capacity_ = static_cast<size_t>(MN);
@@ -745,6 +747,7 @@ void Neighbor::initialize(const double rc, const int num_atoms, const int num_ne
 
 void Neighbor::invalidate_rebuild_reference(void)
 {
+  ++domain_generation_;
   x0.resize_reuse(0);
   y0.resize_reuse(0);
   z0.resize_reuse(0);

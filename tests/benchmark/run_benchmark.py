@@ -216,6 +216,28 @@ def actual_dmgmd_profiling(text, requested):
             'step_trace_rows': len(trace), 'timing_summary_rows': len(timing)}
 
 
+def actual_dmgmd_partition(text, requested):
+    configs = [fields(line) for line in text.splitlines() if line.startswith('DMGMD_PARTITION_CONFIG ')]
+    summaries = [fields(line) for line in text.splitlines() if line.startswith('DMGMD_PARTITION_SUMMARY ')]
+    if requested == 'off':
+        if configs or summaries:
+            raise ValueError('partition output appeared in off mode')
+        return {'mode': 'off', 'split_calls': 0, 'classifications': 0}
+    if len(configs) != 1 or configs[0].get('mode') != requested:
+        raise ValueError('runtime partition mode differs from requested configuration')
+    if 'DMGMD_PARTITION mode=full reason=m1-fallback' in text:
+        return {'mode': requested, 'fallback': 'm1', 'split_calls': 0, 'classifications': 0}
+    latest = {}
+    for row in summaries:
+        rank = int(row['rank'])
+        if rank not in latest or int(row['sequence']) > int(latest[rank]['sequence']): latest[rank] = row
+    if not latest:
+        raise ValueError('partition mode lacks actual execution counters')
+    return {'mode': requested,
+            'split_calls': sum(int(row['cumulative_split_calls']) for row in latest.values()),
+            'classifications': sum(int(row['cumulative_classifications']) for row in latest.values())}
+
+
 def write_trace_markers(text, cpu_directory):
     """Join runtime timestamps to C1's verified PID/start identity for reuse by its analyzer."""
     cpu_directory = Path(cpu_directory)
@@ -465,6 +487,8 @@ def main():
     p.add_argument('--lammps-bin', type=Path, default=ROOT / 'build-lammps-nep-kk-preserved/lmp')
     p.add_argument('--mpiexec', default='mpiexec')
     p.add_argument('--mpiexec-arg', action='append', default=[])
+    p.add_argument('--dmgmd-partition', choices=('off', 'serial'), default='off',
+                   help='O2 completed-halo serial partition; explicitly passed and verified, no overlap')
     p.add_argument('--dmgmd-profiling', default='off',
                    help='comma-separated DMG-MD modes: off,trace; trace enables detailed timing '
                         'and per-step CLOCK_MONOTONIC timeline (M2a ranks > 1 only)')
@@ -546,7 +570,7 @@ def main():
                     for mode in (profiling if engine == 'dmgmd' else ['off']):
                         plan.append(dict(case=name, scaling=spec['scaling'], ranks=rank, atoms=case['atoms'],
                                          cells=case['cells'], box_A=lengths, engine=engine, backend=backend,
-                                         profiling=mode, steps=profile['steps']))
+                                         profiling=mode, partition=(args.dmgmd_partition if engine == 'dmgmd' else 'off'), steps=profile['steps']))
     trials = []
     rng = random.Random(manifest['order_seed'])
     for repeat in range(profile['repeats']):
@@ -559,11 +583,12 @@ def main():
                      (f'-{job["profiling"]}' if len(profiling) > 1 or job['profiling'] != 'off' else ''))
     if args.dry_run:
         print(json.dumps({'profile': profile, 'trials': trials, 'cpu_sampling': cpu_options,
-                          'dmgmd_profiling': profiling,
+                          'dmgmd_profiling': profiling, 'dmgmd_partition': args.dmgmd_partition,
                           'dmgmd_launch_environment': {
                               mode: {'DMGMD_DOMAIN_TIMING': str(int(mode == 'trace')),
                                      'DMGMD_DOMAIN_TRACE': str(int(mode == 'trace')),
-                                     'DMGMD_DOMAIN_DIAGNOSTICS': '0'} for mode in profiling},
+                                     'DMGMD_DOMAIN_DIAGNOSTICS': '0',
+                                     'DMGMD_DOMAIN_PARTITION': args.dmgmd_partition} for mode in profiling},
                           'mpiexec_args': args.mpiexec_arg}, indent=2))
         return 0
     output = create_output_directory(args.output)
@@ -576,7 +601,7 @@ def main():
     save(output / 'initial-gpus.json', snap)
     metadata = {'schema_version': 1, 'profile_name': args.profile, 'profile': profile,
                 'hostname': socket.gethostname(), 'argv': sys.argv, 'devices': selected,
-                'dmgmd_profiling': profiling, 'mpiexec_args': args.mpiexec_arg,
+                'dmgmd_profiling': profiling, 'dmgmd_partition': args.dmgmd_partition, 'mpiexec_args': args.mpiexec_arg,
                 'binaries': identity, 'manifest': manifest, 'plan': trials,
                 'environment': {k: v for k, v in os.environ.items()
                                 if k.startswith(('CUDA_', 'OMPI_', 'UCX_', 'PMIX_', 'DMGMD_', 'OMP_'))
@@ -678,6 +703,7 @@ def main():
                 if job['engine'] == 'dmgmd':
                     detailed = job['profiling'] == 'trace'
                     environment.update(DMGMD_COMM_BACKEND=job['backend'],
+                                       DMGMD_DOMAIN_PARTITION=args.dmgmd_partition,
                                        DMGMD_DOMAIN_TIMING=str(int(detailed)),
                                        DMGMD_DOMAIN_TRACE=str(int(detailed)),
                                        DMGMD_DOMAIN_DIAGNOSTICS='0',
@@ -727,6 +753,9 @@ def main():
                 if job['engine'] == 'dmgmd' and job['ranks'] > 1:
                     result['actual_profiling'] = actual_dmgmd_profiling(
                         (directory / 'stdout.txt').read_text(), job['profiling'])
+                if job['engine'] == 'dmgmd':
+                    result['actual_partition'] = actual_dmgmd_partition(
+                        (directory / 'stdout.txt').read_text(), args.dmgmd_partition)
                 if job['engine'] == 'lammps':
                     thermo = parse_lammps_thermo((directory / 'stdout.txt').read_text(),
                                                   profile['warmup'] + profile['steps'], job['atoms'])

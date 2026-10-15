@@ -20,6 +20,16 @@ class BenchmarkTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 bench.parse_thermo(bad)
 
+    def test_actual_partition_uses_runtime_and_latest_counters(self):
+        self.assertEqual(bench.actual_dmgmd_partition('', 'off')['split_calls'], 0)
+        text = ('DMGMD_PARTITION_CONFIG mode=serial scheduling=completed-halo-serial\n'
+                'DMGMD_PARTITION_SUMMARY rank=0 sequence=0 cumulative_split_calls=2 cumulative_classifications=1\n'
+                'DMGMD_PARTITION_SUMMARY rank=0 sequence=1 cumulative_split_calls=5 cumulative_classifications=2\n'
+                'DMGMD_PARTITION_SUMMARY rank=1 sequence=1 cumulative_split_calls=3 cumulative_classifications=2\n')
+        self.assertEqual(bench.actual_dmgmd_partition(text, 'serial')['split_calls'], 8)
+        with self.assertRaises(ValueError): bench.actual_dmgmd_partition('', 'serial')
+        with self.assertRaises(ValueError): bench.actual_dmgmd_partition(text, 'off')
+
     def test_all_profiles_have_valid_geometry(self):
         manifest = json.loads((Path(__file__).parent / 'manifest.json').read_text())
         for spec in manifest['cases'].values():

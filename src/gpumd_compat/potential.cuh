@@ -141,7 +141,9 @@ protected:
     const int number_of_particles,
     const GPU_Vector<double>& position_per_atom,
     GPU_Vector<double>& force_per_atom,
-    GPU_Vector<double>& virial_per_atom);
+    GPU_Vector<double>& virial_per_atom,
+    const int* selection = nullptr,
+    const bool complement = false);
 };
 
 }  // namespace gpumd_compat

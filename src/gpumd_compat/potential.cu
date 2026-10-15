@@ -233,9 +233,12 @@ static __global__ void gpu_find_force_many_body_domain(
   double* g_fx,
   double* g_fy,
   double* g_fz,
-  double* g_virial)
+  double* g_virial,
+  const int* selection,
+  const bool complement)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   float s_fx = 0.0f;  // force_x
   float s_fy = 0.0f;  // force_y
   float s_fz = 0.0f;  // force_z
@@ -392,7 +395,9 @@ void Potential::find_properties_many_body_domain(
   const int number_of_particles,
   const GPU_Vector<double>& position_per_atom,
   GPU_Vector<double>& force_per_atom,
-  GPU_Vector<double>& virial_per_atom)
+  GPU_Vector<double>& virial_per_atom,
+  const int* selection,
+  const bool complement)
 {
   if (N1 >= N2) return;  // empty owned range: no launch at all
   int grid_size = (N2 - N1 - 1) / BLOCK_SIZE_FORCE + 1;
@@ -415,7 +420,7 @@ void Potential::find_properties_many_body_domain(
     force_per_atom.data(),
     force_per_atom.data() + number_of_particles,
     force_per_atom.data() + 2 * number_of_particles,
-    virial_per_atom.data());
+    virial_per_atom.data(), selection, complement);
   GPU_CHECK_KERNEL
 }
 

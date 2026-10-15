@@ -238,3 +238,10 @@ MPI/CUDA 流必须显式建立以下 happens-before：owned migration 完成 →
 4. **中**：VV、thermo local reduction、PBC kernel；数学简单但兼容性重要。
 5. **实验后**：small-box atomic family。
 6. **不复用编排**：`NEP_MULTIGPU::compute()` 的 GPU0 全局分发/回收。
+
+## O2 实验串行分区
+
+默认关闭的 `DMGMD_DOMAIN_PARTITION=serial|verify` 仅选择 M2a 普通步中心；halo 先完成，
+沿用原布局、L stride、行序、半径和每中心累加。集合、辅助产物唯一写入、epoch/连续位移
+缓存有效性、fallback、诊断与 split timing 口径以
+[串行分区合同](./domain-partition.md)为准；不引入异步通信或 overlap。

@@ -4,6 +4,9 @@
 #include "gpumd_compat/box.cuh"
 #include "gpumd_compat/gpu_vector.cuh"
 #include "gpumd_compat/neighbor.cuh"
+#include "gpumd_compat/domain_partition.cuh"
+#include "gpumd_compat/nep.cuh"
+#include "gpumd_compat/domain_partition_verify.cuh"
 
 #include <cuda_runtime.h>
 
@@ -147,6 +150,104 @@ void check_gpu_vector_capacity_reuse()
           "logical clear must retain reusable physical storage");
 }
 
+void check_partition_graphs()
+{
+  using gpumd_compat::DomainPartition;
+  using gpumd_compat::DomainPartitionKey;
+  GPU_Vector<int> nn(5), nl(25);
+  GPU_Vector<unsigned long long> gids(5);
+  std::vector<unsigned long long> gid{40,10,50,20,30};
+  gids.copy_from_host(gid.data());
+  DomainPartition p;
+  DomainPartitionKey key;
+  key.local = key.dependency = 5;
+  for (int bits = 0; bits < 1024; ++bits) {
+    std::vector<std::vector<int>> rows(5);
+    int edge = 0;
+    for (int i = 0; i < 5; ++i) for (int j = i+1; j < 5; ++j, ++edge)
+      if (bits & (1 << edge)) { rows[i].push_back(j); rows[j].push_back(i); }
+    std::vector<int> counts(5), entries(25, -1);
+    for (int c = 0; c < 5; ++c) {
+      std::sort(rows[c].begin(), rows[c].end(), [&](int a, int b) { return gid[a] < gid[b]; });
+      counts[c] = rows[c].size();
+      for (std::size_t e = 0; e < rows[c].size(); ++e) entries[e*5+c] = rows[c][e];
+    }
+    nn.copy_from_host(counts.data()); nl.copy_from_host(entries.data());
+    ++key.neighbor; // same layout/shape, new Verlet generation
+    for (int owned = 0; owned <= 5; ++owned) {
+      key.owned = owned;
+      require(p.classify(key, 5, nn.data(), nl.data(), gids.data()), "new key must classify");
+      auto want = gpumd_compat::partition_graph(rows, owned, 5, 5);
+      std::vector<int> got(5);
+      p.interior.copy_to_host(got.data()); require(got == want.interior, "device interior vs graph oracle");
+      p.early.copy_to_host(got.data()); require(got == want.early, "device auxiliary vs graph oracle");
+      require(!p.classify(key, 5, nn.data(), nl.data(), gids.data()), "same key reuses mask");
+    }
+  }
+  auto next = key; ++next.storage;
+  require(p.classify(next, 5, nn.data(), nl.data(), gids.data()), "storage invalidation");
+  next = key; ++next.layout;
+  require(p.classify(next, 5, nn.data(), nl.data(), gids.data()), "mapping invalidation");
+  next = key; next.box[0] = 64;
+  require(p.classify(next, 5, nn.data(), nl.data(), gids.data()), "box invalidation");
+  std::vector<int> invalid(5, 6); nn.copy_from_host(invalid.data()); ++next.neighbor;
+  bool rejected = false;
+  try { p.classify(next, 5, nn.data(), nl.data(), gids.data()); }
+  catch (const std::runtime_error&) { rejected = true; }
+  require(rejected && !p.valid, "invalid row count must fail before NL read");
+  gpumd_compat::DomainPartitionKey empty;
+  require(p.classify(empty, 0, nullptr, nullptr, nullptr), "empty rank classification");
+  require(p.interior_count == 0 && p.early_count == 0, "empty rank no padding reads");
+}
+
+void check_partition_force_preconditions()
+{
+  constexpr int L = 4;
+  gpumd_compat::NEP nep(DMGMD_SOURCE_DIR "/tests/baseline/inputs/potentials/nep_C.txt", L);
+  nep.N1 = nep.ND1 = 0; nep.N2 = 3; nep.ND2 = 4;
+  nep.neighbor_record_sink = [](int, int, int) {};
+  GPU_Vector<int> type(L, 0);
+  GPU_Vector<unsigned long long> gid(L);
+  const unsigned long long ids[]{40,10,30,20}; gid.copy_from_host(ids);
+  GPU_Vector<double> pos(3*L), pe(L, 0.0), force(3*L, 0.0), virial(9*L, 0.0);
+  const double coords[]{17,23,29,35, 12,12,12,12, 12,12,12,12};
+  pos.copy_from_host(coords);
+  Box box = make_box();
+  nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+                    gpumd_compat::DomainNeighborAction::must_rebuild, 7);
+  bool rejected = false;
+  try {
+    nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+      gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
+      {gpumd_compat::DomainPartitionMode::serial, true, 1, 0});
+  } catch (const std::logic_error&) { rejected = true; }
+  require(rejected, "layout epoch alone cannot prove this step's halo readiness");
+  pe.fill(0); force.fill(0); virial.fill(0);
+  nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+    gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
+    {gpumd_compat::DomainPartitionMode::verify, true, 1, 1});
+  require(nep.partition_split_calls == 1, "force precondition test must actually split");
+  box.cpu_h[0] += 1; box.get_inverse(); box.set_is_orthogonal();
+  rejected = false;
+  try {
+    nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+      gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
+      {gpumd_compat::DomainPartitionMode::serial, true, 2, 2});
+  } catch (const std::logic_error&) { rejected = true; }
+  require(rejected, "box change cannot reuse a mask or unrebuilt Verlet cache");
+  const int angular_counts[]{1,0,0,0};
+  nep.nep_data.NN_angular.copy_from_host(angular_counts);
+  nep.nep_data.NL_angular.fill(-1);
+  const int missing_reverse = 1;
+  nep.nep_data.NL_angular.copy_from_host(&missing_reverse, 1);
+  rejected = false;
+  try {
+    gpumd_compat::verify_partition_filtered(nep.nep_data, L, 4, 3,
+      nep.params().MN_radial, nep.params().MN_angular, nullptr, nullptr, false);
+  } catch (const std::runtime_error&) { rejected = true; }
+  require(rejected, "filtered reverse edge must be checked before gather");
+}
+
 }  // namespace
 
 int main()
@@ -158,6 +259,8 @@ int main()
     return 77;
   }
   try {
+    check_partition_graphs();
+    check_partition_force_preconditions();
     check_gpu_vector_capacity_reuse();
     check_nonzero_center_begin();
     std::cout << "domain_neighbor_cuda_tests: all checks passed\n";

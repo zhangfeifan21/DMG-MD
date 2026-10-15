@@ -67,6 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--mpiexec", type=Path, default=Path("mpiexec"))
     parser.add_argument("--devices", required=False, help="comma-separated CUDA IDs/UUIDs")
+    parser.add_argument("--partition-mode", choices=("off", "serial", "verify"), default="off",
+                        help="explicit O2 mode for candidates, recorded in stage checkpoints")
     parser.add_argument("--profile", choices=("smoke", "nightly", "release"), default="smoke")
     parser.add_argument("--cases", type=comma_list)
     parser.add_argument("--seeds", type=integer_list)
@@ -302,8 +304,10 @@ def candidate_environment(
     devices: Sequence[str], ranks: int, backend: str, log_interval: int,
     domain_timing: bool = False,
     performance: bool = False,
+    partition_mode: str = "off",
 ) -> Dict[str, str]:
     env = os.environ.copy()
+    env["DMGMD_DOMAIN_PARTITION"] = partition_mode
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
@@ -904,7 +908,7 @@ def main() -> int:
                         devices, rank_count, backend,
                         int(profile["communication_log_interval"]),
                         args.domain_timing,
-                        args.performance,
+                        args.performance, args.partition_mode,
                     )
                     actual_static = run_candidate_stage(
                         candidate, mpiexec, rank_count, backend, expected_mode, model,

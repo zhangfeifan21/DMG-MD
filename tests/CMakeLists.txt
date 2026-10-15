@@ -17,8 +17,13 @@ add_executable(dmgmd_domain_layout_tests domain_layout_tests.cpp)
 target_include_directories(dmgmd_domain_layout_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 add_test(NAME dmgmd.domain_layout COMMAND $<TARGET_FILE:dmgmd_domain_layout_tests>)
 
+add_executable(dmgmd_domain_partition_tests domain_partition_tests.cpp)
+target_include_directories(dmgmd_domain_partition_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME dmgmd.domain_partition COMMAND $<TARGET_FILE:dmgmd_domain_partition_tests>)
+
 add_executable(dmgmd_domain_neighbor_cuda_tests domain_neighbor_cuda_tests.cu)
 target_link_libraries(dmgmd_domain_neighbor_cuda_tests PRIVATE gpumd_compat CUDA::cudart)
+target_compile_definitions(dmgmd_domain_neighbor_cuda_tests PRIVATE DMGMD_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 add_test(
   NAME dmgmd.domain_neighbor_cuda
   COMMAND $<TARGET_FILE:dmgmd_domain_neighbor_cuda_tests>

@@ -372,6 +372,9 @@ class LongNveTests(unittest.TestCase):
         candidate_env["DMGMD_DOMAIN_TIMING"] = "1"
         with unittest.mock.patch.dict(os.environ, candidate_env):
             staged = runner.candidate_environment(["0", "1"], 2, "HostStaged", 10)
+            self.assertEqual(staged["DMGMD_DOMAIN_PARTITION"], "off")
+            selected = runner.candidate_environment(["0", "1"], 2, "HostStaged", 10, partition_mode="serial")
+            self.assertEqual(selected["DMGMD_DOMAIN_PARTITION"], "serial")
         self.assertEqual(staged["DMGMD_COMM_LOG_INTERVAL"], "10")
         self.assertEqual(staged["DMGMD_DOMAIN_DIAGNOSTICS"], "1")
         self.assertNotIn("DMGMD_DOMAIN_TIMING", staged)

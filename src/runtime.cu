@@ -1286,6 +1286,8 @@ void run_replicated(
   // only after the mode decision (deferred-workspace NEP constructor).
   auto potential = std::make_unique<NEP>(absolute_potential.c_str());
 
+  const auto partition_mode = gpumd_compat::domain_partition_mode();
+  mpi.assert_same_fingerprint(static_cast<int>(partition_mode), "domain partition mode");
   DomainEligibility eligibility;
   {
     const auto& params = potential->params();
@@ -1317,10 +1319,18 @@ void run_replicated(
     std::cout.flush();
   }
 
+  if (partition_mode != gpumd_compat::DomainPartitionMode::off && mpi.is_root()) {
+    std::cout << "DMGMD_PARTITION_CONFIG mode="
+              << (partition_mode == gpumd_compat::DomainPartitionMode::verify ? "verify" : "serial")
+              << " scheduling=completed-halo-serial timing_scope=split-pipeline\n";
+  }
   if (eligibility.eligible) {
     run_local_domain(
         program, std::move(model), box, std::move(potential), eligibility, mpi);
     return;
+  }
+  if (partition_mode != gpumd_compat::DomainPartitionMode::off && mpi.is_root()) {
+    std::cout << "DMGMD_PARTITION mode=full reason=m1-fallback ranks=" << mpi.world_size() << '\n';
   }
   detail::run_m1_replicated(
       program, std::move(model), box, std::move(potential), potential_filename, mpi);

@@ -62,6 +62,10 @@ compute_*_box orchestrations are unchanged.
 #include "gpu_macro.cuh"
 #include "nep_utilities.cuh"
 #include <cstring>
+#include <chrono>
+#include <memory>
+#include <sstream>
+#include "domain_partition_verify.cuh"
 #include <fstream>
 #include <iostream>
 #include <cstddef>
@@ -425,6 +429,8 @@ NEP::NEP(const char* file_potential, const int num_atoms)
 // cudaFree/cudaMalloc; kernels still receive the exact logical stride (R27).
 void NEP::allocate_workspace(const int num_atoms)
 {
+  ++workspace_generation_;
+  partition_.valid = false;
   nep_data.f12x.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
   nep_data.f12y.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
   nep_data.f12z.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
@@ -505,9 +511,12 @@ static __global__ void find_neighbor_list_large_box(
   int* g_NN_radial,
   int* g_NL_radial,
   int* g_NN_angular,
-  int* g_NL_angular)
+  int* g_NL_angular,
+  const int* selection = nullptr,
+  const bool complement = false)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 >= N2) {
     return;
   }
@@ -569,9 +578,12 @@ static __global__ void find_descriptor(
   float* g_sum_fxyz,
   bool need_B_projection,
   double* B_projection,
-  int B_projection_size)
+  int B_projection_size,
+  const int* selection = nullptr,
+  const bool complement = false)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
     int t1 = g_type[n1];
     double x1 = g_x[n1];
@@ -741,9 +753,12 @@ static __global__ void find_force_radial(
   double* g_fx,
   double* g_fy,
   double* g_fz,
-  double* g_virial)
+  double* g_virial,
+  const int* selection = nullptr,
+  const bool complement = false)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
     int t1 = g_type[n1];
     float s_fx = 0.0f;
@@ -857,9 +872,12 @@ static __global__ void find_partial_force_angular(
   const float* __restrict__ g_sum_fxyz,
   float* g_f12x,
   float* g_f12y,
-  float* g_f12z)
+  float* g_f12z,
+  const int* selection = nullptr,
+  const bool complement = false)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
 
     float Fp[MAX_DIM_ANGULAR] = {0.0f};
@@ -949,9 +967,12 @@ static __global__ void find_force_ZBL(
   double* g_fy,
   double* g_fz,
   double* g_virial,
-  double* g_pe)
+  double* g_pe,
+  const int* selection = nullptr,
+  const bool complement = false)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
     float s_pe = 0.0f;
     float s_fx = 0.0f;
@@ -1237,7 +1258,8 @@ void NEP::compute_domain(
   GPU_Vector<double>& virial_per_atom,
   const GPU_Vector<unsigned long long>& global_id,
   const DomainNeighborAction neighbor_action,
-  const std::uint64_t layout_epoch)
+  const std::uint64_t layout_epoch,
+  const DomainForceContext& context)
 {
   const int BLOCK_SIZE = 64;
   const int N = num_atoms;  // logical local_count; device capacity may be padded
@@ -1281,6 +1303,12 @@ void NEP::compute_domain(
       domain_timing_marker(2);
       domain_timing_marker(3);
     }
+    if (context.mode != DomainPartitionMode::off) ++partition_full_calls;
+    if (context.mode != DomainPartitionMode::off && domain_partition_sink) {
+      partition_.valid = false;
+      domain_partition_sink("step=" + std::to_string(context.step) + " call=" + std::to_string(call_index) +
+        " mode=full reason=empty-local interior=0 early=0 owned=0 dependency=0 local=0 oracle=off poison=off");
+    }
     return;
   }
 
@@ -1293,174 +1321,292 @@ void NEP::compute_domain(
   const int grid_owned =
     (N2 > N1) ? (N2 - N1 - 1) / BLOCK_SIZE + 1 : 0;
 
-  if (grid_dep > 0) {
-    find_neighbor_list_large_box<<<grid_dep, BLOCK_SIZE>>>(
-      paramb,
-      N,
-      ND1,
-      ND2,
-      box,
-      type.data(),
-      position_per_atom.data(),
-      position_per_atom.data() + N,
-      position_per_atom.data() + static_cast<size_t>(N) * 2,
-      neighbor.NN.data(),
-      neighbor.NL.data(),
-      nep_data.NN_radial.data(),
-      nep_data.NL_radial.data(),
-      nep_data.NN_angular.data(),
-      nep_data.NL_angular.data());
-    GPU_CHECK_KERNEL
-  }
-  if (domain_timing_marker) domain_timing_marker(1);
-  // Sample only after this call's Verlet rows and typewise lists are ready.
-  // Empty dependency ranges contribute zero without reading uninitialized
-  // workspace, while every rank still invokes the sink in lockstep.
-  if (record_neighbors) {
-    // Local maxima over the dependency centers only (rows outside [ND1,ND2)
-    // are never written on the domain path). The sink lets the M2a runtime
-    // aggregate with MPI and write one legacy-format record from rank 0.
-    int radial_actual = 0;
-    int angular_actual = 0;
-    if (ND2 > ND1) {
-      nep_data.NN_radial.copy_to_host(nep_data.cpu_NN_radial.data());
-      nep_data.NN_angular.copy_to_host(nep_data.cpu_NN_angular.data());
-      for (int n = ND1; n < ND2; ++n) {
-        if (radial_actual < nep_data.cpu_NN_radial[n]) {
-          radial_actual = nep_data.cpu_NN_radial[n];
-        }
-        if (angular_actual < nep_data.cpu_NN_angular[n]) {
-          angular_actual = nep_data.cpu_NN_angular[n];
+  const GPU_Vector<double>* phase_positions = &position_per_atom;
+  auto filter = [&](const int* dep_selection, bool complement) {
+    const auto& phase_position = *phase_positions;
+    if (grid_dep > 0) {
+      find_neighbor_list_large_box<<<grid_dep, BLOCK_SIZE>>>(
+        paramb,
+        N,
+        ND1,
+        ND2,
+        box,
+        type.data(),
+        phase_position.data(),
+        phase_position.data() + N,
+        phase_position.data() + static_cast<size_t>(N) * 2,
+        neighbor.NN.data(),
+        neighbor.NL.data(),
+        nep_data.NN_radial.data(),
+        nep_data.NL_radial.data(),
+        nep_data.NN_angular.data(),
+        nep_data.NL_angular.data(), dep_selection, complement);
+      GPU_CHECK_KERNEL
+    }
+  };
+  auto record = [&]() {
+    // Sample only after this call's Verlet rows and typewise lists are ready.
+    // Empty dependency ranges contribute zero without reading uninitialized
+    // workspace, while every rank still invokes the sink in lockstep.
+    if (record_neighbors) {
+      // Local maxima over the dependency centers only (rows outside [ND1,ND2)
+      // are never written on the domain path). The sink lets the M2a runtime
+      // aggregate with MPI and write one legacy-format record from rank 0.
+      int radial_actual = 0;
+      int angular_actual = 0;
+      if (ND2 > ND1) {
+        nep_data.NN_radial.copy_to_host(nep_data.cpu_NN_radial.data());
+        nep_data.NN_angular.copy_to_host(nep_data.cpu_NN_angular.data());
+        for (int n = ND1; n < ND2; ++n) {
+          if (radial_actual < nep_data.cpu_NN_radial[n]) {
+            radial_actual = nep_data.cpu_NN_radial[n];
+          }
+          if (angular_actual < nep_data.cpu_NN_angular[n]) {
+            angular_actual = nep_data.cpu_NN_angular[n];
+          }
         }
       }
+      if (neighbor_record_sink) {
+        neighbor_record_sink(call_index, radial_actual, angular_actual);
+      } else {
+        std::ofstream output_file("neighbor.out", std::ios_base::app);
+        output_file << "Neighbor info at step " << call_index << ": "
+                    << "radial(max=" << paramb.MN_radial << ",actual=" << radial_actual
+                    << "), angular(max=" << paramb.MN_angular << ",actual=" << angular_actual << ")."
+                    << std::endl;
+        output_file.close();
+      }
     }
-    if (neighbor_record_sink) {
-      neighbor_record_sink(call_index, radial_actual, angular_actual);
-    } else {
-      std::ofstream output_file("neighbor.out", std::ios_base::app);
-      output_file << "Neighbor info at step " << call_index << ": "
-                  << "radial(max=" << paramb.MN_radial << ",actual=" << radial_actual
-                  << "), angular(max=" << paramb.MN_angular << ",actual=" << angular_actual << ")."
-                  << std::endl;
-      output_file.close();
+  };
+  auto products = [&](const int* dep_selection, const int* force_selection, bool complement) {
+    const auto& phase_position = *phase_positions;
+    if (context.mode == DomainPartitionMode::verify) {
+      verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
+                                dep_selection, force_selection, complement);
     }
-  }
-  // The periodic neighbor-occupancy D2H/MPI record is host diagnostics, not
-  // NEP device execution. Start the force/descriptor device interval only
-  // after that record has completed.
-  if (domain_timing_marker) domain_timing_marker(2);
+    bool is_polarizability = paramb.model_type == 2;
+    if (grid_dep > 0) {
+      find_descriptor<<<grid_dep, BLOCK_SIZE>>>(
+        paramb,
+        annmb,
+        N,
+        ND1,
+        ND2,
+        box,
+        nep_data.NN_radial.data(),
+        nep_data.NL_radial.data(),
+        nep_data.NN_angular.data(),
+        nep_data.NL_angular.data(),
+        type.data(),
+        phase_position.data(),
+        phase_position.data() + N,
+        phase_position.data() + static_cast<size_t>(N) * 2,
+        is_polarizability,
+        potential_per_atom.data(),
+        nep_data.Fp.data(),
+        virial_per_atom.data(),
+        nep_data.sum_fxyz.data(),
+        need_B_projection,
+        B_projection,
+        B_projection_size, dep_selection, complement);
+      GPU_CHECK_KERNEL
+    }
 
-  bool is_polarizability = paramb.model_type == 2;
-  if (grid_dep > 0) {
-    find_descriptor<<<grid_dep, BLOCK_SIZE>>>(
-      paramb,
-      annmb,
-      N,
-      ND1,
-      ND2,
+    bool is_dipole = paramb.model_type == 1;
+    if (grid_owned > 0) {
+      find_force_radial<<<grid_owned, BLOCK_SIZE>>>(
+        paramb,
+        annmb,
+        N,
+        N1,
+        N2,
+        box,
+        nep_data.NN_radial.data(),
+        nep_data.NL_radial.data(),
+        type.data(),
+        phase_position.data(),
+        phase_position.data() + N,
+        phase_position.data() + static_cast<size_t>(N) * 2,
+        nep_data.Fp.data(),
+        is_dipole,
+        force_per_atom.data(),
+        force_per_atom.data() + N,
+        force_per_atom.data() + static_cast<size_t>(N) * 2,
+        virial_per_atom.data(), force_selection, complement);
+      GPU_CHECK_KERNEL
+    }
+
+    if (grid_dep > 0) {
+      find_partial_force_angular<<<grid_dep, BLOCK_SIZE>>>(
+        paramb,
+        annmb,
+        N,
+        ND1,
+        ND2,
+        box,
+        nep_data.NN_angular.data(),
+        nep_data.NL_angular.data(),
+        type.data(),
+        phase_position.data(),
+        phase_position.data() + N,
+        phase_position.data() + static_cast<size_t>(N) * 2,
+        nep_data.Fp.data(),
+        nep_data.sum_fxyz.data(),
+        nep_data.f12x.data(),
+        nep_data.f12y.data(),
+        nep_data.f12z.data(), dep_selection, complement);
+      GPU_CHECK_KERNEL
+    }
+
+    find_properties_many_body_domain(
       box,
-      nep_data.NN_radial.data(),
-      nep_data.NL_radial.data(),
       nep_data.NN_angular.data(),
       nep_data.NL_angular.data(),
-      type.data(),
-      position_per_atom.data(),
-      position_per_atom.data() + N,
-      position_per_atom.data() + static_cast<size_t>(N) * 2,
-      is_polarizability,
-      potential_per_atom.data(),
-      nep_data.Fp.data(),
-      virial_per_atom.data(),
-      nep_data.sum_fxyz.data(),
-      need_B_projection,
-      B_projection,
-      B_projection_size);
-    GPU_CHECK_KERNEL
-  }
-
-  bool is_dipole = paramb.model_type == 1;
-  if (grid_owned > 0) {
-    find_force_radial<<<grid_owned, BLOCK_SIZE>>>(
-      paramb,
-      annmb,
-      N,
-      N1,
-      N2,
-      box,
-      nep_data.NN_radial.data(),
-      nep_data.NL_radial.data(),
-      type.data(),
-      position_per_atom.data(),
-      position_per_atom.data() + N,
-      position_per_atom.data() + static_cast<size_t>(N) * 2,
-      nep_data.Fp.data(),
-      is_dipole,
-      force_per_atom.data(),
-      force_per_atom.data() + N,
-      force_per_atom.data() + static_cast<size_t>(N) * 2,
-      virial_per_atom.data());
-    GPU_CHECK_KERNEL
-  }
-
-  if (grid_dep > 0) {
-    find_partial_force_angular<<<grid_dep, BLOCK_SIZE>>>(
-      paramb,
-      annmb,
-      N,
-      ND1,
-      ND2,
-      box,
-      nep_data.NN_angular.data(),
-      nep_data.NL_angular.data(),
-      type.data(),
-      position_per_atom.data(),
-      position_per_atom.data() + N,
-      position_per_atom.data() + static_cast<size_t>(N) * 2,
-      nep_data.Fp.data(),
-      nep_data.sum_fxyz.data(),
       nep_data.f12x.data(),
       nep_data.f12y.data(),
-      nep_data.f12z.data());
-    GPU_CHECK_KERNEL
-  }
-
-  find_properties_many_body_domain(
-    box,
-    nep_data.NN_angular.data(),
-    nep_data.NL_angular.data(),
-    nep_data.f12x.data(),
-    nep_data.f12y.data(),
-    nep_data.f12z.data(),
-    is_dipole,
-    global_id,
-    N,
-    position_per_atom,
-    force_per_atom,
-    virial_per_atom);
-  GPU_CHECK_KERNEL
-
-  if (zbl.enabled && grid_owned > 0) {
-    find_force_ZBL<<<grid_owned, BLOCK_SIZE>>>(
-      paramb,
+      nep_data.f12z.data(),
+      is_dipole,
+      global_id,
       N,
-      zbl,
-      N1,
-      N2,
-      box,
-      nep_data.NN_angular.data(),
-      nep_data.NL_angular.data(),
-      type.data(),
-      position_per_atom.data(),
-      position_per_atom.data() + N,
-      position_per_atom.data() + static_cast<size_t>(N) * 2,
-      force_per_atom.data(),
-      force_per_atom.data() + N,
-      force_per_atom.data() + static_cast<size_t>(N) * 2,
-      virial_per_atom.data(),
-      potential_per_atom.data());
+      phase_position,
+      force_per_atom,
+      virial_per_atom, force_selection, complement);
     GPU_CHECK_KERNEL
+
+    if (zbl.enabled && grid_owned > 0) {
+      find_force_ZBL<<<grid_owned, BLOCK_SIZE>>>(
+        paramb,
+        N,
+        zbl,
+        N1,
+        N2,
+        box,
+        nep_data.NN_angular.data(),
+        nep_data.NL_angular.data(),
+        type.data(),
+        phase_position.data(),
+        phase_position.data() + N,
+        phase_position.data() + static_cast<size_t>(N) * 2,
+        force_per_atom.data(),
+        force_per_atom.data() + N,
+        force_per_atom.data() + static_cast<size_t>(N) * 2,
+        virial_per_atom.data(),
+        potential_per_atom.data(), force_selection, complement);
+      GPU_CHECK_KERNEL
+    }
+  };
+
+  const bool requested = context.mode != DomainPartitionMode::off;
+  const char* reason = !context.ordinary ? (context.step ? "rebuild" : "setup") :
+    (neighbor_action != DomainNeighborAction::confirmed_reuse ? "unconfirmed-cache" :
+     (N1 != 0 || ND1 != 0 ? "nonprefix-centers" :
+      (paramb.model_type != 0 || need_B_projection ? "unproved-model" : "eligible")));
+  bool split = requested && std::string(reason) == "eligible";
+  bool classified = false;
+  double classify_seconds = 0.0;
+  if (split) {
+    if (context.step == 0 || context.halo_ready_step != context.step)
+      throw std::logic_error("O2 split requires this step's completed halo");
+    DomainPartitionKey key;
+    key.layout = layout_epoch; key.neighbor = neighbor.domain_generation();
+    key.storage = workspace_generation_; key.owned = N2; key.dependency = ND2; key.local = N;
+    for (int q = 0; q < 18; ++q) {
+      key.box[q] = box.cpu_h[q]; key.box[18+q] = box.float_h[q];
+    }
+    key.box[36] = box.pbc_x; key.box[37] = box.pbc_y; key.box[38] = box.pbc_z;
+    if (partition_.valid && partition_.key.box != key.box &&
+        partition_.key.neighbor == key.neighbor) {
+      partition_.valid = false;
+      throw std::logic_error("partition box changed without rebuilding the domain cache");
+    }
+    const auto began = std::chrono::steady_clock::now();
+    classified = partition_.classify(key, neighbor.domain_row_capacity(),
+      neighbor.NN.data(), neighbor.NL.data(), global_id.data());
+    classify_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-began).count();
+    if (classified) ++partition_classifications;
+    if (context.mode == DomainPartitionMode::verify) verify_partition_graph(partition_, neighbor, global_id);
+    if (!partition_.interior_count) { split = false; reason = "empty-interior"; }
+  } else if (requested) {
+    // No old mask survives a rebuild or an unproved model/configuration.
+    partition_.valid = false;
   }
-  if (domain_timing_marker) domain_timing_marker(3);
+
+  // One logical force ticket owns call_index, the one output clear (runtime),
+  // and the one neighbor-record sink across both phases and oracle replay.
+  if (!split) {
+    filter(nullptr, false);
+    if (domain_timing_marker) domain_timing_marker(1);
+    record();
+    if (domain_timing_marker) domain_timing_marker(2);
+    products(nullptr, nullptr, false);
+    if (domain_timing_marker) domain_timing_marker(3);
+  } else {
+    DomainForceTicket ticket{context.step, call_index};
+    const bool verify = context.mode == DomainPartitionMode::verify;
+    std::unique_ptr<PartitionSnapshot> oracle;
+    std::vector<double> initial_pe, initial_force, initial_virial;
+    GPU_Vector<double> poisoned_position;
+    if (verify) {
+      initial_pe = partition_download(potential_per_atom);
+      initial_force = partition_download(force_per_atom);
+      initial_virial = partition_download(virial_per_atom);
+      // Original, unselected M2a kernels, same coordinates/V/stride. No
+      // extra force-call counter, neighbor rebuild, record or MPI operation.
+      filter(nullptr, false); products(nullptr, nullptr, false);
+      oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
+      potential_per_atom.copy_from_host(initial_pe.data());
+      force_per_atom.copy_from_host(initial_force.data());
+      virial_per_atom.copy_from_host(initial_virial.data());
+      const float poison = std::numeric_limits<float>::quiet_NaN();
+      nep_data.Fp.fill(poison); nep_data.sum_fxyz.fill(poison);
+      nep_data.f12x.fill(poison); nep_data.f12y.fill(poison); nep_data.f12z.fill(poison);
+      nep_data.NN_radial.fill(-1); nep_data.NN_angular.fill(-1);
+      nep_data.NL_radial.fill(-1); nep_data.NL_angular.fill(-1);
+      auto coords = partition_download(position_per_atom);
+      for (int axis = 0; axis < 3; ++axis) for (int c = N2; c < N; ++c)
+        coords[axis*N+c] = std::numeric_limits<double>::quiet_NaN();
+      poisoned_position.resize_reuse(coords.size());
+      poisoned_position.copy_from_host(coords.data());
+      phase_positions = &poisoned_position;
+    }
+    if (domain_timing_marker) domain_timing_marker(1);
+    if (domain_timing_marker) domain_timing_marker(2);
+    filter(partition_.early.data(), false);
+    products(partition_.early.data(), partition_.interior.data(), false);
+    ticket.early();
+    if (verify) {
+      auto early = partition_download(partition_.early), interior = partition_download(partition_.interior);
+      verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom, virial_per_atom,
+        N, ND2, N2, &early, &interior);
+      phase_positions = &position_per_atom;
+    }
+    filter(partition_.early.data(), true);
+    record(); // all D rows ready, every rank enters the same two MAX calls
+    products(partition_.early.data(), partition_.interior.data(), true);
+    ticket.late();
+    if (domain_timing_marker) domain_timing_marker(3);
+    if (verify) verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom,
+      virial_per_atom, N, ND2, N2);
+  }
+  if (requested) {
+    if (split) ++partition_split_calls;
+    else ++partition_full_calls;
+  }
+  if (requested && domain_partition_sink) {
+    std::ostringstream line;
+    line << "step=" << context.step << " call=" << call_index
+      << " mode=" << (split ? "split" : "full") << " reason=" << reason
+      << " epoch=" << layout_epoch << " neighbor_generation=" << neighbor.domain_generation()
+      << " storage_generation=" << workspace_generation_
+      << " classified=" << classified << " interior=" << (partition_.valid ? partition_.interior_count : 0)
+      << " early=" << (partition_.valid ? partition_.early_count : 0)
+      << " owned=" << N2 << " dependency=" << ND2 << " local=" << N
+      << " classify_host_seconds=" << classify_seconds
+      << " oracle=" << (split && context.mode == DomainPartitionMode::verify ? "bitwise" : "off")
+      << " poison=" << (split && context.mode == DomainPartitionMode::verify ? "passed" : "off")
+      << " timing_scope=" << (split ? "split-pipeline" : "full");
+    domain_partition_sink(line.str());
+  }
 }
 
 // small box possibly used for active learning:

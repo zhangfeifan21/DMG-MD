@@ -14,6 +14,7 @@
 - [数据结构与内存布局](./standards/data-layout.md)
 - [Replicated-data MPI 协议](./standards/replicated-mpi.md)
 - [GPUMD runtime 审计与最小源码闭包](./standards/gpumd-runtime-audit.md)
+- [M2a 普通步串行 NEP 分区](./standards/domain-partition.md)
 - [NEP kernel 与通信依赖](./standards/kernel-inventory.md)
 - [Benchmark CPU 采样合同](./standards/cpu-sampling.md)
 - [Golden Test 标准](./standards/golden-test-standard.md)
@@ -27,6 +28,7 @@
 这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
 
 - [CPU 采样 C1 验证（2026-10-09）](./status/cpu-sampling-c1-20261009.md)
+- [通信/计算重叠 O2 串行分区（2026-10-15）](./status/overlap-partition-20261015.md)
 - [通信/计算重叠 O1 串行基线（2026-10-12）](./status/overlap-baseline-20261012.md)
 - [LAMMPS/MatPL 三引擎静态与 smoke 验证（2026-10-09）](./status/lammps-reference-20261009.md)
 - [当前实现进度](./status/current.md)
@@ -51,7 +53,7 @@
 
 - [MPI 启动 CPU 核数与 NUMA 绑定](./plans/mpi-cpu-binding.md)（PROPOSED，P0）
 - [LAMMPS 多 GPU + MPI NEP benchmark](./plans/lammps-multigpu-benchmark.md)（IN PROGRESS，P0：输入、静态比较和三引擎 smoke 已实现；固定 CPU/NUMA 正式矩阵待完成）
-- [通信与计算重叠](./plans/communication-computation-overlap.md)（PROPOSED，P0）
+- [通信与计算重叠](./plans/communication-computation-overlap.md)（IN PROGRESS，P0：O0 方向已确认，O2 串行分区完成；O3–O5 未执行）
 - [CPU 使用率研究](./plans/cpu-usage-study.md)（IN PROGRESS：C0/C1 完成；C2/C3 改作绑定验收后的辅助诊断）
 - [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1、M2a 已实施，M2b 起待审批；M2a 生效合同见 standards/replicated-mpi.md）
 - [M2a 缓存有效性统一重建与分步计时设计](./plans/cache-validity-and-step-timing.md)（APPROVED：已实施；现行合同见 standards，实测见 stage2 成本报告）

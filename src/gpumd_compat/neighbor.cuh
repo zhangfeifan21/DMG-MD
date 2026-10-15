@@ -240,10 +240,13 @@ public:
   // meaning of a local slot changes (migration, ghost membership rebuild,
   // NEP workspace reallocation).
   void invalidate_rebuild_reference();
+  std::uint64_t domain_generation() const { return domain_generation_; }
+  int domain_row_capacity() const { return static_cast<int>(row_capacity_); }
 
 private:
   double skin = 1.0;              // skin distance
   size_t row_capacity_ = 0;       // M2a: ELL entries per row from initialize()
+  std::uint64_t domain_generation_ = 0;
   GPU_Vector<int> cell_count;     // for cell list
   GPU_Vector<int> cell_count_sum; // for cell list
   GPU_Vector<int> cell_contents;  // for cell list

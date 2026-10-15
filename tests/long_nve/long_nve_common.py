@@ -27,6 +27,7 @@ MANIFEST_PATH = SUITE_DIR / "manifest.json"
 STAGE_COMPLETE_NAME = ".dmgmd-stage-complete.json"
 STAGE_FAILURE_NAME = ".dmgmd-stage-failure.json"
 CHECKPOINT_ENVIRONMENT = (
+    "DMGMD_DOMAIN_PARTITION",
     "CUDA_DEVICE_ORDER",
     "CUDA_VISIBLE_DEVICES",
     "DMGMD_COMM_BACKEND",

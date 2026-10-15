@@ -37,6 +37,7 @@ Verified per run:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -386,7 +387,7 @@ class DomainCase:
 
     @property
     def expected_files(self) -> set:
-        return {"model.xyz", "run.in", "nep.txt", "neighbor.out"} | set(self.outputs)
+        return {"model.xyz", "run.in", "nep.txt", "neighbor.out", "launch-environment.json"} | set(self.outputs)
 
 
 def stage_case(case: DomainCase, stage_dir: Path, potential: Path) -> None:
@@ -410,8 +411,10 @@ def execute(
     communication_interval: Optional[int] = 1,
     domain_diagnostics: bool = True,
     domain_timing: bool = False,
+    partition_mode: str = "off",
 ) -> Dict[str, Any]:
-    env = os.environ.copy()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DMGMD_")}
+    env["DMGMD_DOMAIN_PARTITION"] = partition_mode
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
@@ -427,6 +430,7 @@ def execute(
         env["DMGMD_DOMAIN_TIMING"] = "1"
     else:
         env.pop("DMGMD_DOMAIN_TIMING", None)
+    (stage_dir / "launch-environment.json").write_text(json.dumps({k: v for k, v in env.items() if k.startswith(("DMGMD_", "CUDA_"))}, indent=2) + "\n")
     completed = subprocess.run(
         [str(mpiexec), "-n", str(ranks), str(executable)],
         cwd=stage_dir,
@@ -1077,11 +1081,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--keep-work", action="store_true")
+    parser.add_argument("--cases", type=comma_list, help="limit main domain cases; common P1/fallback/timing gates still run")
+    parser.add_argument("--work-root", type=Path, help="retain raw inputs, launch environment and outputs here (must be new)")
+    parser.add_argument("--partition-modes", type=comma_list, default=["off"],
+                        help="explicit off,serial,verify matrix; verify uses same-snapshot full oracle and ghost poison")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if set(args.partition_modes) - {"off", "serial", "verify"}:
+        raise baseline.BaselineError("partition modes must be off,serial,verify")
     executable = args.candidate.resolve()
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise baseline.BaselineError(f"candidate is not executable: {executable}")
@@ -1174,6 +1184,12 @@ def main() -> int:
         potential_text=long_nve_common.POTENTIAL_TRANSFORMS["nep5_equivalent"](
             carbon_potential),
     )
+    water = DomainCase("water", WATER_VARIANT_MODEL, VARIANT_RUN, ["static.xyz"],
+                       ["thermo.out", "static.xyz", "neighbor.out"], 6,
+                       potential_text=water_potential, d_dep=7.0, d_coord=14.0)
+    zbl = DomainCase("zbl", BTO_VARIANT_MODEL, VARIANT_RUN, ["static.xyz"],
+                     ["thermo.out", "static.xyz", "neighbor.out"], 5,
+                     potential_text=bto_potential, d_dep=7.0, d_coord=14.0)
     typewise_text = long_nve_common.POTENTIAL_TRANSFORMS[
         "typewise_cutoff_equivalent"
     ](water_potential)
@@ -1218,9 +1234,40 @@ def main() -> int:
         d_dep=7.0,
         d_coord=14.0,
     )
-    variant_cases = [nep5, typewise, flexible_zbl, typewise_zbl]
+    def model_from_atoms(atoms: List[str]) -> str:
+        return (str(len(atoms)) + "\n" + CHAIN_MODEL.splitlines()[1] + "\n" + "\n".join(atoms) + "\n")
+    aux_model = model_from_atoms([
+        f"C {x} {y} 12 0 0 0" for y, xs in ((12, (17,23,29,35)), (2, (49,55,61,3))) for x in xs])
+    aux = DomainCase("partition_aux", aux_model, VARIANT_RUN, ["static.xyz"],
+                     ["thermo.out", "static.xyz", "neighbor.out"], 8)
+    skin = DomainCase("partition_skin", model_from_atoms([
+        "C 17 12 12 0.2 0 0", "C 24.5 12 12 0.2 0 0", "C 32 12 12 -0.2 0 0",
+        "C 50 2 12 0 0 0", "C 52 2 12 0 0 0"]),
+        VARIANT_RUN.replace("0.001", "1.0"), ["static.xyz"],
+        ["thermo.out", "static.xyz", "neighbor.out"], 5)
+    rebuild_only = DomainCase("partition_rebuild", model_from_atoms([
+        f"C {x} 12 12 0.2 0 0" for x in (3,19,35,51)]),
+        VARIANT_RUN.replace("0.001", "1.0") + "dump_xyz 1 after.xyz precision double velocity force potential virial\nrun 2\n", ["static.xyz", "after.xyz"],
+        ["thermo.out", "static.xyz", "after.xyz", "neighbor.out"], 4)
+    migrate = DomainCase("partition_migrate", model_from_atoms([
+        f"C {x} 12 12 0.2 0 0" for x in (15.5,31.5,47.5,63.5)]),
+        VARIANT_RUN.replace("0.001", "1.0").replace("run 2", "run 4"), ["static.xyz"],
+        ["thermo.out", "static.xyz", "neighbor.out"], 4)
+    nep5.model = aux_model; nep5.natoms = 8
+    # Each supported mixed/ZBL model has a closed interior cluster and a
+    # distinct cluster straddling x=32. These are ordinary, nonzero-force steps.
+    for variant in (water, zbl, typewise, flexible_zbl, typewise_zbl):
+        atoms = []
+        for dx in (2,16):
+            for line in variant.model.splitlines()[2:]:
+                fields = line.split(); fields[1] = str(float(fields[1]) + dx)
+                atoms.append(" ".join(fields))
+        variant.model = model_from_atoms(atoms); variant.natoms = len(atoms)
+    variant_cases = [nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, aux, skin, rebuild_only, migrate]
 
-    work_root = Path(tempfile.mkdtemp(prefix="dmgmd-domain-"))
+    work_root = args.work_root.resolve() if args.work_root else Path(tempfile.mkdtemp(prefix="dmgmd-domain-"))
+    if args.work_root:
+        work_root.mkdir(parents=True, exist_ok=False)
     succeeded = False
     try:
         # P=1 references (the numerical oracle) come first.
@@ -1243,6 +1290,41 @@ def main() -> int:
                 raise baseline.BaselineError(
                     f"{case.name}: P=1 must stay on the M1 path (mode=m1-fallback)")
             references[case.name] = reference_root
+
+        # Requested partitioning must really reach the original P1/M1 path.
+        for mode in args.partition_modes:
+            if mode == "off": continue
+            stage_dir = work_root / "partition-p1-fallback" / mode
+            stage_case(aux, stage_dir, potential)
+            execution = execute(executable, mpiexec, stage_dir, 1, "HostStaged", devices,
+                                args.timeout, partition_mode=mode)
+            if execution["returncode"] or "DMGMD_PARTITION mode=full reason=m1-fallback" not in execution["stdout"]:
+                raise baseline.BaselineError("P1 partition fallback not observed")
+            for filename in aux.outputs:
+                if (stage_dir / filename).read_bytes() != (references[aux.name] / filename).read_bytes():
+                    raise baseline.BaselineError("partition flag changed P1 bytes")
+        small = DomainCase("partition_m1", CHAIN_MODEL.replace("64 0 0", "24 0 0")
+                          .replace("15.5 12", "1.0 12").replace("18.0 12", "7.0 12")
+                          .replace("24.5 12", "13.0 12"), VARIANT_RUN, ["static.xyz"],
+                          ["thermo.out", "static.xyz", "neighbor.out"], 3)
+        for backend in backends:
+            for ranks in args.ranks:
+                small_dirs = {}
+                for mode in args.partition_modes:
+                    directory = work_root / small.name / f"{backend}-{ranks}-{mode}"
+                    stage_case(small, directory, potential)
+                    execution = execute(executable, mpiexec, directory, ranks, backend, devices,
+                                        args.timeout, partition_mode=mode)
+                    if execution["returncode"] or "mode=m1-fallback" not in execution["stdout"]:
+                        raise baseline.BaselineError("small-box partition fallback missing")
+                    if mode != "off" and "DMGMD_PARTITION mode=full reason=m1-fallback" not in execution["stdout"]:
+                        raise baseline.BaselineError("requested M1 partition fallback not observed")
+                    small_dirs[mode] = directory
+                if "off" in small_dirs:
+                    for directory in small_dirs.values():
+                        for filename in small.outputs:
+                            if (directory / filename).read_bytes() != (small_dirs["off"] / filename).read_bytes():
+                                raise baseline.BaselineError("partition flag changed M1 bytes")
 
         # Default runtime mode must be quiet on the hot path: no per-layout,
         # per-migration or per-step communication records. Rank-local segment
@@ -1301,44 +1383,86 @@ def main() -> int:
         cases: List[DomainCase] = [
             lattice, chain, micro_crossings, empty_local, crossings, resume,
             *variant_cases]
+        if args.cases:
+            unknown = set(args.cases) - {case.name for case in cases}
+            if unknown: raise baseline.BaselineError(f"unknown cases: {sorted(unknown)}")
+            cases = [case for case in cases if case.name in args.cases]
         for case in cases:
             for backend in backends:
                 for ranks in args.ranks:
-                    stage_dir = work_root / case.name / f"{backend}-{ranks}"
-                    stage_case(case, stage_dir, potential)
-                    execution = execute(
-                        executable, mpiexec, stage_dir, ranks, backend, devices, args.timeout,
-                        case.communication_interval,
-                    )
-                    index = verify_domain_records(case, stage_dir, ranks, execution)
-                    verify_transitions_against_trajectory(case, stage_dir, index, ranks)
-                    verify_communication(case, stage_dir, index, ranks, backend)
-                    compare_case_outputs(
-                        case, references[case.name], stage_dir, tolerances,
-                        f"{case.name}/{backend}/{ranks}",
-                    )
-                    epochs = max(
-                        len(index.layouts.get(rank, [])) for rank in range(ranks))
-                    migrated = len(index.migration_steps())
-                    layout_uploads = max(
-                        sum(int(record["layout_uploads"])
-                            for record in index.summaries.get(rank, []))
-                        for rank in range(ranks))
-                    capacity_growths = max(
-                        sum(int(record["capacity_growth_events"])
-                            for record in index.summaries.get(rank, []))
-                        for rank in range(ranks))
-                    gpu_allocations = max(
-                        sum(int(record["gpu_allocations"])
-                            for record in index.summaries.get(rank, []))
-                        for rank in range(ranks))
-                    print(
-                        f"PASS {case.name:10s} {backend:10s} ranks={ranks}: "
-                        f"layout_epochs={epochs} migration_steps={migrated} "
-                        f"layout_uploads_max={layout_uploads} "
-                        f"capacity_growth_events_max={capacity_growths} "
-                        f"gpu_allocations_max={gpu_allocations}"
-                    )
+                    mode_dirs = {}
+                    for mode in args.partition_modes:
+                        stage_dir = work_root / case.name / f"{backend}-{ranks}-{mode}"
+                        stage_case(case, stage_dir, potential)
+                        execution = execute(
+                            executable, mpiexec, stage_dir, ranks, backend, devices, args.timeout,
+                            case.communication_interval, partition_mode=mode,
+                        )
+                        index = verify_domain_records(case, stage_dir, ranks, execution)
+                        verify_transitions_against_trajectory(case, stage_dir, index, ranks)
+                        verify_communication(case, stage_dir, index, ranks, backend)
+                        compare_case_outputs(
+                            case, references[case.name], stage_dir, tolerances,
+                            f"{case.name}/{backend}/{ranks}/{mode}",
+                        )
+                        epochs = max(
+                            len(index.layouts.get(rank, [])) for rank in range(ranks))
+                        migrated = len(index.migration_steps())
+                        layout_uploads = max(
+                            sum(int(record["layout_uploads"])
+                                for record in index.summaries.get(rank, []))
+                            for rank in range(ranks))
+                        capacity_growths = max(
+                            sum(int(record["capacity_growth_events"])
+                                for record in index.summaries.get(rank, []))
+                            for rank in range(ranks))
+                        gpu_allocations = max(
+                            sum(int(record["gpu_allocations"])
+                                for record in index.summaries.get(rank, []))
+                            for rank in range(ranks))
+                        print(
+                            f"PASS {case.name:18s} {backend:10s} ranks={ranks} partition={mode}: "
+                            f"layout_epochs={epochs} migration_steps={migrated} "
+                            f"layout_uploads_max={layout_uploads} "
+                            f"capacity_growth_events_max={capacity_growths} "
+                            f"gpu_allocations_max={gpu_allocations}"
+                        )
+
+                        records = [key_values(line) for line in execution["stdout"].splitlines()
+                                   if line.startswith("DMGMD_PARTITION rank=")]
+                        if mode == "off" and records:
+                            raise baseline.BaselineError("off path emitted partition diagnostics")
+                        if mode != "off":
+                            if not records:
+                                raise baseline.BaselineError("requested partition mode not observed")
+                            split = [r for r in records if r["mode"] == "split"]
+                            if case in (aux, nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, skin, rebuild_only, migrate) and not split:
+                                raise baseline.BaselineError(f"{case.name}: no real split ordinary step")
+                            if mode == "verify" and any(r.get("oracle") != "bitwise" or r.get("poison") != "passed" for r in split):
+                                raise baseline.BaselineError("split oracle/poison not exercised")
+                            if case is aux and not any(int(r["owned"]) > int(r["interior"]) and int(r["early"]) > int(r["interior"]) for r in split):
+                                raise baseline.BaselineError("missing boundary auxiliary E\\I witness")
+                            if case is skin:
+                                rank = 0 if ranks == 2 else 1
+                                if any(int(r.get("interior", 0)) for r in records if int(r["rank"]) == rank):
+                                    raise baseline.BaselineError("skin-band ghost incorrectly classified interior")
+                            if case is rebuild_only:
+                                if not index.rebuild_steps() or index.migration_steps():
+                                    raise baseline.BaselineError("nonmigration rebuild witness missing")
+                                generations = {r.get("neighbor_generation") for r in split}
+                                if len(generations) < 2 or not all(r.get("classified") == "1" for r in split if r["step"] in ("1","4")):
+                                    raise baseline.BaselineError("post-rebuild partition invalidation not observed")
+                            if case is migrate:
+                                if not index.migration_steps():
+                                    raise baseline.BaselineError("migration invalidation witness missing")
+                                if not any(r.get("reason") == "rebuild" for r in records) or not any(r.get("step") == "4" and r.get("classified") == "1" for r in split):
+                                    raise baseline.BaselineError("post-migration mask was not regenerated")
+                        mode_dirs[mode] = stage_dir
+                    if "off" in mode_dirs:
+                        for mode, directory in mode_dirs.items():
+                            for filename in case.outputs:
+                                if (directory / filename).read_bytes() != (mode_dirs["off"] / filename).read_bytes():
+                                    raise baseline.BaselineError(f"full/split scientific bytes differ: {case.name}/{backend}/{ranks}/{mode}/{filename}")
 
         # Focused timing A/B: stationary, consecutive run segments must stay
         # ordinary and timing events must not change any scientific byte.
@@ -1419,7 +1543,7 @@ def main() -> int:
         succeeded = True
         return 0
     finally:
-        if succeeded and not args.keep_work:
+        if succeeded and not args.keep_work and not args.work_root:
             shutil.rmtree(work_root)
         else:
             print(f"work directory retained: {work_root}", file=sys.stderr)

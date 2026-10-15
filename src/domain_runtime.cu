@@ -309,6 +309,8 @@ struct DomainState {
   bool detailed_logging = false;
   bool timing_enabled = false;
   bool trace_enabled = false;
+  gpumd_compat::DomainPartitionMode partition_mode = gpumd_compat::DomainPartitionMode::off;
+  std::uint64_t halo_ready_step = 0;
   DomainDeviceAtoms device;
   // Workspace bookkeeping: the NEP workspaces are re-sized only when
   // local_count changes; every layout change still forces a Verlet rebuild.
@@ -1198,7 +1200,8 @@ void do_migration(
 
 void launch_domain_force(
     DomainState& state, Box& box, NEP& nep,
-    gpumd_compat::DomainNeighborAction neighbor_action)
+    gpumd_compat::DomainNeighborAction neighbor_action, bool ordinary = false,
+    std::uint64_t step = 0)
 {
   if (state.mapping_epoch != state.epoch || state.refreshed_epoch != state.epoch) {
     throw std::logic_error("domain force uses a stale layout or halo mapping");
@@ -1235,7 +1238,8 @@ void launch_domain_force(
   nep.compute_domain(
       box, local, state.device.type, state.device.position, state.device.potential,
       state.device.force, state.device.virial, state.device.global_id, neighbor_action,
-      state.epoch);
+      state.epoch, {state.partition_mode, ordinary,
+                    step, state.halo_ready_step});
   state.neighbor_cache_valid = true;
 }
 
@@ -1739,7 +1743,8 @@ void run_domain_segment(
     // 8. Domain NEP: dependency-center neighbor/descriptor/partial, owned
     // radial force / many-body / ZBL, all with the local stride.
     if (state.trace_enabled) trace.nep_begin_ns = monotonic_ns();
-    launch_domain_force(state, box, nep, neighbor_action);
+    state.halo_ready_step = state.executed_steps + 1;
+    launch_domain_force(state, box, nep, neighbor_action, !rebuild, state.executed_steps + 1);
     if (state.trace_enabled) trace.nep_end_ns = monotonic_ns();
     // 9. VV second half over the owned prefix.
     const auto integration_second_started = begin_detailed_timing(state.timing_enabled);
@@ -1957,6 +1962,12 @@ void run_domain_segment(
           << (gpumd_compat::gpu_vector_allocation_count() - state.allocation_origin)
           << '\n';
   std::cout << summary.str();
+  if (state.partition_mode != gpumd_compat::DomainPartitionMode::off) {
+    std::cout << "DMGMD_PARTITION_SUMMARY rank=" << state.rank << " sequence=" << sequence
+              << " cumulative_split_calls=" << nep.partition_split_calls
+              << " cumulative_full_calls=" << nep.partition_full_calls
+              << " cumulative_classifications=" << nep.partition_classifications << '\n';
+  }
   std::cout.flush();
 }
 
@@ -1991,6 +2002,13 @@ void run_local_domain(
   state.detailed_logging = detail::domain_diagnostics_enabled();
   state.timing_enabled = detail::domain_timing_enabled();
   state.trace_enabled = detail::domain_trace_enabled();
+  state.partition_mode = gpumd_compat::domain_partition_mode();
+  if (state.partition_mode != gpumd_compat::DomainPartitionMode::off &&
+      (state.detailed_logging || state.partition_mode == gpumd_compat::DomainPartitionMode::verify)) {
+    potential->domain_partition_sink = [&state](const std::string& message) {
+      std::cout << "DMGMD_PARTITION rank=" << state.rank << ' ' << message << '\n';
+    };
+  }
   if (state.trace_enabled && !state.timing_enabled) {
     throw std::runtime_error("DMGMD_DOMAIN_TRACE=1 requires DMGMD_DOMAIN_TIMING=1");
   }

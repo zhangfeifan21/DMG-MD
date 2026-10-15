@@ -487,3 +487,10 @@ slab 32/16 Å）：
 
 既有 `run_mpi_differential.py` 与 `run_mpi_migration.py` 对其 24 Å 小盒
 fixture 断言 `mode=m1-fallback`（小盒 slab 12/6 Å < d_coord 16）。
+
+## O2 实验串行分区
+
+默认关闭的 `DMGMD_DOMAIN_PARTITION=serial|verify` 仅选择 M2a 普通步中心；halo 先完成，
+沿用原布局、L stride、行序、半径和每中心累加。集合、辅助产物唯一写入、epoch/连续位移
+缓存有效性、fallback、诊断与 split timing 口径以
+[串行分区合同](./domain-partition.md)为准；不引入异步通信或 overlap。

@@ -95,8 +95,8 @@ P=2 上必须被所有 rank 以完全相同、可诊断的错误拒绝且不产�
 
 ### 2.3b M2a local-domain 矩阵
 
-入口为 `tests/mpi/run_mpi_domain.py`。默认矩阵为 9 cases × 2/4 rank ×
-HostStaged/CudaAware（36 组），每个 case 先运行同输入 P=1 M1 oracle，并强制断言 P>1
+入口为 `tests/mpi/run_mpi_domain.py`。默认矩阵使用脚本定义的 cases、2/4 rank 与
+HostStaged/CudaAware，每个 case 先运行同输入 P=1 M1 oracle，并强制断言 P>1
 为 `DMGMD_DOMAIN mode=m2a`。覆盖：两跳 coordinate halo、真正 `local_count=0` 连续
 1000 步、force call 0/1000 的 `neighbor.out` 逐字节一致与周期 MPI_MAX 精确记账、
 迁移/restart、NEP5、mixed typewise cutoff、flexible ZBL、typewise ZBL。每步 collective、
@@ -105,6 +105,14 @@ HostStaged/CudaAware（36 组），每个 case 先运行同输入 P=1 M1 oracle�
 该 runner 覆盖。非零 `center_begin` 的 ELL 行寻址及 `GPU_Vector` logical size/capacity
 分离（复用初始化与扩容计数）另由 `dmgmd.domain_neighbor_cuda` 覆盖；无 GPU 的普通 CTest
 环境返回 skip，GPU 验收环境必须实际运行通过。
+
+O2 验收显式使用 `--partition-modes off,serial,verify`：同 rank/backend 的三模式科学输出
+逐字节比较，另按原 manifest 比 P1 的逐原子量；verify 从同快照重放 full kernel，比较有效
+中间产物和全部 9 virial，并 poison early 的 ghost 坐标。新辅助/skin/周期/重建/迁移 fixture
+必须实际 split、失效、fallback；不能以全 fallback 通过代替。`--work-root` 保存实际启动环境、
+输入与输出。独立 CPU/GPU 图 oracle 以及失效/非法 row 测试见
+[分区标准](./domain-partition.md)。GPU skip 只能记 PARTIAL。兼容内核变更仍需 baseline 与
+long_nve；`--partition-mode` 显式进入 long_nve candidate 环境与 checkpoint 身份。
 
 ### 2.4 长程 NVE/NVT suite
 

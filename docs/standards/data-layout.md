@@ -261,3 +261,10 @@ single-rank 实现以及 Open MPI+UCX 环境下的 HostStaged/CudaAware 1/2/4-ra
 P>1 由 differential 与迁移矩阵验证；M2a 由大盒 domain 矩阵验证（实测 per-atom
 输出与 P=1 oracle 逐字节一致）。验证状态与命令见
 [current.md](../status/current.md)。
+
+## O2 实验串行分区
+
+默认关闭的 `DMGMD_DOMAIN_PARTITION=serial|verify` 仅选择 M2a 普通步中心；halo 先完成，
+沿用原布局、L stride、行序、半径和每中心累加。集合、辅助产物唯一写入、epoch/连续位移
+缓存有效性、fallback、诊断与 split timing 口径以
+[串行分区合同](./domain-partition.md)为准；不引入异步通信或 overlap。
