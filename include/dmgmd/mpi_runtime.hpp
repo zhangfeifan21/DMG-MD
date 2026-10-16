@@ -112,6 +112,12 @@ struct HaloExchangeToken {
   std::uint64_t generation = 0;
 };
 
+// Optional O4 observations on CLOCK_MONOTONIC, never transport timestamps.
+struct HaloTrace {
+  std::uint64_t pack_ready_ns = 0, post_begin_ns = 0, post_end_ns = 0;
+  std::uint64_t sends_observed_ns = 0, receives_observed_ns = 0, unpack_done_ns = 0;
+};
+
 struct HaloExchangeState {
   std::uint64_t generation = 0;
   bool pack_ready = false;
@@ -362,7 +368,7 @@ class MpiRuntime {
       const int* recv_left_slots, int recv_left_count,
       const int* recv_right_slots, int recv_right_count,
       int left_peer, int right_peer, CommunicationVolume& volume,
-      P2pTimingEvents* timing = nullptr) const;
+      P2pTimingEvents* timing = nullptr, HaloTrace* trace = nullptr) const;
   HaloExchangeState progress_halo(HaloExchangeToken token) const;
   HaloExchangeState finish_halo(HaloExchangeToken token) const;
   HaloExchangeState halo_state(HaloExchangeToken token) const;

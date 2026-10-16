@@ -238,7 +238,8 @@ NEP 数学 helper 与 large-box kernel 已在 compat 复现；M2a 已分离中�
 排序反边，以深位置 halo 闭合依赖。small-box 仍为 P1/M1 路径，未分布式化；NEP_MULTIGPU
 只作依赖证据，不复用 GPU0 分发/回收编排。
 
-O2 默认关闭的 mask 分区保持 L stride 与每中心顺序，O3 仍立即 finish 后计算；
+O2 默认关闭的 mask 分区保持 L stride 与每中心顺序；O4 可显式在 O3 begin/finish 之间执行独立 early，
 详见[分区](../standards/domain-partition.md)、[halo 生命周期](../standards/halo-lifecycle.md)。
-M2b 中间场交换和真实 overlap 分别见[扩展](../plans/domain-decomposition.md)与
-[重叠计划](../plans/communication-computation-overlap.md)，不是本参考表已实现的行为。
+M2b 中间场交换仍见[扩展](../plans/domain-decomposition.md)；O4 当前验收见
+[报告](../status/validation/overlap-o4-20261016.md)，O5 见[重叠计划](../plans/communication-computation-overlap.md)。
+这些是 DMG-MD 的调度扩展，不是锁定 GPUMD reference 的行为。

@@ -429,6 +429,7 @@ NEP::NEP(const char* file_potential, const int num_atoms)
 // cudaFree/cudaMalloc; kernels still receive the exact logical stride (R27).
 void NEP::allocate_workspace(const int num_atoms)
 {
+  if (domain_force_active_) throw std::logic_error("workspace resize during domain force");
   ++workspace_generation_;
   partition_.valid = false;
   nep_data.f12x.resize_reuse(static_cast<size_t>(num_atoms) * paramb.MN_angular);
@@ -1261,6 +1262,15 @@ void NEP::compute_domain(
   const std::uint64_t layout_epoch,
   const DomainForceContext& context)
 {
+  if (domain_force_active_) throw std::logic_error("domain force already active");
+  domain_force_active_ = true;
+  struct ForceLease { bool& active; ~ForceLease() { active = false; } } lease{domain_force_active_};
+  const bool overlap = context.overlap != DomainOverlapMode::off;
+  if (overlap && (context.mode == DomainPartitionMode::off || !context.begin_halo ||
+      !context.finish_halo || !context.clear_outputs || context.mapping_epoch != layout_epoch))
+    throw std::logic_error("invalid owned-ready overlap context");
+  if (overlap && (!context.ordinary || neighbor_action != DomainNeighborAction::confirmed_reuse))
+    throw std::logic_error("owned-ready overlap requires an ordinary confirmed-reuse force");
   const int BLOCK_SIZE = 64;
   const int N = num_atoms;  // logical local_count; device capacity may be padded
   if (domain_timing_marker) domain_timing_marker(0);
@@ -1285,6 +1295,11 @@ void NEP::compute_domain(
   // but must not derive a logical stride from their one-element allocation
   // capacity or touch any padded device element.
   if (N == 0) {
+    if (overlap) {
+      const auto generation = context.begin_halo();
+      if (!context.finish_halo(generation)) throw std::logic_error("empty force halo not ready");
+      context.clear_outputs();
+    }
     neighbor.find_neighbor_domain(
       rc, box, type, position_per_atom, global_id, ND1, ND2, N,
       neighbor_action, layout_epoch);
@@ -1312,7 +1327,7 @@ void NEP::compute_domain(
     return;
   }
 
-  neighbor.find_neighbor_domain(
+  if (!(overlap && ND2 == 0)) neighbor.find_neighbor_domain(
     rc, box, type, position_per_atom, global_id, ND1, ND2, N, neighbor_action,
     layout_epoch);
 
@@ -1380,7 +1395,7 @@ void NEP::compute_domain(
   };
   auto products = [&](const int* dep_selection, const int* force_selection, bool complement) {
     const auto& phase_position = *phase_positions;
-    if (context.mode == DomainPartitionMode::verify) {
+    if (context.mode == DomainPartitionMode::verify && !overlap) {
       verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
                                 dep_selection, force_selection, complement);
     }
@@ -1505,7 +1520,7 @@ void NEP::compute_domain(
   bool classified = false;
   double classify_seconds = 0.0;
   if (split) {
-    if (context.step == 0 || context.halo_ready_step != context.step)
+    if (context.step == 0 || (!overlap && context.halo_ready_step != context.step))
       throw std::logic_error("O2 split requires this step's completed halo");
     DomainPartitionKey key;
     key.layout = layout_epoch; key.neighbor = neighbor.domain_generation();
@@ -1531,9 +1546,47 @@ void NEP::compute_domain(
     partition_.valid = false;
   }
 
+  // Prepare ends here: all classification, allocations and verifier copies
+  // precede begin. The same default stream owns every CUDA operation.
+  DomainForceTicket ticket{context.step, call_index};
+  ticket.key = partition_.key;
+  auto views = [&]() { return std::array<const void*, 19>{type.data(), position_per_atom.data(), global_id.data(),
+    potential_per_atom.data(), force_per_atom.data(), virial_per_atom.data(), neighbor.NN.data(), neighbor.NL.data(),
+    nep_data.NN_radial.data(), nep_data.NL_radial.data(), nep_data.NN_angular.data(), nep_data.NL_angular.data(),
+    nep_data.Fp.data(), nep_data.sum_fxyz.data(), nep_data.f12x.data(), nep_data.f12y.data(), nep_data.f12z.data(),
+    partition_.early.data(), partition_.interior.data()}; };
+  auto sizes = [&]() { return std::array<std::size_t, 19>{type.size(), position_per_atom.size(), global_id.size(),
+    potential_per_atom.size(), force_per_atom.size(), virial_per_atom.size(), neighbor.NN.size(), neighbor.NL.size(),
+    nep_data.NN_radial.size(), nep_data.NL_radial.size(), nep_data.NN_angular.size(), nep_data.NL_angular.size(),
+    nep_data.Fp.size(), nep_data.sum_fxyz.size(), nep_data.f12x.size(), nep_data.f12y.size(), nep_data.f12z.size(),
+    partition_.early.size(), partition_.interior.size()}; };
+  const auto frozen_views = views();
+  const auto frozen_sizes = sizes();
+  auto validate = [&]() {
+    if (views() != frozen_views || sizes() != frozen_sizes || N1 != 0 || ND1 != 0)
+      throw std::logic_error("domain force views changed during overlap");
+    auto current = ticket.key;
+    current.layout = layout_epoch; current.neighbor = neighbor.domain_generation();
+    current.storage = workspace_generation_; current.owned = N2;
+    current.dependency = ND2; current.local = num_atoms;
+    for (int q = 0; q < 18; ++q) { current.box[q] = box.cpu_h[q]; current.box[18+q] = box.float_h[q]; }
+    current.box[36] = box.pbc_x; current.box[37] = box.pbc_y; current.box[38] = box.pbc_z;
+    ticket.validate(context.step, current);
+  };
+  auto observe = [&](const char* phase) {
+    if (context.observe) context.observe(phase, call_index, ticket.key, ticket.halo);
+  };
   // One logical force ticket owns call_index, the one output clear (runtime),
   // and the one neighbor-record sink across both phases and oracle replay.
   if (!split) {
+    if (overlap) {
+      ticket.posted(context.begin_halo());
+      if (!context.finish_halo(ticket.halo)) throw std::logic_error("full fallback halo not ready");
+      ticket.halo_ready(ticket.halo);
+      context.clear_outputs();
+      if (ND2 == 0) neighbor.find_neighbor_domain(rc, box, type, position_per_atom, global_id,
+                                                ND1, ND2, N, neighbor_action, layout_epoch);
+    }
     filter(nullptr, false);
     if (domain_timing_marker) domain_timing_marker(1);
     record();
@@ -1541,27 +1594,36 @@ void NEP::compute_domain(
     products(nullptr, nullptr, false);
     if (domain_timing_marker) domain_timing_marker(3);
   } else {
-    DomainForceTicket ticket{context.step, call_index};
     const bool verify = context.mode == DomainPartitionMode::verify;
     std::unique_ptr<PartitionSnapshot> oracle;
     std::vector<double> initial_pe, initial_force, initial_virial;
     GPU_Vector<double> poisoned_position;
     if (verify) {
-      initial_pe = partition_download(potential_per_atom);
-      initial_force = partition_download(force_per_atom);
-      initial_virial = partition_download(virial_per_atom);
-      // Original, unselected M2a kernels, same coordinates/V/stride. No
-      // extra force-call counter, neighbor rebuild, record or MPI operation.
-      filter(nullptr, false); products(nullptr, nullptr, false);
-      oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
-      potential_per_atom.copy_from_host(initial_pe.data());
-      force_per_atom.copy_from_host(initial_force.data());
-      virial_per_atom.copy_from_host(initial_virial.data());
-      const float poison = std::numeric_limits<float>::quiet_NaN();
-      nep_data.Fp.fill(poison); nep_data.sum_fxyz.fill(poison);
-      nep_data.f12x.fill(poison); nep_data.f12y.fill(poison); nep_data.f12z.fill(poison);
-      nep_data.NN_radial.fill(-1); nep_data.NN_angular.fill(-1);
-      nep_data.NL_radial.fill(-1); nep_data.NL_angular.fill(-1);
+      if (!overlap) {
+        initial_pe = partition_download(potential_per_atom);
+        initial_force = partition_download(force_per_atom);
+        initial_virial = partition_download(virial_per_atom);
+        // Original, unselected M2a kernels, same coordinates/V/stride. No
+        // extra force-call counter, neighbor rebuild, record or MPI operation.
+        filter(nullptr, false); products(nullptr, nullptr, false);
+        oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
+        potential_per_atom.copy_from_host(initial_pe.data());
+        force_per_atom.copy_from_host(initial_force.data());
+        virial_per_atom.copy_from_host(initial_virial.data());
+        const float poison = std::numeric_limits<float>::quiet_NaN();
+        nep_data.Fp.fill(poison); nep_data.sum_fxyz.fill(poison);
+        nep_data.f12x.fill(poison); nep_data.f12y.fill(poison); nep_data.f12z.fill(poison);
+        nep_data.NN_radial.fill(-1); nep_data.NN_angular.fill(-1);
+        nep_data.NL_radial.fill(-1); nep_data.NL_angular.fill(-1);
+      }
+      if (overlap) {
+        const float poison = std::numeric_limits<float>::quiet_NaN();
+        nep_data.Fp.fill(poison); nep_data.sum_fxyz.fill(poison);
+        nep_data.f12x.fill(poison); nep_data.f12y.fill(poison); nep_data.f12z.fill(poison);
+        nep_data.NN_radial.fill(-1); nep_data.NN_angular.fill(-1);
+        nep_data.NL_radial.fill(-1); nep_data.NL_angular.fill(-1);
+      }
+      // A private coordinate snapshot is prepared while no halo is active.
       auto coords = partition_download(position_per_atom);
       for (int axis = 0; axis < 3; ++axis) for (int c = N2; c < N; ++c)
         coords[axis*N+c] = std::numeric_limits<double>::quiet_NaN();
@@ -1571,19 +1633,50 @@ void NEP::compute_domain(
     }
     if (domain_timing_marker) domain_timing_marker(1);
     if (domain_timing_marker) domain_timing_marker(2);
+    if (overlap) {
+      validate(); observe("owned-ready");
+      ticket.posted(context.begin_halo());
+      context.clear_outputs();
+      validate(); observe("early-begin");
+    }
     filter(partition_.early.data(), false);
     products(partition_.early.data(), partition_.interior.data(), false);
     ticket.early();
+    if (overlap) {
+      observe("early-enqueued");
+      if (!context.finish_halo(ticket.halo)) throw std::logic_error("late requires physical halo completion");
+      ticket.halo_ready(ticket.halo);
+      validate(); observe("halo-ready");
+    }
+    if (verify && overlap) {
+      // finish physically completes default-stream early before any replay.
+      // Preserve production arrays in a safe copy. Replay has no neighbor
+      // build, counter, MPI or I/O, and restore before late consumes them.
+      PartitionSnapshot early_state(nep_data, potential_per_atom, force_per_atom, virial_per_atom);
+      phase_positions = &position_per_atom;
+      potential_per_atom.fill(0.0); force_per_atom.fill(0.0); virial_per_atom.fill(0.0);
+      filter(nullptr, false);
+      verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
+                                nullptr, nullptr, false);
+      products(nullptr, nullptr, false);
+      oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
+      early_state.restore(nep_data, potential_per_atom, force_per_atom, virial_per_atom);
+    }
     if (verify) {
       auto early = partition_download(partition_.early), interior = partition_download(partition_.interior);
       verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom, virial_per_atom,
         N, ND2, N2, &early, &interior);
       phase_positions = &position_per_atom;
     }
+    if (overlap) observe("late-begin");
     filter(partition_.early.data(), true);
+    if (verify && overlap) verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial,
+        paramb.MN_angular, partition_.early.data(), partition_.interior.data(), true);
     record(); // all D rows ready, every rank enters the same two MAX calls
     products(partition_.early.data(), partition_.interior.data(), true);
     ticket.late();
+    ticket.finalize();
+    if (overlap) observe("force-enqueued");
     if (domain_timing_marker) domain_timing_marker(3);
     if (verify) verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom,
       virial_per_atom, N, ND2, N2);
@@ -1604,6 +1697,8 @@ void NEP::compute_domain(
       << " classify_host_seconds=" << classify_seconds
       << " oracle=" << (split && context.mode == DomainPartitionMode::verify ? "bitwise" : "off")
       << " poison=" << (split && context.mode == DomainPartitionMode::verify ? "passed" : "off")
+      << " overlap=" << (split && overlap ? overlap_name(context.overlap) : "off")
+      << " halo_generation=" << ticket.halo
       << " timing_scope=" << (split ? "split-pipeline" : "full");
     domain_partition_sink(line.str());
   }

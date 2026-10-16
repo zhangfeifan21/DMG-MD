@@ -1,10 +1,10 @@
 # DMG-MD 当前状态
 
-类别：实现状态索引。核对日期：2026-10-16；代码 HEAD：`9c608a1`。
+类别：实现状态索引。核对日期：2026-10-16；本轮起始 HEAD：`246a765`（未提交 O4 修改）。
 
-当前已实现 M1/M2a、统一缓存重建、CPU 采样、三引擎 benchmark 编排及 O1–O3。
-O3 仍先完成 halo，再计算 NEP；**实际通信/计算重叠未实现**。
-本页依据源码与既有验收记录汇总，本次文档整理没有重新执行 GPU 数值矩阵。
+当前已实现 M1/M2a、统一缓存重建、CPU 采样、三引擎 benchmark 编排及 O1–O4。
+O4 默认关闭的普通步实际重叠已实现并通过本轮验收；默认仍同步 full。
+本次结果与源码/二进制身份见 [O4 报告](validation/overlap-o4-20261016.md)。
 
 ## 已实现能力
 
@@ -16,7 +16,8 @@ O3 仍先完成 halo，再计算 NEP；**实际通信/计算重叠未实现**。
 | 缓存与分配 | epoch 内 manager/layout/map 固定；全局连续位移超过 skin/2 才统一重建和迁移；capacity 可复用，host identity 仍每 rank 完整保存 |
 | O1 诊断 | 默认关闭的 M2a 时间线、benchmark A/B 编排与 C1 marker 对齐；整段计时不等于 CPU 利用率 |
 | O2 串行分区 | `DMGMD_DOMAIN_PARTITION=off|serial|verify`，默认 off；普通步按完整 Verlet 图分区，halo 后串行执行；[合同](../standards/domain-partition.md) |
-| O3 halo 生命周期 | begin/progress/finish、单槽位与请求/事件完成检查；生产立即 finish，无新 stream/progress thread；[合同](../standards/halo-lifecycle.md) |
+| O3 halo 生命周期 | begin/progress/finish、单槽位与请求/事件完成检查；默认立即 finish，O4 可插入 early；无新 stream/progress thread；[合同](../standards/halo-lifecycle.md) |
+| O4 实验调度 | overlap=off/wait/poll；prepare→begin→early→finish→late，默认 off；本轮 476 组数值矩阵与 profiler 通过 |
 | CPU 采样 | Linux 本机、同 namespace 的 rank/task 观测，不设置 affinity；O1 已有手工 Open MPI 映射与实际 4 物理核/NUMA 核验 |
 | 三引擎对照 | 输入、静态比较和 benchmark 编排已实现；统一 CPU/NUMA 启动接口与正式效率矩阵未完成 |
 
@@ -28,6 +29,7 @@ query、device collective 与 p2p 数值自检。支持范围、字节公式和�
 
 | 日期 / 实现 | 已记录结果 | 范围与证据 |
 | --- | --- | --- |
+| 2026-10-16 O4 | domain 七模式 476 组；生命周期 68/68、调度/配置 25/25；golden 4/4、CTest 10/10、long_nve smoke 7/7；24 cost trial、24 profiler rank-step 证据 | [O4](validation/overlap-o4-20261016.md)、[固定资源成本](performance/communication-computation-overlap-results-20261016.md)；candidate SHA-256 `860c1ba319a3bae55f1f3cb52eaf05dc1d3524d6a71766790b78fc0b1d68ceb6`；仍慢于 full，默认关闭 |
 | 2026-10-15 O3 | 生命周期/错误作业 68/68；domain 三模式 192 组；O2/O3 科学文件 808 次字节比较；CTest 10/10；golden 4/4；long_nve smoke 7/7 | [O3](validation/halo-lifecycle-20261015.md)；candidate SHA-256 `d1abb2deb8e54d1552a54c1030a33dc89a12795fe946b890671d93d77989e646` |
 | 2026-10-15 O2 | domain 三模式、CPU/GPU oracle、golden、CTest 与 long_nve smoke | [O2](validation/overlap-partition-20261015.md)；本机串行分区额外成本约 29–30%，保持默认关闭 |
 | 2026-10-12 O1 | P2 双后端普通/重建时间线、C1 样本、固定资源窄矩阵 | [O1](performance/overlap-baseline-20261012.md)；无 overlap/强扩展结论 |
@@ -43,7 +45,7 @@ candidate SHA-256 `07c8f0a0d4b9305cfd3f506ad7172960dbe2b72f02edf5589b73eae4fb250
 
 ## 剩余工作
 
-- P0：[统一 CPU/NUMA 启动策略](../plans/mpi-cpu-binding.md)、[三引擎动力学与正式性能矩阵](../plans/lammps-multigpu-benchmark.md)、[O4 普通步 overlap → O5 A/B](../plans/communication-computation-overlap.md)。
+- P0：[统一 CPU/NUMA 启动策略](../plans/mpi-cpu-binding.md)、[三引擎动力学与正式性能矩阵](../plans/lammps-multigpu-benchmark.md)、[O5 正式 A/B 与采用决策](../plans/communication-computation-overlap.md)。
 - 后续：100000-step release、M2b 中间场交换、3D/triclinic/非周期 local-domain 扩展。
 - 暂缓：[双物理节点 I/O 验收](../plans/multi-node-io.md)；跨节点 scaling 尚无实测。
 - 规模/兼容性缺口见[待办](../plans/risk-and-backlog.md)。host identity 为 O(N)/rank，

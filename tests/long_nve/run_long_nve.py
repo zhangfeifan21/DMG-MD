@@ -306,7 +306,9 @@ def candidate_environment(
     performance: bool = False,
     partition_mode: str = "off",
 ) -> Dict[str, str]:
-    env = os.environ.copy()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DMGMD_")}
+    env["DMGMD_DOMAIN_OVERLAP"] = "off"
+    env["DMGMD_OVERLAP_TRACE"] = "0"
     env["DMGMD_DOMAIN_PARTITION"] = partition_mode
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
@@ -430,6 +432,10 @@ def run_candidate_stage(
         result, ranks, backend, expected_mode,
         require_domain_layouts=stage_env["DMGMD_DOMAIN_DIAGNOSTICS"] == "1",
     )
+    configs = [mpi_differential.key_values(line) for line in (result / "execution.stdout").read_text().splitlines()
+               if line.startswith("DMGMD_OVERLAP_CONFIG ")]
+    if len(configs) != 1 or configs[0].get("mode") != stage_env.get("DMGMD_DOMAIN_OVERLAP", "off"):
+        raise baseline.BaselineError(f"{result}: actual overlap configuration mismatch")
     return result
 
 

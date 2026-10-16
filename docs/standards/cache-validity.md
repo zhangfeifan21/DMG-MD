@@ -21,7 +21,7 @@
 | device views | pointer 与 logical stride 有效 | resize/扩容后重新取 view；capacity 不是版本 |
 
 local slot 不是持久身份。map/layout epoch 必须匹配；同 epoch 的不同时间步还需本步 halo
-完成证明。O3 物理 unpack 和 O2 step token 见[halo](halo-lifecycle.md)及[分区](domain-partition.md)。
+完成证明。O3 物理 unpack、O4 owned-ready/halo-ready 与 force ticket 见[halo](halo-lifecycle.md)及[分区](domain-partition.md)。
 
 ## 连续位移与两跳闭包
 
@@ -78,3 +78,8 @@ CPU layout、CUDA neighbor 与 MPI domain runner 覆盖阈值、micro-crossings�
 多 slab/PBC、空 rank/N<P、多 run/restart、timing A/B 科学输出与精确通信量。
 O2 另用 Verlet/workspace generation 防同 epoch 新 rows、同 shape 新身份误复用。
 全表 debug 每步不变量断言未实现；剩余边界见[风险登记](../plans/risk-and-backlog.md)。
+
+O4 force 冻结期从 graph-only prepare 至 finalize：cache miss 的 mask 分配/分类/D2H 在
+begin 前完成；owned-ready 只授权 E/I。halo generation 与本次 step/key 绑定，finish
+物理 unpack 后才能授权 H/B；workspace resize 与重入被拒绝。普通步不按 stale ghost
+重新分类，skin 内完整旧 V 的闭包与连续位移判据仍是唯一 interior 证明。

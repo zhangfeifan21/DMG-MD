@@ -2,8 +2,8 @@
 
 类别：文档索引。更新日期：2026-10-16。
 
-先看[当前状态](status/current.md)。代码已完成 M1/M2a 与 O1–O3；O3 仍在 begin 后立即
-finish，实际通信/计算重叠尚未接入。
+先看[当前状态](status/current.md)。代码已完成默认关闭的 O4 普通步实际重叠与本轮验收；
+默认仍立即 finish。O5 正式性能矩阵未执行。
 
 | 目录 | 内容 | 维护边界 |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ finish，实际通信/计算重叠尚未接入。
 
 - 产品：[架构决策](standards/architecture-decisions.md)、[输入/输出兼容矩阵](standards/compatibility-matrix.md)。
 - Runtime：[MPI 双路径与通信记账](standards/mpi-runtime.md)、[数据布局](standards/data-layout.md)、[缓存有效性证明](standards/cache-validity.md)。
-- O2/O3：[串行 NEP 分区](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
+- O2–O4：[NEP 分区与实验重叠](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
 - 验证：[Golden Test 原则](standards/golden-test-standard.md)、[三引擎对照](standards/cross-engine-reference.md)、[CPU 采样](standards/cpu-sampling.md)。
 - 参考证据：[GPUMD runtime 审计](reference/gpumd-runtime-audit.md)、[NEP kernel 与依赖](reference/kernel-inventory.md)。
 
@@ -33,6 +33,7 @@ finish，实际通信/计算重叠尚未接入。
 
 | 日期 | 范围 |
 | --- | --- |
+| 2026-10-16 | [O4 普通步重叠](status/validation/overlap-o4-20261016.md) |
 | 2026-10-15 | [O3 halo 生命周期](status/validation/halo-lifecycle-20261015.md)、[O2 串行分区](status/validation/overlap-partition-20261015.md) |
 | 2026-10-09 | [CPU 采样 C1](status/validation/cpu-sampling-c1-20261009.md)、[LAMMPS 静态与 smoke](status/validation/lammps-reference-20261009.md) |
 | 2026-09-23 | [Docker 适配与待验收项](status/validation/docker-validation.md) |
@@ -41,6 +42,7 @@ finish，实际通信/计算重叠尚未接入。
 
 ## 性能与成本记录
 
+- [2026-10-16：O4 固定资源检查](status/performance/communication-computation-overlap-results-20261016.md)。
 - [2026-10-12：O1 串行时间线与 CPU 基线](status/performance/overlap-baseline-20261012.md)。
 - [2026-09-26：单机八卡 benchmark](status/performance/benchmark-multigpu-results-20260926.md)。
 - [2026-09-22：统一重建与分步成本](status/performance/stage2-cost-report.md)。
@@ -53,7 +55,7 @@ O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 
 | --- | --- | --- |
 | P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | PROPOSED；统一启动策略未实现 |
 | P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
-| P0 | [通信与计算重叠](plans/communication-computation-overlap.md) | IN PROGRESS；O1–O3 完成，下一阶段 O4 |
+| P0 | [通信与计算重叠](plans/communication-computation-overlap.md) | IN PROGRESS；O1–O4 完成，O5 待执行 |
 | 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，C2/C3 待执行 |
 | 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；M2b、release 等未完成 |
 | 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |

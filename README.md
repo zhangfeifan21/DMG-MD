@@ -424,8 +424,9 @@ eligibility 的输入自动回退 M1，small-box 输入继续可运行。M2b 的
 
 ## 当前进度
 
-当前代码已完成 M1/M2a、统一缓存重建和 O1–O3。O2 实验分区默认关闭，O3 仍在 halo
-begin 后立即 finish，实际通信/计算重叠尚未实现。2026-10-15 O3 已通过 192 组 domain
+当前代码已完成 M1/M2a、统一缓存重建和 O1–O4。O2 实验分区默认关闭，halo 默认
+begin 后立即 finish；O4 已接入默认关闭的普通步实际重叠，本轮验收见
+[O4 报告](docs/status/validation/overlap-o4-20261016.md)。2026-10-15 O3 已通过 192 组 domain
 三模式、68 个生命周期/故障作业、golden/CTest 与 long_nve smoke；完整证据与历史
 nightly/单机八卡 benchmark 见[当前状态](docs/status/current.md)。100000-step release
 和跨节点 scaling 尚无完整通过记录。

@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1/M2a + O1–O3；近期 P0：CPU 绑定、LAMMPS 对比、O4 重叠
+## 当前代码基线：M1/M2a + O1–O4；近期 P0：CPU 绑定、LAMMPS 对比、O5 验证
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -63,7 +63,7 @@ triclinic/非周期 local-domain 仍待后续审批。
 三引擎 benchmark smoke 已实施；正式效率矩阵仍待固定 CPU/NUMA 绑定和更多正确性验收。
 现有 C1 与 O1 expected-cores/expected-numa 参数核验手工映射，不执行绑定；
 O1 时间线、O2 默认关闭的串行分区、O3 halo 生命周期已实施并验收。生产仍 begin 后立即
-finish，再计算 NEP，无实际 overlap；O4/O5 未执行。最新证据见 docs/status/current.md，
+finish，再计算 NEP；O4 已接入默认关闭的普通步实际 overlap，本轮验收完成、仍默认关闭，O5 未执行。最新证据见 docs/status/current.md，
 M2b 不是当前下一实施切口。
 
 ## GPUMD 复现边界（强制）

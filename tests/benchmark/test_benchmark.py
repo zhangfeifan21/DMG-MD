@@ -13,6 +13,15 @@ import run_overlap_rebuild as rebuild
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_overlap_requires_actual_configuration_and_execution_counters(self):
+        text = ('DMGMD_OVERLAP_CONFIG mode=poll trace=0 poll_limit=8 stream=default\n'
+                'DMGMD_OVERLAP_SUMMARY rank=0 sequence=0 cumulative_calls=3 cumulative_polls=8\n'
+                'DMGMD_OVERLAP_SUMMARY rank=0 sequence=1 cumulative_calls=9 cumulative_polls=24\n')
+        self.assertEqual(bench.actual_dmgmd_overlap(text, 'poll')['calls'], 9)
+        self.assertEqual(bench.actual_dmgmd_overlap(text, 'poll')['polls'], 24)
+        for output, mode in [('', 'wait'), (text, 'wait'), (text, 'off')]:
+            with self.assertRaises(ValueError): bench.actual_dmgmd_overlap(output, mode)
+
     def test_thermo_headers_and_nonfinite_rejection(self):
         text = '# dump_thermo 5\n# columns T KE PE ...\n' + ' '.join(['1'] * 18) + '\n'
         self.assertEqual(bench.parse_thermo(text), [1.0] * 18)

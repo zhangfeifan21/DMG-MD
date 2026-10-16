@@ -433,6 +433,7 @@ class MpiRuntime::Impl {
     bool unpack_queued = false;
     CommunicationVolume* volume = nullptr;
     P2pTimingEvents* timing = nullptr;
+    HaloTrace* trace = nullptr;
     MpiWaitClock::time_point transfer_started{};
   } halo;
 
@@ -1430,7 +1431,7 @@ HaloExchangeToken MpiRuntime::begin_p2p_indexed_device_soa(
     int left_peer,
     int right_peer,
     CommunicationVolume& volume,
-    P2pTimingEvents* timing) const
+    P2pTimingEvents* timing, HaloTrace* trace) const
 {
   impl_->require_initial_thread();
   try {
@@ -1445,7 +1446,8 @@ HaloExchangeToken MpiRuntime::begin_p2p_indexed_device_soa(
     h.state.reusable = false;
     h.unpack_queued = false;
     h.volume = &volume;
-    h.timing = timing;
+    h.timing = timing; h.trace = trace;
+    if (trace) *trace = HaloTrace{};
     if (world_size() <= 1) {
       h.state = {generation, true, true, true, true, true, true, true};
       return {generation};
@@ -1536,6 +1538,7 @@ HaloExchangeToken MpiRuntime::begin_p2p_indexed_device_soa(
       if (timing != nullptr) timing->input_sync_end_ns = monotonic_ns();
     }
     h.state.pack_ready = h.state.send_source_ready = true;
+    if (trace) trace->pack_ready_ns = monotonic_ns();
     auto* send = backend() == CommunicationBackend::host_staged
                      ? impl_->host_p2p_send.data() : impl_->device_p2p_send.data();
     auto* recv = backend() == CommunicationBackend::host_staged
@@ -1544,6 +1547,7 @@ HaloExchangeToken MpiRuntime::begin_p2p_indexed_device_soa(
     // catch aborts before any leased buffer is freed; no local recovery wait.
     const auto mpi_started = begin_mpi_wait(volume);
     if (timing != nullptr) timing->mpi_post_begin_ns = monotonic_ns();
+    if (trace) trace->post_begin_ns = monotonic_ns();
     check_mpi(MPI_Isend(send, bytes[0], MPI_BYTE, left_peer, kTagSendLeft,
                         MPI_COMM_WORLD, &h.requests[0]), "post halo left send");
     check_mpi(MPI_Isend(send + h.send_elements[0], bytes[1], MPI_BYTE, right_peer,
@@ -1553,6 +1557,7 @@ HaloExchangeToken MpiRuntime::begin_p2p_indexed_device_soa(
     check_mpi(MPI_Irecv(recv + h.recv_elements[0], bytes[3], MPI_BYTE, right_peer,
                         kTagSendLeft, MPI_COMM_WORLD, &h.requests[3]), "post halo right receive");
     end_mpi_wait(volume, mpi_started);
+    if (trace) trace->post_end_ns = monotonic_ns();
     return {generation};
   } catch (const std::exception& error) {
     impl_->fail_halo(error.what());
@@ -1587,6 +1592,10 @@ HaloExchangeState MpiRuntime::Impl::advance_halo(HaloExchangeToken token, bool w
       h.state.receives_complete = receives_done != 0;
     }
     end_mpi_wait(volume, mpi_started);
+  }
+  if (h.trace) {
+    if (h.state.sends_complete && !h.trace->sends_observed_ns) h.trace->sends_observed_ns = monotonic_ns();
+    if (h.state.receives_complete && !h.trace->receives_observed_ns) h.trace->receives_observed_ns = monotonic_ns();
   }
   const auto nr = h.recv_elements[0] + h.recv_elements[1];
   if (h.state.receives_complete && !h.unpack_queued) {
@@ -1656,6 +1665,7 @@ HaloExchangeState MpiRuntime::Impl::advance_halo(HaloExchangeToken token, bool w
     for (auto request : h.requests) {
       if (request != MPI_REQUEST_NULL) throw std::logic_error("completed halo retains a request");
     }
+    if (h.trace) h.trace->unpack_done_ns = monotonic_ns();
     volume.p2p_calls += 4;
     volume.add_p2p_bytes(ByteClass::halo,
         checked_bytes(h.send_elements[0] + h.send_elements[1]), checked_bytes(nr));

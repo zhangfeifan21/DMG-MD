@@ -45,3 +45,33 @@ GNU 链接 wrapper 只存在于独立测试程序，生产没有测试开关。
 O3 验收另将结果与锁定 O2 产物逐字节核对；本轮具体命令、哈希、结果见
 [O3 状态](../../docs/status/validation/halo-lifecycle-20261015.md)，接口见
 [halo 生命周期标准](../../docs/standards/halo-lifecycle.md)。
+
+## O4 默认关闭的实际重叠
+
+先按上面的环境、golden、CTest 和 O3 生命周期顺序验收，再执行：
+
+```bash
+source ../env/md-mpi.sh
+python3 -u tests/mpi/run_overlap_schedule.py --candidate ./build/dmg-md \
+  --devices 0,1,2,3 --work-root dmgmd-o4-schedule-new
+python3 -u tests/mpi/run_mpi_domain.py --candidate ./build/dmg-md --ranks 2,4 \
+  --backends HostStaged,CudaAware --devices 0,1,2,3 \
+  --partition-modes off,serial,verify,overlap-wait,overlap-poll,verify-wait,verify-poll \
+  --work-root dmgmd-o4-domain-new
+```
+
+runner 清除父 shell 的 DMGMD 变量，显式白名单写入 partition/overlap/trace，保存
+launch_environment 并检查程序 CONFIG 与真实 split/progress 次数。`overlap-wait/poll`
+分别映射 partition=serial + overlap=wait/poll；`verify-wait/poll` 用于有效 R/A、中间量、
+逐原子全量及 ghost poison 对比。每个 rank/backend 的七模式科学文件须逐字节相同。
+保留原 manifest 差分容差、通信字节与请求/tag 门槛，不修改 golden。
+
+独立 `build/tests/dmgmd_overlap_schedule_tests` 链接生产 runtime/main，只在测试链接时
+包裹 MPI/CUDA API。它暂缓 receive transport post，直到 early event 完成，记录未完成
+请求；poll 必须实际触发 8 次上限。另检查 rank0 单边 Waitall 错误、非法/不兼容开关和
+rank 配置不一致。所有错误必须整作业非零退出，超时失败。受控延迟只证明状态合同。
+正常路径的 GPU kernel 与请求在途交叠由另跑 profiler 判断，不能把 host enqueue 当 GPU。
+
+`DMGMD_OVERLAP_TRACE=1` 默认关闭，记录 host 单调时钟观察和 CUDA event elapsed，
+没有校准时不合并两个时间源。完整证据及重算方法见
+[O4 报告](../../docs/status/validation/overlap-o4-20261016.md)。

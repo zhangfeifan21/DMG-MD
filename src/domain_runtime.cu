@@ -311,6 +311,10 @@ struct DomainState {
   bool trace_enabled = false;
   gpumd_compat::DomainPartitionMode partition_mode = gpumd_compat::DomainPartitionMode::off;
   std::uint64_t halo_ready_step = 0;
+  gpumd_compat::DomainOverlapMode overlap_mode = gpumd_compat::DomainOverlapMode::off;
+  bool overlap_trace = false;
+  std::uint64_t last_halo_begin_ns = 0, last_halo_end_ns = 0;
+  std::uint64_t overlap_calls = 0, overlap_polls = 0, overlap_finish_ns = 0, overlap_cpu_ns = 0;
   DomainDeviceAtoms device;
   // Workspace bookkeeping: the NEP workspaces are re-sized only when
   // local_count changes; every layout change still forces a Verlet rebuild.
@@ -970,9 +974,9 @@ void exchange_halo_membership(
 
 // Per-step ghost position refresh (halo class, 24 bytes per atom) through the
 // cached face plan; membership itself is only re-evaluated at rebuilds.
-void refresh_ghost_positions(
+HaloExchangeToken begin_ghost_positions(
     DomainState& state, MpiRuntime& mpi, CommunicationVolume& communication,
-    P2pTimingEvents* timing = nullptr)
+    P2pTimingEvents* timing = nullptr, HaloTrace* trace = nullptr)
 {
   if (state.decision_state != DomainDecisionState::confirmed_reuse) {
     throw std::logic_error("ghost refresh requires a confirmed reuse decision");
@@ -992,7 +996,14 @@ void refresh_ghost_positions(
       state.device.send_slots[kFaceRight].data(), send_right,
       state.device.recv_slots[kFaceLeft].data(), recv_left,
       state.device.recv_slots[kFaceRight].data(), recv_right,
-      left_peer, right_peer, communication, timing);
+      left_peer, right_peer, communication, timing, trace);
+  return halo;
+}
+
+void refresh_ghost_positions(DomainState& state, MpiRuntime& mpi, CommunicationVolume& communication,
+                             P2pTimingEvents* timing = nullptr)
+{
+  const auto halo = begin_ghost_positions(state, mpi, communication, timing);
   // O3 keeps synchronous scheduling: no computation while halo is in flight.
   mpi.finish_halo(halo);
   state.refreshed_epoch = state.mapping_epoch;
@@ -1203,7 +1214,8 @@ void do_migration(
 void launch_domain_force(
     DomainState& state, Box& box, NEP& nep,
     gpumd_compat::DomainNeighborAction neighbor_action, bool ordinary = false,
-    std::uint64_t step = 0)
+    std::uint64_t step = 0, MpiRuntime* overlap_mpi = nullptr,
+    P2pTimingEvents* halo_timing = nullptr)
 {
   if (state.mapping_epoch != state.epoch || state.refreshed_epoch != state.epoch) {
     throw std::logic_error("domain force uses a stale layout or halo mapping");
@@ -1225,23 +1237,111 @@ void launch_domain_force(
   const int owned = checked_int(state.owned_count(), "owned_count");
   const int dep = checked_int(state.layout.dep_ghost_count(), "dependency ghosts");
   box.set_is_orthogonal();
-  if (local > 0) {
-    clear_owned_properties<<<(local + kThreads - 1) / kThreads, kThreads>>>(
-        0, local, local, state.device.force.data(), state.device.potential.data(),
-        state.device.virial.data());
-    check_cuda(cudaGetLastError(), "clear local NEP scratch");
-  }
+  auto clear = [&]() {
+    if (local > 0) {
+      clear_owned_properties<<<(local + kThreads - 1) / kThreads, kThreads>>>(
+          0, local, local, state.device.force.data(), state.device.potential.data(),
+          state.device.virial.data());
+      check_cuda(cudaGetLastError(), "clear local NEP scratch");
+    }
+  };
+  if (!overlap_mpi) clear();
   nep.N1 = 0;
   nep.N2 = owned;
   nep.ND1 = 0;
   // An empty owned prefix consumes nobody's dependency products; skipping the
   // descriptor phase on such ranks is safe and avoids wasted ghost work.
   nep.ND2 = owned > 0 ? owned + dep : 0;
-  nep.compute_domain(
-      box, local, state.device.type, state.device.position, state.device.potential,
-      state.device.force, state.device.virial, state.device.global_id, neighbor_action,
-      state.epoch, {state.partition_mode, ordinary,
-                    step, state.halo_ready_step});
+  gpumd_compat::DomainForceContext context{state.partition_mode, ordinary, step, state.halo_ready_step};
+  HaloTrace halo_trace;
+  std::array<cudaEvent_t, 4> events{};
+  const auto epoch = state.epoch;
+  const auto* position = state.device.position.data();
+  const auto* send_left = state.device.send_slots[0].data();
+  const auto* recv_left = state.device.recv_slots[0].data();
+  const auto* send_right = state.device.send_slots[1].data();
+  const auto* recv_right = state.device.recv_slots[1].data();
+  auto frozen = [&]() {
+    if (state.mapping_epoch != epoch || state.epoch != epoch || state.local_count() != std::size_t(local) ||
+        state.owned_count() != std::size_t(owned) || position != state.device.position.data() ||
+        send_left != state.device.send_slots[0].data() || recv_left != state.device.recv_slots[0].data() ||
+        send_right != state.device.send_slots[1].data() || recv_right != state.device.recv_slots[1].data())
+      throw std::logic_error("overlap layout/mapping changed during force");
+  };
+  std::uint64_t owned_ready_ns = 0, early_begin_ns = 0, early_enqueue_ns = 0, late_ns = 0;
+  bool early_complete_at_finish = false;
+  if (overlap_mpi) {
+    context.overlap = state.overlap_mode; context.mapping_epoch = state.mapping_epoch;
+    context.clear_outputs = clear;
+    if (state.overlap_trace) for (auto& event : events) check_cuda(cudaEventCreate(&event), "create overlap trace event");
+    context.begin_halo = [&]() {
+      frozen(); state.halo_ready_step = 0;
+      if (state.trace_enabled) state.last_halo_begin_ns = monotonic_ns();
+      return begin_ghost_positions(state, *overlap_mpi, state.active_volume(), halo_timing,
+                                  state.overlap_trace ? &halo_trace : nullptr).generation;
+    };
+    context.finish_halo = [&](std::uint64_t generation) {
+      frozen();
+      const auto began = monotonic_ns();
+      timespec cpu_start{}, cpu_end{};
+      clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
+      if (state.overlap_trace && early_enqueue_ns) {
+        const auto status = cudaEventQuery(events[1]);
+        if (status != cudaErrorNotReady) check_cuda(status, "query overlap early");
+        early_complete_at_finish = status == cudaSuccess;
+      }
+      HaloExchangeState finished;
+      if (state.overlap_mode == gpumd_compat::DomainOverlapMode::poll) {
+        // Bounded initial-thread progress, no spin while waiting for GPU unpack.
+        for (int poll = 0; poll < 8; ++poll) {
+          ++state.overlap_polls;
+          finished = overlap_mpi->progress_halo({generation});
+          if (finished.reusable || (finished.sends_complete && finished.receives_complete)) break;
+        }
+      }
+      finished = overlap_mpi->finish_halo({generation});
+      clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
+      state.overlap_finish_ns += monotonic_ns() - began;
+      state.overlap_cpu_ns += (cpu_end.tv_sec-cpu_start.tv_sec)*1000000000LL + cpu_end.tv_nsec-cpu_start.tv_nsec;
+      frozen();
+      if (finished.generation != generation || !finished.reusable || !finished.unpack_complete) return false;
+      if (state.trace_enabled) state.last_halo_end_ns = monotonic_ns();
+      state.refreshed_epoch = epoch; state.halo_ready_step = step;
+      return true;
+    };
+    context.observe = [&](const char* phase, int call, const gpumd_compat::DomainPartitionKey& key, std::uint64_t generation) {
+      const std::string stage(phase);
+      if (stage == "early-begin") ++state.overlap_calls;
+      if (!state.overlap_trace) return;
+      const auto now = monotonic_ns();
+      if (stage == "owned-ready") owned_ready_ns = now;
+      if (stage == "early-begin") { early_begin_ns = now; check_cuda(cudaEventRecord(events[0]), "record overlap early begin"); }
+      if (stage == "early-enqueued") { check_cuda(cudaEventRecord(events[1]), "record overlap early end"); early_enqueue_ns = now; }
+      if (stage == "late-begin") { late_ns = now; check_cuda(cudaEventRecord(events[2]), "record overlap late begin"); }
+      if (stage == "force-enqueued") {
+        check_cuda(cudaEventRecord(events[3]), "record overlap force end");
+        check_cuda(cudaEventSynchronize(events[3]), "observe overlap force done");
+        float early_ms = 0, late_ms = 0;
+        check_cuda(cudaEventElapsedTime(&early_ms, events[0], events[1]), "measure overlap early");
+        check_cuda(cudaEventElapsedTime(&late_ms, events[2], events[3]), "measure overlap late");
+        std::ostringstream line;
+        line << "DMGMD_OVERLAP_TRACE rank=" << state.rank << " step=" << step << " call=" << call
+             << " layout=" << key.layout << " mapping=" << epoch << " verlet=" << key.neighbor << " workspace=" << key.storage
+             << " halo_generation=" << generation << " owned=" << key.owned << " dependency=" << key.dependency << " local=" << key.local
+             << " owned_ready_ns=" << owned_ready_ns << " pack_ready_ns=" << halo_trace.pack_ready_ns
+             << " post_begin_ns=" << halo_trace.post_begin_ns << " post_end_ns=" << halo_trace.post_end_ns
+             << " early_begin_enqueue_ns=" << early_begin_ns << " early_end_enqueue_ns=" << early_enqueue_ns
+             << " sends_observed_ns=" << halo_trace.sends_observed_ns << " receives_observed_ns=" << halo_trace.receives_observed_ns
+             << " unpack_done_ns=" << halo_trace.unpack_done_ns << " late_begin_enqueue_ns=" << late_ns
+             << " force_done_observed_ns=" << monotonic_ns() << " early_cuda_ms=" << early_ms << " late_cuda_ms=" << late_ms
+             << " early_complete_at_finish=" << early_complete_at_finish << " host_clock=CLOCK_MONOTONIC device_clock=cuda-event\n";
+        std::cout << line.str();
+      }
+    };
+  }
+  nep.compute_domain(box, local, state.device.type, state.device.position, state.device.potential,
+      state.device.force, state.device.virial, state.device.global_id, neighbor_action, state.epoch, context);
+  for (auto event : events) if (event) check_cuda(cudaEventDestroy(event), "destroy overlap trace event");
   state.neighbor_cache_valid = true;
 }
 
@@ -1733,21 +1833,25 @@ void run_domain_segment(
       // 6. Ordinary step: manager/layout/mapping stay fixed and only ghost
       // coordinates are refreshed through the cached face plan.
       if (state.trace_enabled) trace.halo_begin_ns = monotonic_ns();
-      refresh_ghost_positions(
-          state, mpi, communication, state.timing_enabled ? &halo_events : nullptr);
+      if (state.overlap_mode == gpumd_compat::DomainOverlapMode::off)
+        refresh_ghost_positions(state, mpi, communication, state.timing_enabled ? &halo_events : nullptr);
       if (state.trace_enabled) trace.halo_end_ns = monotonic_ns();
-      if (state.timing_enabled) {
-        add_seconds(segment_timing, step_class, kHaloTransferWait,
-                    halo_events.transfer_wait_seconds);
-        accounted_host += halo_events.transfer_wait_seconds;
-      }
     }
     // 8. Domain NEP: dependency-center neighbor/descriptor/partial, owned
     // radial force / many-body / ZBL, all with the local stride.
     if (state.trace_enabled) trace.nep_begin_ns = monotonic_ns();
-    state.halo_ready_step = state.executed_steps + 1;
-    launch_domain_force(state, box, nep, neighbor_action, !rebuild, state.executed_steps + 1);
-    if (state.trace_enabled) trace.nep_end_ns = monotonic_ns();
+    const bool overlap = !rebuild && state.overlap_mode != gpumd_compat::DomainOverlapMode::off;
+    if (!overlap) state.halo_ready_step = state.executed_steps + 1;
+    launch_domain_force(state, box, nep, neighbor_action, !rebuild, state.executed_steps + 1,
+                        overlap ? &mpi : nullptr, state.timing_enabled ? &halo_events : nullptr);
+    if (state.trace_enabled) {
+      trace.nep_end_ns = monotonic_ns();
+      if (overlap) { trace.halo_begin_ns = state.last_halo_begin_ns; trace.halo_end_ns = state.last_halo_end_ns; }
+    }
+    if (state.timing_enabled && !rebuild) {
+      add_seconds(segment_timing, step_class, kHaloTransferWait, halo_events.transfer_wait_seconds);
+      accounted_host += halo_events.transfer_wait_seconds;
+    }
     // 9. VV second half over the owned prefix.
     const auto integration_second_started = begin_detailed_timing(state.timing_enabled);
     if (state.timing_enabled) {
@@ -1964,6 +2068,12 @@ void run_domain_segment(
           << (gpumd_compat::gpu_vector_allocation_count() - state.allocation_origin)
           << '\n';
   std::cout << summary.str();
+  if (state.overlap_mode != gpumd_compat::DomainOverlapMode::off) {
+    std::cout << "DMGMD_OVERLAP_SUMMARY rank=" << state.rank << " sequence=" << sequence
+      << " mode=" << gpumd_compat::overlap_name(state.overlap_mode) << " cumulative_calls=" << state.overlap_calls
+      << " cumulative_polls=" << state.overlap_polls << " cumulative_finish_ns=" << state.overlap_finish_ns
+      << " cumulative_finish_cpu_ns=" << state.overlap_cpu_ns << '\n';
+  }
   if (state.partition_mode != gpumd_compat::DomainPartitionMode::off) {
     std::cout << "DMGMD_PARTITION_SUMMARY rank=" << state.rank << " sequence=" << sequence
               << " cumulative_split_calls=" << nep.partition_split_calls
@@ -2005,6 +2115,8 @@ void run_local_domain(
   state.timing_enabled = detail::domain_timing_enabled();
   state.trace_enabled = detail::domain_trace_enabled();
   state.partition_mode = gpumd_compat::domain_partition_mode();
+  state.overlap_mode = gpumd_compat::domain_overlap_mode();
+  state.overlap_trace = std::getenv("DMGMD_OVERLAP_TRACE") && std::string(std::getenv("DMGMD_OVERLAP_TRACE")) == "1";
   if (state.partition_mode != gpumd_compat::DomainPartitionMode::off &&
       (state.detailed_logging || state.partition_mode == gpumd_compat::DomainPartitionMode::verify)) {
     potential->domain_partition_sink = [&state](const std::string& message) {

@@ -75,5 +75,5 @@ call0/1000 记录以 MPI 标准和测试脚本为准，实测通过声明只放 
 ## D-012：实验分区与生命周期不等于 overlap
 
 O2 分区默认 off，普通步按完整 Verlet 图闭包分配 producer/最终中心；O3 单槽位和显式
-request/event lease 保证物理完成。生产仍 begin 后立即 finish 再算 NEP，无 progress thread。
-合同见[分区](domain-partition.md)和[halo](halo-lifecycle.md)；O4/O5 尚在计划。
+request/event lease 保证物理完成。默认 begin 后立即 finish；O4 可显式在二者间提交独立 early，无 progress thread。
+合同见[分区](domain-partition.md)和[halo](halo-lifecycle.md)；O4 实现/验收见[报告](../status/validation/overlap-o4-20261016.md)，O5 正式矩阵仍在计划。

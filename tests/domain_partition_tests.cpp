@@ -61,6 +61,27 @@ int main() {
     rejected = false;
     try { ticket.late(); } catch (const std::logic_error&) { rejected = true; }
     require(rejected);
+    auto fails = [&](auto action) {
+      bool caught = false;
+      try { action(); } catch (const std::logic_error&) { caught = true; }
+      require(caught);
+    };
+    DomainForceTicket overlap{42, 8}; overlap.key = k;
+    overlap.validate(42, k);
+    fails([&] { overlap.validate(43, k); });
+    auto changed = k; ++changed.neighbor;
+    fails([&] { overlap.validate(42, changed); });
+    overlap.posted(91);
+    fails([&] { overlap.posted(92); });
+    overlap.early();
+    fails([&] { overlap.late(); });
+    fails([&] { overlap.halo_ready(90); });
+    overlap.halo_ready(91);
+    fails([&] { overlap.halo_ready(91); });
+    overlap.late(); overlap.finalize();
+    fails([&] { overlap.early(); });
+    fails([&] { overlap.finalize(); });
+    fails([&] { overlap.validate(42, k); });
     std::cout << "PASS partition graph: 6144 graph/prefix cases, auxiliary closure, invalid key, ticket\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

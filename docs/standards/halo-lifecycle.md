@@ -1,10 +1,11 @@
 # M2a halo 请求与缓冲区生命周期
 
-类别：现行通信接口合同。O3 保持原调用位置 begin 后立即 finish；无通信/NEP overlap，
+类别：现行通信接口合同。默认保持 O3 的 begin 后立即 finish；O4 显式启用时在二者间提交 early，
 无进度线程，默认 HostStaged、分区默认 off、粒子布局与通信半径均不变。
 实现入口是 `MpiRuntime::begin_p2p_indexed_device_soa`、`progress_halo`、`finish_halo`；
 旧 `exchange_p2p_indexed_device_soa` 是 begin/finish 包装。`refresh_ghost_positions`
-显式立即 finish，之后才发布 refreshed epoch/本步 halo-ready token。
+默认立即 finish；O4 回调在 prepare 后 begin，early 提交后 finish。两条路径均在物理 unpack 完成后
+才发布 refreshed epoch/本步 halo-ready token。
 
 ## 状态、所有权与复用
 
@@ -32,12 +33,13 @@ finish 对尚未确认的请求做一次四请求 Waitall，再等待 unpack eve
 缓冲区 capacity 只能在 begin 的任何 CUDA/MPI 使用之前增长。四个专用 p2p device/pinned
 buffer 带 lease；即使 reserve 未超过 capacity，在 lease 内也拒绝调用。lease 直到全部
 可复用条件满足才解除；重建期 host face exchange 同时使用方向 tag，因此在槽位活动时也
-拒绝。其他 collective 使用独立 staging；O3 调用点没有插入额外 collective 或计算。
+拒绝。其他 collective 使用独立 staging；O4 只在 post 后插入独立 early，不插入新的 collective。
 
 调用者必须保持 position、send-index/recv-slot device 数组、CommunicationVolume 和可选
 P2pTimingEvents 的地址/内容有效直到 finish；不得 resize/free/覆盖。begin 已完成 pack，
 但此合同仍保守锁定输入/映射直到 finish。runtime 的私有 staging 不向调用者暴露。
-当前调度一次 refresh 完成后才有下一次 refresh/rebuild/run，单槽位足够；没有跨步在途
+O4 还冻结 force 的 mask/Verlet/type/gid/workspace/box，owned position 只读；
+pack 不写 position，unpack 仅写 ghost，early 不读 ghost。当前调度一次 refresh 完成后才有下一次 refresh/rebuild/run，单槽位足够；没有跨步在途
 复用要求，因此没有双缓冲和第二份 payload 内存。
 
 ## 后端依赖依据与同步变化
@@ -106,3 +108,17 @@ D2H 括号含发送源 event 等待，MPI wait/post 语义保持。不得把新�
 独立测试二进制的链接 wrapper，生产没有故障开关。完整 O2 domain 三模式矩阵继续保留，
 同时比对已锁定 O2 输出；验收命令/结果/串行成本见
 [O3 实测](../status/validation/halo-lifecycle-20261015.md)。
+
+## O4 消费者与诊断
+
+首选同 stream 调度：prepare→begin（输入同步已完成）→clear/early→finish→late。
+`wait` 不显式 Testall；`poll` 在 early enqueue 后最多 8 次 progress，全部完成或收发均完成
+则提前结束，之后 finish。接收完成可排 H2D/unpack，但默认 stream 保证它们在 early 后；
+CudaAware output sync 保留。lease、单槽位、四个请求、方向 tag 与完成记账规则完全相同。
+异常仍整作业 abort，不在某 rank 自行退回 full 或释放在途资源。
+
+可选 `HaloTrace*` 只借用调用者存储，生命周期与 volume/timing 相同。记录 pack/source
+ready 的 host 观察、post 前后、send/recv 各自首次观察和 unpack 完成观察；均使用
+CLOCK_MONOTONIC。trace 关闭不读时钟。观察时间是完成的上界，不是 NIC 完成瞬间。
+独立 wrapper 延迟 post/完成用于状态验收，不能作为网络实际传输证据。O4 验收与 profiler
+重算入口见 [O4 报告](../status/validation/overlap-o4-20261016.md)。

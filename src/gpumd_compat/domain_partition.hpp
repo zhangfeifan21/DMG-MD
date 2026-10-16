@@ -6,9 +6,22 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <functional>
 
 namespace gpumd_compat {
 enum class DomainPartitionMode { off, serial, verify };
+enum class DomainOverlapMode { off, wait, poll };
+inline DomainOverlapMode domain_overlap_mode()
+{
+  const char* value = std::getenv("DMGMD_DOMAIN_OVERLAP");
+  const std::string mode = value ? value : "off";
+  if (mode == "off") return DomainOverlapMode::off;
+  if (mode == "wait") return DomainOverlapMode::wait;
+  if (mode == "poll") return DomainOverlapMode::poll;
+  throw std::invalid_argument("DMGMD_DOMAIN_OVERLAP must be off, wait or poll");
+}
+inline const char* overlap_name(DomainOverlapMode mode)
+{ return mode == DomainOverlapMode::off ? "off" : mode == DomainOverlapMode::wait ? "wait" : "poll"; }
 inline DomainPartitionMode domain_partition_mode()
 {
   const char* value = std::getenv("DMGMD_DOMAIN_PARTITION");
@@ -18,10 +31,19 @@ inline DomainPartitionMode domain_partition_mode()
   if (mode == "verify") return DomainPartitionMode::verify;
   throw std::invalid_argument("DMGMD_DOMAIN_PARTITION must be off, serial or verify");
 }
+struct DomainPartitionKey;
 struct DomainForceContext {
   DomainPartitionMode mode = DomainPartitionMode::off;
   bool ordinary = false;
   std::uint64_t step = 0, halo_ready_step = 0;
+  DomainOverlapMode overlap = DomainOverlapMode::off;
+  std::uint64_t mapping_epoch = 0;
+  // Owned-ready permits graph-only prepare. Only finish_halo publishes a
+  // physical halo-ready proof; begin alone never grants ghost access.
+  std::function<std::uint64_t()> begin_halo;
+  std::function<bool(std::uint64_t)> finish_halo;
+  std::function<void()> clear_outputs;
+  std::function<void(const char*, int, const DomainPartitionKey&, std::uint64_t)> observe;
 };
 
 struct DomainPartitionKey {
@@ -35,19 +57,40 @@ struct DomainPartitionKey {
   }
 };
 
-// O2's ticket is confined to one completed-halo force call. O3 must extend
-// it with request/buffer lifetimes before exposing begin/finish externally.
+// One compute owns this ticket. Owned-ready and halo-ready are distinct;
+// runtime owns the O3 slot, while this ticket freezes the force generations.
 struct DomainForceTicket {
   std::uint64_t step;
   int call;
   bool early_done = false, late_done = false;
+  DomainPartitionKey key{};
+  std::uint64_t halo = 0;
+  bool ready = false, finalized = false;
+  void validate(std::uint64_t current_step, const DomainPartitionKey& current) const {
+    if (finalized || current_step != step || !(key == current))
+      throw std::logic_error("stale partition force ticket");
+  }
+  void posted(std::uint64_t generation) {
+    if (!generation || halo || early_done || late_done || finalized)
+      throw std::logic_error("invalid partition halo generation");
+    halo = generation;
+  }
+  void halo_ready(std::uint64_t generation) {
+    if (!halo || generation != halo || ready || finalized)
+      throw std::logic_error("stale/duplicate partition halo-ready token");
+    ready = true;
+  }
   void early() {
-    if (early_done || late_done) throw std::logic_error("duplicate partition early");
+    if (early_done || late_done || finalized) throw std::logic_error("duplicate partition early");
     early_done = true;
   }
   void late() {
-    if (!early_done || late_done) throw std::logic_error("invalid partition late");
+    if (!early_done || late_done || finalized || (halo && !ready)) throw std::logic_error("invalid partition late");
     late_done = true;
+  }
+  void finalize() {
+    if (!late_done || finalized) throw std::logic_error("invalid partition finalize");
+    finalized = true;
   }
 };
 

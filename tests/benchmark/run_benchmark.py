@@ -216,6 +216,20 @@ def actual_dmgmd_profiling(text, requested):
             'step_trace_rows': len(trace), 'timing_summary_rows': len(timing)}
 
 
+def actual_dmgmd_overlap(text, requested):
+    configs = [fields(line) for line in text.splitlines() if line.startswith('DMGMD_OVERLAP_CONFIG ')]
+    if len(configs) != 1 or configs[0].get('mode') != requested:
+        raise ValueError('runtime overlap mode differs from requested configuration')
+    latest = {}
+    for line in text.splitlines():
+        if line.startswith('DMGMD_OVERLAP_SUMMARY '):
+            row = fields(line)
+            latest[int(row['rank'])] = row
+    return {'mode': requested, 'ranks': latest,
+            'calls': sum(int(r['cumulative_calls']) for r in latest.values()),
+            'polls': sum(int(r['cumulative_polls']) for r in latest.values())}
+
+
 def actual_dmgmd_partition(text, requested):
     configs = [fields(line) for line in text.splitlines() if line.startswith('DMGMD_PARTITION_CONFIG ')]
     summaries = [fields(line) for line in text.splitlines() if line.startswith('DMGMD_PARTITION_SUMMARY ')]
@@ -488,7 +502,9 @@ def main():
     p.add_argument('--mpiexec', default='mpiexec')
     p.add_argument('--mpiexec-arg', action='append', default=[])
     p.add_argument('--dmgmd-partition', choices=('off', 'serial'), default='off',
-                   help='O2 completed-halo serial partition; explicitly passed and verified, no overlap')
+                   help='O2 partition selection; completed-halo serial unless --dmgmd-overlap is enabled')
+    p.add_argument('--dmgmd-overlap', choices=('off', 'wait', 'poll'), default='off')
+    p.add_argument('--overlap-trace', action='store_true', help='separate O4 CUDA event diagnostics')
     p.add_argument('--dmgmd-profiling', default='off',
                    help='comma-separated DMG-MD modes: off,trace; trace enables detailed timing '
                         'and per-step CLOCK_MONOTONIC timeline (M2a ranks > 1 only)')
@@ -528,6 +544,10 @@ def main():
     if args.expected_cores_per_rank is not None and (args.cpu_sampling != 'proc' or
             args.expected_cores_per_rank <= 0 or args.expected_numa_node < 0):
         p.error('fixed affinity verification requires --cpu-sampling proc and valid core/NUMA counts')
+    if args.dmgmd_overlap != 'off' and args.dmgmd_partition == 'off':
+        p.error('--dmgmd-overlap requires --dmgmd-partition serial')
+    if args.overlap_trace and args.dmgmd_overlap == 'off':
+        p.error('--overlap-trace requires --dmgmd-overlap')
     cpu_options = dict(mode=args.cpu_sampling, interval=args.cpu_sample_interval,
                        output=str(args.cpu_output.resolve()) if args.cpu_output else 'TRIAL/cpu',
                        diagnostics=args.cpu_diagnostics, capacity_scope=args.cpu_capacity_scope,
@@ -584,11 +604,14 @@ def main():
     if args.dry_run:
         print(json.dumps({'profile': profile, 'trials': trials, 'cpu_sampling': cpu_options,
                           'dmgmd_profiling': profiling, 'dmgmd_partition': args.dmgmd_partition,
+                          'dmgmd_overlap': args.dmgmd_overlap, 'overlap_trace': args.overlap_trace,
                           'dmgmd_launch_environment': {
                               mode: {'DMGMD_DOMAIN_TIMING': str(int(mode == 'trace')),
                                      'DMGMD_DOMAIN_TRACE': str(int(mode == 'trace')),
                                      'DMGMD_DOMAIN_DIAGNOSTICS': '0',
-                                     'DMGMD_DOMAIN_PARTITION': args.dmgmd_partition} for mode in profiling},
+                                     'DMGMD_DOMAIN_PARTITION': args.dmgmd_partition,
+                                     'DMGMD_DOMAIN_OVERLAP': args.dmgmd_overlap,
+                                     'DMGMD_OVERLAP_TRACE': str(int(args.overlap_trace))} for mode in profiling},
                           'mpiexec_args': args.mpiexec_arg}, indent=2))
         return 0
     output = create_output_directory(args.output)
@@ -601,7 +624,8 @@ def main():
     save(output / 'initial-gpus.json', snap)
     metadata = {'schema_version': 1, 'profile_name': args.profile, 'profile': profile,
                 'hostname': socket.gethostname(), 'argv': sys.argv, 'devices': selected,
-                'dmgmd_profiling': profiling, 'dmgmd_partition': args.dmgmd_partition, 'mpiexec_args': args.mpiexec_arg,
+                'dmgmd_profiling': profiling, 'dmgmd_partition': args.dmgmd_partition,
+                          'dmgmd_overlap': args.dmgmd_overlap, 'overlap_trace': args.overlap_trace, 'mpiexec_args': args.mpiexec_arg,
                 'binaries': identity, 'manifest': manifest, 'plan': trials,
                 'environment': {k: v for k, v in os.environ.items()
                                 if k.startswith(('CUDA_', 'OMPI_', 'UCX_', 'PMIX_', 'DMGMD_', 'OMP_'))
@@ -704,6 +728,8 @@ def main():
                     detailed = job['profiling'] == 'trace'
                     environment.update(DMGMD_COMM_BACKEND=job['backend'],
                                        DMGMD_DOMAIN_PARTITION=args.dmgmd_partition,
+                                       DMGMD_DOMAIN_OVERLAP=args.dmgmd_overlap,
+                                       DMGMD_OVERLAP_TRACE=str(int(args.overlap_trace)),
                                        DMGMD_DOMAIN_TIMING=str(int(detailed)),
                                        DMGMD_DOMAIN_TRACE=str(int(detailed)),
                                        DMGMD_DOMAIN_DIAGNOSTICS='0',
@@ -754,6 +780,7 @@ def main():
                     result['actual_profiling'] = actual_dmgmd_profiling(
                         (directory / 'stdout.txt').read_text(), job['profiling'])
                 if job['engine'] == 'dmgmd':
+                    result['actual_overlap'] = actual_dmgmd_overlap((directory / 'stdout.txt').read_text(), args.dmgmd_overlap)
                     result['actual_partition'] = actual_dmgmd_partition(
                         (directory / 'stdout.txt').read_text(), args.dmgmd_partition)
                 if job['engine'] == 'lammps':

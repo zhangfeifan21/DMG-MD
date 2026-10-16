@@ -58,3 +58,10 @@ target_link_libraries(dmgmd_mpi_halo_lifecycle_tests PRIVATE dmgmd_runtime)
 target_link_options(dmgmd_mpi_halo_lifecycle_tests PRIVATE
   -Wl,--wrap=MPI_Isend -Wl,--wrap=MPI_Waitall -Wl,--wrap=MPI_Testall
   -Wl,--wrap=cudaEventSynchronize -Wl,--wrap=cudaMemcpyAsync)
+
+# Same production runtime/main, with test-only controlled MPI completion delay.
+add_executable(dmgmd_overlap_schedule_tests ../src/dmgmd_main.cpp overlap_schedule_wrappers.cpp)
+target_link_libraries(dmgmd_overlap_schedule_tests PRIVATE dmgmd_runtime)
+target_link_options(dmgmd_overlap_schedule_tests PRIVATE
+  -Wl,--wrap=MPI_Isend -Wl,--wrap=MPI_Irecv -Wl,--wrap=MPI_Waitall
+  -Wl,--wrap=cudaEventCreate -Wl,--wrap=cudaEventRecord)

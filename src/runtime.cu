@@ -1288,6 +1288,18 @@ void run_replicated(
 
   const auto partition_mode = gpumd_compat::domain_partition_mode();
   mpi.assert_same_fingerprint(static_cast<int>(partition_mode), "domain partition mode");
+  const auto overlap_mode = gpumd_compat::domain_overlap_mode();
+  mpi.assert_same_fingerprint(static_cast<int>(overlap_mode), "domain overlap mode");
+  if (overlap_mode != gpumd_compat::DomainOverlapMode::off && partition_mode == gpumd_compat::DomainPartitionMode::off)
+    throw std::invalid_argument("DMGMD_DOMAIN_OVERLAP requires DMGMD_DOMAIN_PARTITION=serial or verify");
+  const char* trace_value = std::getenv("DMGMD_OVERLAP_TRACE");
+  const std::string overlap_trace = trace_value ? trace_value : "0";
+  if (overlap_trace != "0" && overlap_trace != "1") throw std::invalid_argument("DMGMD_OVERLAP_TRACE must be 0 or 1");
+  mpi.assert_same_fingerprint(overlap_trace == "1", "overlap trace mode");
+  if (overlap_trace == "1" && overlap_mode == gpumd_compat::DomainOverlapMode::off)
+    throw std::invalid_argument("DMGMD_OVERLAP_TRACE requires overlap mode");
+  if (mpi.is_root()) std::cout << "DMGMD_OVERLAP_CONFIG mode=" << gpumd_compat::overlap_name(overlap_mode)
+    << " trace=" << overlap_trace << " poll_limit=8 stream=default\n";
   DomainEligibility eligibility;
   {
     const auto& params = potential->params();

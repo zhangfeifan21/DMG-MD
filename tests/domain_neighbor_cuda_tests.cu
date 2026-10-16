@@ -227,6 +227,34 @@ void check_partition_force_preconditions()
     gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
     {gpumd_compat::DomainPartitionMode::verify, true, 1, 1});
   require(nep.partition_split_calls == 1, "force precondition test must actually split");
+  gpumd_compat::DomainForceContext overlap{gpumd_compat::DomainPartitionMode::serial, true, 2, 0};
+  overlap.overlap = gpumd_compat::DomainOverlapMode::wait;
+  overlap.mapping_epoch = 7;
+  int clears = 0, finishes = 0;
+  overlap.begin_halo = [] { return 37; };
+  overlap.clear_outputs = [&] { ++clears; pe.fill(0); force.fill(0); virial.fill(0); };
+  overlap.finish_halo = [&](std::uint64_t generation) {
+    require(generation == 37, "force bound wrong halo generation");
+    ++finishes; require(cudaDeviceSynchronize() == cudaSuccess, "complete early CUDA"); return true;
+  };
+  nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+    gpumd_compat::DomainNeighborAction::confirmed_reuse, 7, overlap);
+  require(clears == 1 && finishes == 1 && nep.partition_split_calls == 2, "owned-ready early did not execute");
+  overlap.finish_halo = [](std::uint64_t) { return false; };
+  rejected = false;
+  try {
+    nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+      gpumd_compat::DomainNeighborAction::confirmed_reuse, 7, overlap);
+  } catch (const std::logic_error&) { rejected = true; }
+  require(rejected, "late consumed an uncompleted halo");
+  require(cudaDeviceSynchronize() == cudaSuccess, "complete early CUDA");
+  overlap.begin_halo = [&]() -> std::uint64_t { nep.allocate_workspace(L); return 38; };
+  rejected = false;
+  try {
+    nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
+      gpumd_compat::DomainNeighborAction::confirmed_reuse, 7, overlap);
+  } catch (const std::logic_error&) { rejected = true; }
+  require(rejected, "force lease allowed workspace invalidation");
   box.cpu_h[0] += 1; box.get_inverse(); box.set_is_orthogonal();
   rejected = false;
   try {

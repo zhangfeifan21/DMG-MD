@@ -379,3 +379,14 @@ A=off、B=proc，同输入、GPU telemetry 与绑定，随机化组序、至少�
 serial 仍先完成 halo，再分区串行运行；它没有 overlap。正式成本比较使用相同输入与
 CPU/NUMA/GPU、关闭详细 profiler，另用 trace 组诊断，禁止用 verify 的双计算测速度。
 O2 原始成本样本与限制见 [状态](../../docs/status/validation/overlap-partition-20261015.md)。
+
+## O4 小规模检查
+
+`--dmgmd-overlap off|wait|poll` 默认 off，wait/poll 要求 `--dmgmd-partition serial`。
+runner 显式传递/保存开关，并检查实际 CONFIG 和 SUMMARY，结果包含 actual_overlap。
+`--overlap-trace` 单独启用 O4 CUDA event/host 观察；主墙钟比较应关闭此选项及详细 profiler。
+wait 是 early 后 finish；poll 最多 8 次 progress 后 finish，无 progress thread。
+
+O4 只做固定 GPU UUID/CPU 物理核/NUMA、同 binary/input/seed 的小样本 full/serial/wait/poll
+比较，不等于 O5 正式性能矩阵。程序的 finish wall/线程 CPU 包含剩余 MPI、可见性、early
+和 unpack 等待；C1 的 process_observed 还包含启动与退出，不能相互代替。

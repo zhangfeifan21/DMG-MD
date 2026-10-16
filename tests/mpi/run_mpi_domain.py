@@ -413,7 +413,13 @@ def execute(
     partition_mode: str = "off",
 ) -> Dict[str, Any]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("DMGMD_")}
+    requested_mode = partition_mode
+    overlap = "off"
+    if partition_mode in ("overlap-wait", "overlap-poll", "verify-wait", "verify-poll"):
+        partition_mode, overlap = ("verify" if partition_mode.startswith("verify") else "serial"), partition_mode.split("-")[1]
     env["DMGMD_DOMAIN_PARTITION"] = partition_mode
+    env["DMGMD_DOMAIN_OVERLAP"] = overlap
+    env["DMGMD_OVERLAP_TRACE"] = "0"
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices[:ranks])
     env["DMGMD_COMM_BACKEND"] = backend
@@ -438,6 +444,9 @@ def execute(
         text=True,
         timeout=timeout,
     )
+    configs = [key_values(line) for line in completed.stdout.splitlines() if line.startswith("DMGMD_OVERLAP_CONFIG ")]
+    if completed.returncode == 0 and (len(configs) != 1 or configs[0].get("mode") != overlap):
+        raise baseline.BaselineError(f"{requested_mode}: actual overlap configuration mismatch")
     (stage_dir / "execution.stdout").write_text(completed.stdout, encoding="utf-8")
     (stage_dir / "execution.stderr").write_text(completed.stderr, encoding="utf-8")
     return {
@@ -1083,13 +1092,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", type=comma_list, help="limit main domain cases; common P1/fallback/timing gates still run")
     parser.add_argument("--work-root", type=Path, help="retain raw inputs, launch environment and outputs here (must be new)")
     parser.add_argument("--partition-modes", type=comma_list, default=["off"],
-                        help="explicit off,serial,verify matrix; verify uses same-snapshot full oracle and ghost poison")
+                        help="explicit off,serial,verify,overlap-wait,overlap-poll,verify-wait,verify-poll matrix; verify uses same-snapshot full oracle and ghost poison")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if set(args.partition_modes) - {"off", "serial", "verify"}:
+    if set(args.partition_modes) - {"off", "serial", "verify", "overlap-wait", "overlap-poll", "verify-wait", "verify-poll"}:
         raise baseline.BaselineError("partition modes must be off,serial,verify")
     executable = args.candidate.resolve()
     if not executable.is_file() or not os.access(executable, os.X_OK):
@@ -1262,7 +1271,16 @@ def main() -> int:
                 fields = line.split(); fields[1] = str(float(fields[1]) + dx)
                 atoms.append(" ".join(fields))
         variant.model = model_from_atoms(atoms); variant.natoms = len(atoms)
-    variant_cases = [nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, aux, skin, rebuild_only, migrate]
+    nvt_model = model_from_atoms([
+        f"C {x} {y} 12 {0.01 if index % 2 else -0.01} 0.002 -0.001"
+        for index, (y, x) in enumerate((y, x) for y, xs in ((12, (17,23,29,35)), (2, (49,55,61,3))) for x in xs)])
+    nvt = DomainCase("partition_nvt", nvt_model,
+        "potential nep.txt\ntime_step 0.001\nensemble nvt_ber 300 300 1000\ncorrect_velocity 10\n"
+        "dump_thermo 1\ndump_xyz 1 static.xyz precision double velocity force potential virial\n"
+        "dump_restart 3\nrun 12\n", ["static.xyz"],
+        ["thermo.out", "static.xyz", "restart.xyz", "neighbor.out"], 8,
+        correction_interval=10, restart_interval=3)
+    variant_cases = [nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, aux, skin, rebuild_only, migrate, nvt]
 
     work_root = args.work_root.resolve() if args.work_root else Path(tempfile.mkdtemp(prefix="dmgmd-domain-"))
     if args.work_root:
@@ -1435,10 +1453,19 @@ def main() -> int:
                             if not records:
                                 raise baseline.BaselineError("requested partition mode not observed")
                             split = [r for r in records if r["mode"] == "split"]
-                            if case in (aux, nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, skin, rebuild_only, migrate) and not split:
+                            if case in (aux, nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, skin, rebuild_only, migrate, nvt) and not split:
                                 raise baseline.BaselineError(f"{case.name}: no real split ordinary step")
-                            if mode == "verify" and any(r.get("oracle") != "bitwise" or r.get("poison") != "passed" for r in split):
+                            if mode.startswith("verify") and any(r.get("oracle") != "bitwise" or r.get("poison") != "passed" for r in split):
                                 raise baseline.BaselineError("split oracle/poison not exercised")
+                            if "-" in mode and split:
+                                schedule = mode.split("-")[1]
+                                if any(r.get("overlap") != schedule or int(r.get("halo_generation", 0)) <= 0 for r in split):
+                                    raise baseline.BaselineError("split did not actually overlap")
+                                summaries = [key_values(line) for line in execution["stdout"].splitlines() if line.startswith("DMGMD_OVERLAP_SUMMARY ")]
+                                if not summaries or not any(int(r["cumulative_calls"]) for r in summaries):
+                                    raise baseline.BaselineError("no actual early during halo")
+                                if schedule == "poll" and not any(int(r["cumulative_polls"]) for r in summaries):
+                                    raise baseline.BaselineError("progress not exercised")
                             if case is aux and not any(int(r["owned"]) > int(r["interior"]) and int(r["early"]) > int(r["interior"]) for r in split):
                                 raise baseline.BaselineError("missing boundary auxiliary E\\I witness")
                             if case is skin:

@@ -100,6 +100,14 @@ struct PartitionSnapshot {
       lr(partition_download(d.NL_radial)), la(partition_download(d.NL_angular)),
       fp(partition_download(d.Fp)), sums(partition_download(d.sum_fxyz)),
       px(partition_download(d.f12x)), py(partition_download(d.f12y)), pz(partition_download(d.f12z)) {}
+  void restore(NEP_Data& d, GPU_Vector<double>& energy, GPU_Vector<double>& f,
+               GPU_Vector<double>& v) const {
+    energy.copy_from_host(pe.data()); f.copy_from_host(force.data()); v.copy_from_host(virial.data());
+    d.NN_radial.copy_from_host(nr.data()); d.NN_angular.copy_from_host(na.data());
+    d.NL_radial.copy_from_host(lr.data()); d.NL_angular.copy_from_host(la.data());
+    d.Fp.copy_from_host(fp.data()); d.sum_fxyz.copy_from_host(sums.data());
+    d.f12x.copy_from_host(px.data()); d.f12y.copy_from_host(py.data()); d.f12z.copy_from_host(pz.data());
+  }
 };
 
 inline void verify_partition_products(const PartitionSnapshot& want, const NEP_Data& d,

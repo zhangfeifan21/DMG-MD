@@ -1,10 +1,10 @@
 # 通信与计算重叠
 
-类别：分阶段实施计划。状态：**IN PROGRESS**（O1–O3 完成；O4/O5 未执行）。
+类别：分阶段实施计划。状态：**IN PROGRESS**（O1–O4 完成；O5 未执行）。
 优先级：P0。更新日期：2026-10-16。
 
-目标是只在 M2a 普通步将 halo 与严格独立的 interior NEP 计算重叠。当前生产仍为
-begin→立即 finish→NEP；非阻塞 API 本身不构成 overlap。
+目标是只在 M2a 普通步将 halo 与严格独立的 interior NEP 计算重叠。默认生产仍为 begin→立即 finish→NEP；O4 已接入独立 early，
+验收状态见[报告](../status/validation/overlap-o4-20261016.md)。非阻塞 API 本身不构成 overlap。
 
 ## 已完成基础
 
@@ -15,47 +15,19 @@ begin→立即 finish→NEP；非阻塞 API 本身不构成 overlap。
 | O2 串行分区 | [192 组数值矩阵、oracle 与约 29–30% 本机额外成本](../status/validation/overlap-partition-20261015.md)；默认 off |
 | O3 halo 生命周期 | [单槽位、收发独立完成、物理 unpack 与错误合同](../standards/halo-lifecycle.md)；[68 作业验收与串行成本](../status/validation/halo-lifecycle-20261015.md) |
 
-O2 方向于 2026-10-15 获维护者确认，O3 随后单独授权；这不自动授权 O4、M2b、半径或数学修改。
+O2 方向于 2026-10-15 获维护者确认，O3 随后单独授权；维护者于 2026-10-16 另行明确授权 O4 的接口、实现、测试和文档；不含 M2b、半径或数学修改。
 已完成阶段的旧接口草案、逐轮提示词与审计过程由 Git 保存，现行合同不在计划重复维护。
 
-## O4：普通步实际 overlap
+## O4：已完成
 
-在默认关闭的实验开关下，扩展当前只接受 halo-ready 的 force 接口，使以下日程有明确状态证明：
-
-```text
-VV1/wrap + 全局 confirmed_reuse
-→ begin halo（pack/发送源就绪后 post）
-→ clear 输出一次；early(E producers, I final force)
-→ finish halo / unpack 完成
-→ late(H producers, B final force)
-→ force 完成 → VV2 / thermo / output
-```
-
-I/E/H/B 沿用分区标准的完整旧 Verlet 图闭包，不用几何单 cutoff 或本步 R/A 扩大 interior。
-E 可含最终 boundary 的辅助中心；late 不得重算其 descriptor PE 或清掉 early 结果。
-重建/迁移、段首 force、空 interior、P1/M1 与未证明模型保持同步 full 路径，记录原因。
-
-首轮依赖约束：
-
-- owned position 在 VV1/wrap 后只读，pack 写独立 send；early 不读 ghost，unpack 只写 ghost。
-- MPI 完成前不复用 send/recv，物理 unpack 完成前不消费 ghost，early 完成前不执行 late。
-  mask、Verlet、map、workspace/view 与 step token 在整个 force 生命周期冻结。
-- CudaAware input device sync 在 early 提交前完成；output sync 不得在无可见性证明时删除。
-  HostStaged 的 D2H/H2D 事件沿用 O3。默认 stream 排序对交叠程度的限制须实测。
-- MPI 仍由初始化线程 FUNNELED 调用。比较有限的 Waitall/Testall 调度，记录轮询次数与 CPU
-  成本；不增加 progress thread、不假设后台进度。若引入新 stream，另列 event wait 与读写证明。
-- 实验开关须由 runner 显式白名单传递、保存 launch_environment，并由程序实际模式核验；
-  不依赖父 shell export。request 出错按 O3 终止作业，不做不对称 collective 回退。
-
-验收保留未分区 full 与 split-serial oracle，覆盖 P2/4、两后端、P2 同 peer、两跳/skin/周期
-链、E\I、空 rank/local/interior、重建/迁移、多 run、NEP5/typewise/ZBL、修速/NVT/输出/restart
-及 force call 0/1000。核对逐原子 energy/force/9 virial、有效中间量、字节和唯一写入，
-再执行 baseline、MPI 与适用 long_nve；不改 golden 或放宽容差。延迟/progress 调度须实际
-触发，不能用全 fallback 代替启用路径。环境门槛按 AGENTS 和测试 README 顺序执行。
-
-trace 至少给出 rank/step/key、owned-ready、pack-ready、post、send/recv completion、
-unpack-done、early/late、force-done，并明确 host 时钟与 device event 如何关联。
-需可复核交叠证据；没有收益也如实交付，不默认启用。
+2026-10-16 在本轮授权范围内完成默认关闭的普通步实际 overlap：prepare→begin→early
+→finish→late；wait 与最多 8 次 progress 的 poll 均已验证。现行接口/缓存/顺序见
+[分区标准](../standards/domain-partition.md)和[halo 标准](../standards/halo-lifecycle.md)，
+正确性、受控延迟、正常路径 profiler 与具体身份见
+[O4 验收](../status/validation/overlap-o4-20261016.md)。
+固定资源小样本表明仍慢于 full，保持默认关闭；本次窄成本检查见
+[实测](../status/performance/communication-computation-overlap-results-20261016.md)，不等于 O5。
+已完成实施步骤迁入标准与状态，以下只保留 O5。
 
 ## O5：成本归因与采用决策
 
@@ -88,5 +60,4 @@ trial/trace/CPU 数据、revision/dirty patch、binary/input hashes 和重算命
 ## 范围与推进边界
 
 首轮不做 M2b、3D、halo 半径变化、NEP 数学重写、progress thread 或跨步流水。
-O4 前先准备具体接口/依赖与 golden 方案，按 AGENTS 的适用边界确认方向；不重复申请已获
-O2/O3 授权。多 GPU 正式实验串行调度，保存 PASS/FAIL/PARTIAL 与未跑项。
+O4 接口/依赖与 golden 方案已完成并验收；后续突破边界仍按 AGENTS 的适用规则确认方向。多 GPU 正式实验串行调度，保存 PASS/FAIL/PARTIAL 与未跑项。

@@ -12,7 +12,7 @@ DMGMD_DOMAIN mode=m2a|m1-fallback axis=x|y|z|none d_dep=... d_coord=... reason=.
 ```
 
 布局由[data-layout](data-layout.md)定义，NEP 依赖证据在[kernel 清单](../reference/kernel-inventory.md)。
-当前没有实际 overlap；O2 串行分区默认 off，O3 halo 原位置立即 finish。
+O2 分区与 O4 overlap 均默认 off；显式 O4 普通步在 O3 begin/finish 之间提交独立 early。
 
 ## M1 空间所有权
 
@@ -180,7 +180,7 @@ bootstrap 新 epoch。
 ### 通信后端与字节口径
 
 O3 的 begin/progress/finish、单槽位、FUNNELED、请求/事件完成与错误合同见
-[halo 生命周期](halo-lifecycle.md)。生产仍立即 finish，无实际 overlap。两后端 payload
+[halo 生命周期](halo-lifecycle.md)。默认立即 finish；O4 可显式在二者间提交 early。两后端 payload
 与请求数量不变；finish 现在等待物理 unpack 完成才释放槽位。
 
 `HostStaged` 与 `CudaAware` 都为 p2p 扩展了同一 tag 方案（左右方向独立 tag 与
@@ -254,4 +254,16 @@ D2H/段末同步提供先后及就绪边界，无法从这些字段给设备事�
 完整 runner 覆盖和比较原则只在[Golden Test](golden-test-standard.md)维护，CLI 见
 [MPI README](../../tests/mpi/README.md)；已执行结果见[当前状态](../status/current.md)。
 [O2 分区](domain-partition.md)保持 L stride、半径和每中心顺序；先完成 halo 后串行执行。
-M2b、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)，实际 overlap 见[O4/O5](../plans/communication-computation-overlap.md)。
+M2b、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)，O5 正式性能矩阵见[剩余计划](../plans/communication-computation-overlap.md)。
+
+## O4 默认关闭的普通步重叠
+
+`DMGMD_DOMAIN_OVERLAP=off|wait|poll` 默认为 off；启用要求
+`DMGMD_DOMAIN_PARTITION=serial|verify`。模式与 `DMGMD_OVERLAP_TRACE=0|1` 全 rank 一致，
+非法配置整作业拒绝。启动时为 overlap/trace 一致性各执行 MIN/MAX fingerprint，
+共新增四次标量 Allreduce；不进入逐步通信量账本，force/halo 不增加 collective。只在已证明模型、M2a 普通 confirmed-reuse 且 I 非空时，将 E/I
+计算放在 begin 与 finish 之间。其他路径同步 full，诊断记录 reason。
+同一默认 stream、FUNNELED、原 halo/tag/字节及独立收发完成合同不变；所有 rank 在
+neighbor sink、thermo/output collective 前 finish，混合 full/overlap 顺序一致。
+接口/缓存/诊断细则见[分区](domain-partition.md)与[halo](halo-lifecycle.md)，实测范围见
+[O4 验收](../status/validation/overlap-o4-20261016.md)。不含 M2b、progress thread 或 O5。

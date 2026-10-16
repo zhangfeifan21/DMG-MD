@@ -222,6 +222,7 @@ private:
   Neighbor neighbor;
   DomainPartition partition_;
   std::uint64_t workspace_generation_ = 0;
+  bool domain_force_active_ = false;
 
   void update_potential(float* parameters, ANN& ann);
 
