@@ -9,7 +9,7 @@ Docker/构建检查改动（未提交）；GPUMD reference checkout 未修改。
   Python 3.12.3、CUDA 12.9.86、Open MPI 5.0.10、UCX 1.22.0。
 - 独立编译检查：同一主机另装的 CUDA 12.8.61（12.8 GA），G++ 11，全部五种默认 GPU 架构。
 - Docker 目标依赖：Ubuntu 22.04、CUDA 12.8.0、GCC 11、CMake 3.28.4、Open MPI 5.0.10、
-  UCX 1.18.1；选择依据和部署边界见 [README](../../README.md#docker-部署推荐跨服务器使用)。
+  UCX 1.18.1；选择依据和部署边界见 [README](../../../README.md#docker-部署推荐跨服务器使用)。
 
 | 检查 | 结果 | 能证明的范围 |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ cmake -S . -B /tmp/dmgmd-mixed-cuda-negative \
 
 该命令预期失败，实际输出 `CUDA compiler/toolkit must come from CUDA_HOME`。
 
-## 未完成的容器验收
+## 当次未完成的容器验收
 
 沙箱外 `docker version` 显示客户端 24.0.9，但连接 `/var/run/docker.sock` 返回
 `permission denied`；`sudo -n docker version` 返回 `a password is required`。
@@ -118,3 +118,6 @@ CTest 后留下这个文件，内容是第二个解析器测试的 `dftd3` 命�
 `cmake --build build --target dmgmd_run_parser_tests -j4` 和
 `ctest --test-dir build --output-on-failure -R '^dmgmd.run_parser$'`，结果通过；同一不可写
 旧文件仍存在时，新测试也通过且没有留下新文件。用户的镜像仍需同步源码、重新构建后验收。
+
+后续另一台服务器的容器 benchmark 数据见[2026-09-26 报告](../performance/benchmark-multigpu-results-20260926.md)。
+它不补足本记录的 T4/Ubuntu22.04 宿主或完整当前镜像验收。

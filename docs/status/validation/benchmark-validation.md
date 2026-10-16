@@ -41,7 +41,7 @@ python3 tests/benchmark/run_benchmark.py --profile smoke --devices 2 --ranks 1 \
 ```
 
 GPUMD、DMG-MD HostStaged、DMG-MD CudaAware 三项均 status=ok；每项预热 2 步、测量 5 步。
-首次冒烟发现 thermo 注释头解析问题，修复后以上命令重跑通过。
+以上为 thermo 注释头解析修复后的最终重跑。
 
 1,048,576 原子容量与长一些的监测验证：
 
@@ -51,18 +51,19 @@ python3 tests/benchmark/run_benchmark.py --profile pilot --cases carbon_1m \
   --output /tmp/dmgmd-benchmark-million-final-20260922 --timeout 300
 ```
 
-三项均 status=ok，最终 thermo 有限。此前试运行发现 Open MPI rank 自建进程组会被误判为外来
-任务，改为 `/proc` 父子关系追踪，并补充独立 session 子进程清理测试；以上 final 命令验证修复。
+三项均 status=ok，最终 thermo 有限。本次修复以 /proc ancestry 追踪 Open MPI 自建 session，并以独立 session 清理测试及上述 final 命令验证。
 正式计时数据完整，但预热短、只有一次重复，不能作为可靠的两引擎性能排名。
 
 本地日志副本（生成物已被 `.gitignore` 排除，未复制大模型；完整原始目录保留于上述 `/tmp`）：
 
-- [单卡 smoke 汇总](../../dmgmd-benchmark-validation-20260922/smoke/summary.md)
-- [百万原子单卡汇总](../../dmgmd-benchmark-validation-20260922/million/summary.md)
+- 单卡 smoke 汇总：`dmgmd-benchmark-validation-20260922/smoke/summary.md`
+- 百万原子汇总：`dmgmd-benchmark-validation-20260922/million/summary.md`
 - 对应目录含 metadata/二进制与输入哈希、原始 stdout/stderr、telemetry、JSON/CSV；源码生成器
   hash 以各次 metadata 为准，较早 smoke 的脚本版本先于 MPI 监测修复。
 
-## 尚未验证的边界
+上述两个本地日志副本在本次文档核对时已不在工作区，路径仅作历史定位，不能当作当前可读取证据。
+
+## 当次未验证的边界
 
 - 未执行真正 2/4/8 卡 benchmark、完整 standard/capacity 矩阵，也未验证 3–5 百万原子在
   4090 上一定能放入显存。矩阵已定义和脚本单卡通过不等于多卡性能已通过。
@@ -71,4 +72,6 @@ python3 tests/benchmark/run_benchmark.py --profile pilot --cases carbon_1m \
 - 未重跑生产数值 GPU 矩阵，因为本次没有修改物理/runtime；正式发布性能时仍应关联当前
   正确性验收记录。
 
-后续按 [benchmark 操作说明](../../tests/benchmark/README.md) 先独占设备 smoke/pilot，再正式测量。
+后续按 [benchmark 操作说明](../../../tests/benchmark/README.md) 先独占设备 smoke/pilot，再正式测量。
+
+后续单机 1/2/4/8 GPU 结果见[2026-09-26 记录](../performance/benchmark-multigpu-results-20260926.md)，不归入本次单卡验收。

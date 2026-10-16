@@ -112,7 +112,7 @@ struct ThermoState {
 using Measurement = std::variant<DumpThermoCommand, DumpXyzCommand, DumpRestartCommand>;
 
 // ---------------------------------------------------------------------------
-// Rank I/O isolation (docs/standards/replicated-mpi.md "I/O 与
+// Rank I/O isolation (docs/standards/mpi-runtime.md "I/O 与
 // NEP_MULTIGPU"). Shared verbatim by both runtimes: only world rank 0 may
 // write the job directory, every other rank works inside a private local
 // scratch because legacy NEP opens neighbor.out by relative name.

@@ -1,11 +1,11 @@
 # 多节点 rank I/O 隔离验收计划
 
-类别：待实施计划。状态说明：该验收暂缓，不进入当前优先队列。
+类别：待实施计划。状态：**PROPOSED（暂缓）**。
 
-状态：**PROPOSED（当前暂缓，维护者决定于 2026-10-08）**。物理双节点验收暂缓；
+维护者于 2026-10-08 暂缓物理双节点验收；
 2026-10-09 的当前 P0 为固定 MPI CPU 绑定、LAMMPS 对比和通信计算重叠，详见
-[优先级登记](./risk-and-backlog.md#当前开发优先级2026-10-09)。恢复时按本文关闭条件执行。生产合同位于
-[replicated-mpi.md](../standards/replicated-mpi.md) 的“I/O 与 NEP_MULTIGPU”一节；本文件只
+[优先级登记](risk-and-backlog.md#当前开发优先级)。恢复时按本文关闭条件执行。生产合同位于
+[MPI runtime](../standards/mpi-runtime.md) 的“I/O 与 NEP_MULTIGPU”一节；本文件只
 保留尚未完成的双物理节点验收，不把工作区实现或已定义测试写成已通过结论。R28 在本计划的
 关闭条件全部满足前保持打开。
 
@@ -25,6 +25,7 @@
 
 ## 关闭条件
 
-- 在 `docs/status/current.md` 记录日期、最终提交 revision、双节点环境、精确命令和结果；
-- 将 [risk-and-backlog.md](./risk-and-backlog.md) 的 R28 改为已关闭；
+- 在 `docs/status/validation/` 写入带日期、revision/dirty 身份、双节点环境、命令和结果的报告，
+  并从 current 与索引链接；
+- 将 [risk-and-backlog.md](risk-and-backlog.md) 的 R28 改为已关闭；
 - 删除本计划；最终合同留在 standards、实测证据留在 status，Git 历史保存实施和审批过程。

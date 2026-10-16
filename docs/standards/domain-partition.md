@@ -2,9 +2,9 @@
 
 类别：现行实验接口合同。默认关闭；O2 只改变中心调度。halo 在 O3 的 begin 后立即
 finish（Waitall + unpack event 完成），unpack 与全部计算依次排入同一默认 stream，没有通信/计算 overlap。
-方向由维护者于 2026-10-15 在 O2 会话明确确认；证明与反例来源为
-[O0](../plans/communication-computation-overlap.md#o0-证据闭包与串行分区设计2026-10-08)。
-本轮实测与验证范围见 [O2 状态](../status/overlap-partition-20261015.md)。
+方向于 2026-10-15 获维护者确认；本页保存已落地的闭包与缓存合同，
+剩余调度见[O4/O5 计划](../plans/communication-computation-overlap.md)。
+本轮实测与验证范围见 [O2 状态](../status/validation/overlap-partition-20261015.md)。
 
 ## 选择与生命周期
 
@@ -18,7 +18,7 @@ stream 后续计算有序可见时生效。P=1/M1、段首 force、rebuild/迁�
 ordinary 标志、本步编号和 halo_ready_step。runtime 在 `refresh_ghost_positions` 返回后
 发布本步 ready token；这是 MPI completion + O3 unpack event 物理完成的证明，不是单独用
 `refreshed_epoch` 推断本步完成。O2 的 `DomainForceTicket` 约束 early/late 恰一次及顺序，
-仅存在于一次 compute 内；NEP force ticket 不提供异步计算接口；通信接口见 [halo 生命周期](./halo-lifecycle.md)。
+仅存在于一次 compute 内；NEP force ticket 不提供异步计算接口；通信接口见 [halo 生命周期](halo-lifecycle.md)。
 
 owned 为 O=[0,owned)，dependency 为 D=[0,owned+dep)，L=local_count。owned=0 时 D 为空。
 V 是未按 typewise cutoff 过滤、含 skin 带的实际完整 Verlet 行：
@@ -94,6 +94,17 @@ split 的旧 `cell_neighbor_device` 区间包含缓存分类；旧 `nep_device` 
 hit 只是 key 检查。分类占用三个 L 长 int mask（S/I/E）及三个 int scratch，逻辑额外设备空间为 12L+12 bytes，
 物理 capacity 可保留高水位；cache miss 使用三次分类 kernel、mask/scratch fill 和两次小型 D2H 检查。
 分区额外成本由同输入、固定 CPU/GPU 的 off/serial 无详细诊断 A/B 另测。
+
+## 必须保留的反例
+
+| 场景 | 分类 / 调度要求 |
+| --- | --- |
+| i–j 为 owned、j–k 接 ghost | i 的直接邻居全 owned 仍不足，必须排除两跳未闭合的 i |
+| 当前 cutoff 外、Verlet skin 内 ghost | filter 先读坐标再拒绝，不能按当前 R/A 误判 interior |
+| 非空 E\I | 辅助 descriptor/partial 提前生成，late 不重复 PE；最终 force 仍在 boundary |
+| 周期链、P2 同 peer | 按 gid/MIC/原 plan，不按裸坐标或把 image shift 再加一次 |
+| 同 shape 换 gid / 同 epoch 新 V | 分别用 layout epoch / Verlet generation 失效，不能按地址/capacity 复用 |
+| filtered angular ordinal 变化 | 每步按 gid 查反边，不缓存旧 partial ordinal |
 
 ## 测试入口
 

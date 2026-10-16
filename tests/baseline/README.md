@@ -50,7 +50,7 @@ python3 tests/baseline/run_baselines.py --calibrate 30
   原生文本输入；执行时只按固定文件名复制到空工作目录，不解析后重写或转换。
 
 完整覆盖、每项通过标准、单位、容差校准和已知非确定性来源见
-[`docs/status/baseline-results.md`](../../docs/status/baseline-results.md)。
+[`docs/status/validation/baseline-results.md`](../../docs/status/validation/baseline-results.md)。
 
 本目录继续只承担 8/9 原子、最多 6 个连续 NVE steps 的短程 committed golden。4096/12288/
 5000 原子、100000-step、五初态 release、双向构型回放和跨 rank restart 位于

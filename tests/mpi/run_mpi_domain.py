@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Run the M2a local-domain acceptance matrix (docs/plans/domain-decomposition.md
-section 10).
+"""Run the M2a local-domain acceptance matrix (docs/standards/mpi-runtime.md).
 
 Every fixture uses a box that genuinely satisfies the NEP large-box criterion
 and the slab_width >= d_coord guard for the pinned nep_C.txt potential

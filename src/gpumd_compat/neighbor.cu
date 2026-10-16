@@ -216,8 +216,8 @@ static __global__ void gpu_find_neighbor_ON1(
   }
 }
 
-// M2a domain variant of gpu_find_neighbor_ON1 (docs/plans/domain-decomposition.md
-// section 5.2): centers are [center_begin, center_end) while candidates are
+// M2a domain variant of gpu_find_neighbor_ON1 (docs/standards/mpi-runtime.md):
+// centers are [center_begin, center_end) while candidates are
 // every local slot (owned + ghosts), removing the legacy assumption that a
 // candidate must also lie inside the center range. Writing past the per-row
 // capacity MN sets a device flag instead of corrupting memory; the host

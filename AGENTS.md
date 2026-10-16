@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1 + M2a；近期 P0：CPU 绑定、LAMMPS 对比、通信重叠
+## 当前代码基线：M1/M2a + O1–O3；近期 P0：CPU 绑定、LAMMPS 对比、O4 重叠
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -36,18 +36,20 @@ eligibility 后在两条数据面之间分派：
   p2p 自检）、NEP 力中心 `[0, owned)` / 依赖中心 `[0, owned+dep)` / 候选
   `[0, local_count)` 分片（global-ID 行排序，legacy P1/M1 路径不变）；
 - rank 0 输出 `DMGMD_DOMAIN mode=m2a|m1-fallback ...` 机器可读记录；triclinic/
-  非周期在 P>1 下保持 M1 的 unsupported 错误；单步位移超过一个盒长时 wrap 单次
-  调整语义不变（下游带判定用 MIC 距离）；
+  非周期在 P>1 下保持 M1 的 unsupported 错误。P1/M1 保留单次 wrap 调整；
+  M2a 在 halo/force 前拒绝不受支持的 multi-box 单步位移，不靠 MIC 消去位移；
 - 所有用户可见文件只由 rank 0 写；不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
 - 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
 
 双路径的布局、半径、每步顺序、通信量与验证契约位于
-`docs/standards/replicated-mpi.md` 与 `docs/standards/data-layout.md`。所有文档从
+`docs/standards/mpi-runtime.md` 与 `docs/standards/data-layout.md`。所有文档从
 `docs/README.md` 进入：
 
-- `docs/standards/`：当前已经生效的产品、架构和测试合同；
-- `docs/status/`：带日期、revision、环境和命令的进度或实测备忘；
-- `docs/plans/`：尚未实施或待审批的方案、风险和待办。
+- `docs/standards/`：当前产品、架构和测试合同；
+- `docs/reference/`：锁定 GPUMD 调用链与 kernel 证据；
+- `docs/operations/`：操作手册；
+- `docs/status/current.md`：当前状态；`status/validation/` 和 `status/performance/` 保存带日期的验收与实测；
+- `docs/plans/`：剩余方案、风险和待办。
 
 M2a 已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
 nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026-09-26 单节点
@@ -59,7 +61,10 @@ triclinic/非周期 local-domain 仍待后续审批。
 计划分别位于 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md`
 与 `docs/plans/communication-computation-overlap.md`。LAMMPS 输入、静态物理量对照与
 三引擎 benchmark smoke 已实施；正式效率矩阵仍待固定 CPU/NUMA 绑定和更多正确性验收。
-现有 CPU 采样 C1 只提供观测，不执行绑定；M2b 不是当前下一实施切口。
+现有 C1 与 O1 expected-cores/expected-numa 参数核验手工映射，不执行绑定；
+O1 时间线、O2 默认关闭的串行分区、O3 halo 生命周期已实施并验收。生产仍 begin 后立即
+finish，再计算 NEP，无实际 overlap；O4/O5 未执行。最新证据见 docs/status/current.md，
+M2b 不是当前下一实施切口。
 
 ## GPUMD 复现边界（强制）
 

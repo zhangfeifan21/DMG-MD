@@ -6,7 +6,7 @@
 
 ## 1. 结论
 
-第二阶段已经具备进入 M2b/MatPL 比较所需的正确性与计时基础：统一 cache decision、epoch 内
+第二阶段已实现统一缓存与计时基础：统一 cache decision、epoch 内
 manager owner 保持、普通步固定 ghost 坐标刷新、rebuild transaction 内迁移与
 membership/layout/neighbor 更新均已实现；详细计时默认关闭，开启后不逐步打印、不逐步增加
 MPI 汇总，也不增加默认 device synchronize。
@@ -42,13 +42,16 @@ HostStaged 在本机所有 P=2/4 配置都快于 CudaAware；当前 CudaAware �
   `8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3`、BaTiO3
   `d9d5801eb267772294deee6eebd2e1e40f83908f867b5bf69467d1826034aa02`；未改 potential、
   密度、步长、精度或容差。
-- 正式端到端结果：[`dmgmd-stage2-cost-total-final2-20260922`](../../dmgmd-stage2-cost-total-final2-20260922/report.json)，
+- 正式端到端结果：`dmgmd-stage2-cost-total-final2-20260922/report.json`，
   `DMGMD_DOMAIN_TIMING=0`、diagnostics 关闭；详细结果：
-  [`dmgmd-stage2-cost-detail-final2-20260922`](../../dmgmd-stage2-cost-detail-final2-20260922/report.json)，
+  `dmgmd-stage2-cost-detail-final2-20260922/report.json`，
   P=2/4、`DMGMD_DOMAIN_TIMING=1`。两者都保留每个 stage 的输入、stdout、checkpoint 和输出哈希。
 - 正式口径是 runtime `DMGMD_TIMING phase=run seconds_max`，包含 10000 步 NVE、既有 thermo/
   trajectory/restart I/O 和 MPI，不用 wrapper elapsed。每个配置本轮只采一个样本，所以不提供
   置信区间；`seconds_min/max` 是同一次 MPI 作业的 rank 范围，不是重复实验误差。
+
+上述两个结果目录在 2026-10-15 文档核对时不在工作区；数值保留原报告记录，
+不能声称本次重新读取了原始 report。
 
 精确命令：
 
@@ -80,7 +83,7 @@ CudaAware 相对 HostStaged 的 P2/P4 `seconds_max` 分别慢：carbon 3.6%/3.5%
 M1 fallback，没有 M2a p2p 后端差异。
 
 用户给出的 2026-09-18 correctness-nightly 观测使用旧二进制和详细正确性日志，不能作为本表
-无 I/O A/B 的置信基线；本表只与同一最终二进制、同一 runner 内的 P1 参照计算 speedup。
+低诊断成本 A/B 的置信基线；本表只与同一最终二进制、同一 runner 内的 P1 参照计算 speedup。
 
 ## 4. 普通步、重建步与阶段成本
 
@@ -118,7 +121,7 @@ P2/P4 分别 195/202 次实际迁移；BaTiO3 的 19 次全部迁移。
 | BaTiO3 | C/4 | 1.020 | 2.103 | 0.480 | 0.556 | 0.080 | 0.509 |
 
 详细计时相对独立的 timing-off `seconds_max` 增加 0.84%–4.39%；这同时含运行间噪声，不能当
-纯 instrumentation 消融，但足以说明详细结果不可替代正式吞吐。默认关闭时没有 CUDA event、
+纯 instrumentation 消融，但足以说明详细结果不可替代正式吞吐。本次实现的详细计时默认关闭时没有计时 CUDA event、
 计时 summary reduction 或额外同步。
 
 ## 5. 布局、通信、分配与 rank 差异
@@ -162,7 +165,7 @@ P4 ordinary 的 rank min–max 每步毫秒显示，NEP 计算差异小于 MPI �
 ghost 使 P=4 的全局 dependency-center 总工作反而上升（例如 carbon 从 P2 的 28928 增到 P4
 的 33280），限制了强扩展。
 
-## 6. 剩余瓶颈与下一步
+## 6. 当次瓶颈与候选方向（2026-09-22）
 
 - 普通步：carbon 仍由 NEP 主导；water/BaTiO3 的 NEP 已较短，固定 decision、halo、thermo
   Allreduce/D2H 和 MPI 到达偏斜占比上升。P=4 两跳 ghost/dependency-center 复制和当前全局盒
@@ -172,7 +175,7 @@ ghost 使 P=4 的全局 dependency-center 总工作反而上升（例如 carbon 
   M2b/MatPL 时继续单列，不能只看总时间。
 - 后续具体待办：把重建的 cell list 改为 rank-local cell 网格（保留相同候选/排序 oracle）；
   对 NVE 只在科学输出/控制真正需要时计算 thermo，同时保持 NVT thermostat 每步全局 thermo；
-  第三阶段按计划实现并比较 M2b 与 MatPL 式 ghost 力回传。通信计算重叠仍留到之后。
+  第三阶段按计划实现并比较 M2b 与 MatPL 式 ghost 力回传。该排期为当时建议；当前 P0 与 O1–O3 状态见[当前状态](../current.md)。
 - 本轮不实现 M2b、ghost force return、overlap、3D decomposition、动态负载均衡或新势函数；
   也不因 water/BaTiO3 的 CudaAware 仍负扩展而放宽任何正确性门槛。
 

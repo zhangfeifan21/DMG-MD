@@ -1,21 +1,22 @@
 # NEP MD CUDA kernel 清单与通信依赖
 
-类别：现行标准与代码审计证据。
+类别：锁定 GPUMD 的 kernel 与依赖证据。核对日期：2026-10-16。
 
 ## 1. 范围和记号
 
 参考版本：`../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e`。
-2026-09-09 起，本文引用的 `src/...` 路径同时对应仓库内复现
-`src/gpumd_compat/`（同名文件、同符号、行号仍指参考 commit；复现文件头注明 Origin
-file）。DMG-MD 构建只使用 `src/gpumd_compat/`，不编译 gpumd-reference。
+下文 src/force、src/integrate 等路径和行号均指该参考 commit。数值子集在
+src/gpumd_compat 内复现并标 Origin；DMG-MD 的 M2a 域、gid 排序、缓存和 O2/O3 编排
+与参考不同，现行合同见[MPI](../standards/mpi-runtime.md)、[分区](../standards/domain-partition.md)。
+不得把参考全 N launch 当作 DMG-MD 当前行为，构建不使用 reference 源码。
 
 本文列出普通单-bead NEP/NEP-ZBL 的第一次力、每步 NVE/`nvt_ber`、thermo、XYZ 输出实际可执行的 CUDA kernel。PIMD、附加外力、其他势和 measurement kernel 不在清单中。
 
 记号：
 
 - `N`：GPUMD 当前完整体系原子数，也是大多数 SoA/ELL 的 stride。
-- `Nc`：DMG-MD 未来的中心数；正常为 `owned_count`。
-- `Nl`：未来的 `owned+ghost` 可寻址原子数。
+- `Nc`：DMG-MD 最终力中心数，M2a 为 owned_count。
+- `Nl`：M2a owned+ghost 可寻址原子数，即 local_count。
 - ELL 邻居索引：`NL[neighbor_ordinal * N + center]`。
 - 向量 SoA：`x[0:N], y[0:N], z[0:N]`；virial SoA 为 9 个 `N` 分量块。
 - `Rr(a,b)=(rc_radial[a]+rc_radial[b])/2`，`Ra(a,b)` 类似。
@@ -69,7 +70,7 @@ file）。DMG-MD 构建只使用 `src/gpumd_compat/`，不编译 gpumd-reference
 
 定义证据：`src/force/nep.cuh:23-37`，构造分配见 `src/force/nep.cu:379-391`。
 
-| buffer | 类型/尺寸 | 布局 | 未来所有权 |
+| buffer | 类型/尺寸 | 布局 | 分布式映射 |
 | --- | --- | --- | --- |
 | position/force | double `3N` | component-major SoA | position local；force owned output（可有 local capacity stride） |
 | virial | double `9N` | component-major SoA，内部顺序 `xx,yy,zz,xy,xz,yz,yx,zx,zy` | owned only |
@@ -226,22 +227,18 @@ PBC
 → optional dump reduction/copies
 ```
 
-方括号只在 rebuild 时执行。每 1000 次 large-box 计算还会把所有 neighbor counts D2H 并 append `neighbor.out` (`nep.cu:1007-1025`)，产生同步和非显式用户输出；DMG-MD 是否保留这一副作用为 **UNKNOWN**。
+方括号只在 rebuild 时执行。每 1000 次 large-box 计算还会把所有 neighbor counts D2H 并 append `neighbor.out` (`nep.cu:1007-1025`)，产生同步和非显式用户输出；DMG-MD 保留该副作用；M2a 在本次 filter 后经 MAX 只由 root 写，
+具体 call 计数/字节见[MPI 合同](../standards/mpi-runtime.md)。
 
 MPI/CUDA 流必须显式建立以下 happens-before：owned migration 完成 → position halo 到达 → descriptor 完成 → `Fp`/partial 通信完成 → final force → thermo all-reduce → thermostat/measurement。不能依赖默认 stream 和阻塞 D2H 恰好提供的全局同步。
 
-## 9. 复用优先级
+## 9. 当前复现与后续边界
 
-1. **最高**：`nep_utilities.cuh` 的数学 device helper、NEP4/5 ANN 参数布局。
-2. **高**：large-box `find_descriptor`、`find_force_radial`、`find_partial_force_angular`、`gpu_find_force_many_body`、`find_force_ZBL`；只小范围参数化 `stride/center range`。
-3. **中**：cell list、完整有向 ELL 构建与排序；需先消除候选域等于中心域的全局假设。
-4. **中**：VV、thermo local reduction、PBC kernel；数学简单但兼容性重要。
-5. **实验后**：small-box atomic family。
-6. **不复用编排**：`NEP_MULTIGPU::compute()` 的 GPU0 全局分发/回收。
+NEP 数学 helper 与 large-box kernel 已在 compat 复现；M2a 已分离中心/候选域，按 gid
+排序反边，以深位置 halo 闭合依赖。small-box 仍为 P1/M1 路径，未分布式化；NEP_MULTIGPU
+只作依赖证据，不复用 GPU0 分发/回收编排。
 
-## O2 实验串行分区
-
-默认关闭的 `DMGMD_DOMAIN_PARTITION=serial|verify` 仅选择 M2a 普通步中心；halo 先完成，
-沿用原布局、L stride、行序、半径和每中心累加。集合、辅助产物唯一写入、epoch/连续位移
-缓存有效性、fallback、诊断与 split timing 口径以
-[串行分区合同](./domain-partition.md)为准；不引入异步通信或 overlap。
+O2 默认关闭的 mask 分区保持 L stride 与每中心顺序，O3 仍立即 finish 后计算；
+详见[分区](../standards/domain-partition.md)、[halo 生命周期](../standards/halo-lifecycle.md)。
+M2b 中间场交换和真实 overlap 分别见[扩展](../plans/domain-decomposition.md)与
+[重叠计划](../plans/communication-computation-overlap.md)，不是本参考表已实现的行为。

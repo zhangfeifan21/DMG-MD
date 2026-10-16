@@ -9,7 +9,7 @@
 锁定 GPUMD reference 的四组短程 baseline 已生成 committed golden，并在单张 NVIDIA
 GeForce RTX 4090 上完成独立全量复跑和 30 次重复校准。随后 DMG-MD candidate 也通过相同
 四组 differential case。本文只记录这次已执行结果；当前验收规则见
-[golden-test-standard.md](../standards/golden-test-standard.md)，实际参数以测试脚本和 manifest
+[golden-test-standard.md](../../standards/golden-test-standard.md)，实际参数以测试脚本和 manifest
 为准。
 
 锁定 reference：
@@ -23,7 +23,7 @@ GeForce RTX 4090 上完成独立全量复跑和 30 次重复校准。随后 DMG-
   `NEP_MULTIGPU`。
 
 原记录没有单独保存与本结果严格对应的 DMG-MD Git commit，因此不得把本文结果直接解释为
-当前任意 commit 已通过。当前进度声明见 [current.md](./current.md)。
+当前任意 commit 已通过。当前进度声明见 [current.md](../current.md)。
 
 ## 2. 已执行矩阵
 
@@ -61,20 +61,11 @@ python3 tests/baseline/run_baselines.py \
 校准覆盖 12,528 个 force 数、42,021 个 virial 数、5,655 个 energy 数和 12,528 个
 position 数，以及 thermo/restart 字段。
 
-## 4. 本结果证明和不证明的内容
+## 4. 适用范围
 
-本结果证明：
-
-- 固定 reference binary、固定输入和固定单卡选择可重建 committed golden；
-- 四组 case 的文件集合、schema、原子顺序、时间点和数值字段得到自动比较；
-- 当前混合精度路径在记录环境中具有稳定的短程输出。
-
-本结果不证明：
-
-- 换 GPU 架构、编译器或 CUDA 版本后仍逐字节一致；
-- MPI reduction tree 或不同 rank 数保持 bitwise；
-- 10000/100000-step nightly/release 已完整执行；
-- domain decomposition、ghost、halo 或 migration 已实现或通过。
+结果限于上述 binary/输入/单卡环境的四个短程 case；不证明跨架构、跨 MPI reduction tree
+byte-exact、domain 分解或完整 nightly/release。candidate commit 未单独记录，不能映射为
+当前任意 HEAD 通过。比较层级由 Golden Test 标准维护。
 
 ## 5. 权威产物和更新纪律
 
@@ -86,6 +77,5 @@ position 数，以及 thermo/restart 字段。
 | 30 次校准原始汇总 | `tests/baseline/calibration.json` |
 | 使用方法 | `tests/baseline/README.md` |
 
-只有在明确审查 reference 升级或 baseline 意图变化后，才可运行 `--update-goldens`。更新必须
-同时审查 reference commit/二进制哈希、输入哈希、golden diff、重复校准和本文结果记录；比较
-失败本身不是更新 golden 或放宽容差的理由。
+golden 更新与容差纪律见[Golden Test](../../standards/golden-test-standard.md)，
+本记录不另维护规则。

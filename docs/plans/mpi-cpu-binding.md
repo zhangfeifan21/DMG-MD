@@ -9,8 +9,10 @@
 对应一张 GPU；CPU 绑定是启动配置，不改变 NEP、域分解、MPI 通信协议或 `run.in` 语法。
 
 当前 `tests/benchmark/run_benchmark.py` 只有重复的 `--mpiexec-arg` 透传。它可以把
-Open MPI 的 `--map-by`、`--bind-to` 传给 DMG-MD，但没有一等的 CPU 核数/NUMA
-参数、配置冲突检查、实际 affinity 验证或跨引擎一致性保证。GPUMD 目前直接启动，
+Open MPI 的 `--map-by`、`--bind-to` 传给 DMG-MD，但没有统一设置 CPU 核数/NUMA
+的策略、冲突检查或跨引擎一致性保证。O1 已增加
+`--expected-cores-per-rank` / `--expected-numa-node`，配合 C1 核验手工映射的实际 affinity；
+它们是观测断言，不负责设置绑定。GPUMD 目前直接启动，
 没有应用同一资源策略的入口。因此下述接口与验收均**尚未实现**；C1 CPU 采样器已能
 记录 rank 的实际 affinity，可作为后续核验工具，不能替代绑定。
 
@@ -24,8 +26,10 @@ Open MPI 的 `--map-by`、`--bind-to` 传给 DMG-MD，但没有一等的 CPU 核
   `--cpu-rankfile FILE` 指定每个 rank 的位置与核集合。显式文件用于 CPU/GPU 拓扑不对称
   或需要固定 rank→NUMA→GPU 映射的机器。具体 CLI 名称在实现时可调整，但三个能力、
   错误行为和结果元数据须保持。
-- Open MPI 5 的自动模式基于 `--map-by core:PE=K` 或 `numa:PE=K` 与
-  `--bind-to core`；显式模式使用 `--map-by rankfile:file=FILE`。rankfile 使用 hwloc
+- 自动模式根据可用拓扑生成 Open MPI mapping，例如已在 O1 验证的
+  `--map-by ppr:2:numa:PE=4 --bind-to core`。不使用 `core:PE=K` 作为 K>1 通用模板：
+  本机 Open MPI 5 在 O1 已以 mapping object 只有一个核心拒绝它。显式模式使用
+  `--map-by rankfile:file=FILE`，实现时按锁定版本验证。rankfile 使用 hwloc
   逻辑核心编号，必须在运行前解析并映射到操作系统 CPU ID；不能把 rankfile 数字直接
   当 `/proc` 的 CPU ID。只传 `--report-bindings` 是诊断，不是验收。
 - 固定绑定模式拒绝与 `--mpiexec-arg` 中另一个 map/bind/rankfile/oversubscribe

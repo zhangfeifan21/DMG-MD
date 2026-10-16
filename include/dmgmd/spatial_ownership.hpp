@@ -10,7 +10,7 @@
 
 namespace dmgmd {
 
-// M1 spatial slab ownership (docs/standards/replicated-mpi.md, "M1 空间所有权").
+// M1 spatial slab ownership (docs/standards/mpi-runtime.md, "M1 空间所有权").
 // One MPI rank owns one equal-width fractional half-open slab along one box
 // axis. The box itself stays replicated: every rank still holds all N slots,
 // and this type only records *who* is authoritative for integration, thermo

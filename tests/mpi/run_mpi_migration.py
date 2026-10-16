@@ -4,7 +4,7 @@
 These fixtures are deliberately designed so that ownership *changes* during
 the run (the committed baseline cases happen to keep every atom inside one
 slab), exercising the migration protocol of
-docs/standards/replicated-mpi.md:
+docs/standards/mpi-runtime.md:
 
 - an atom crossing an interior slab boundary;
 - an atom wrapping past the periodic end back to the first slab;

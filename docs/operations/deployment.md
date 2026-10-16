@@ -1,28 +1,27 @@
 # 在其他服务器部署 DMG-MD 与参考软件
 
-类别：操作手册。目标：单节点 NVIDIA GPU 服务器，重建同一源码与工具链后执行正确性门槛和
+类别：操作手册。核对日期：2026-10-16。目标：单节点 NVIDIA GPU 服务器，重建同一源码与工具链后执行正确性门槛和
 benchmark。本手册不把尚未硬化的多节点运行当作已验证能力。
 
 本手册下方的原生和 Docker 命令目前只部署 DMG-MD 与 GPUMD，因此运行 benchmark
 时须显式指定 `--engines gpumd,dmgmd`。runner 已支持 LAMMPS/MatPL 第三引擎，
 其只读 reference 布局与输入生成见
 [三引擎对照标准](../standards/cross-engine-reference.md)；固定 MPI CPU/NUMA
-绑定仍属 [2026-10-09 P0 计划](../plans/risk-and-backlog.md#当前开发优先级2026-10-09)，
+绑定仍属 [2026-10-09 P0 计划](../plans/risk-and-backlog.md#当前开发优先级)，
 当前 smoke 不代表正式效率结果。
 
 ## Docker 交付（优先）
 
 跨服务器优先使用 [README 的 Docker 安装、构建、运行和验收步骤](../../README.md#docker-部署推荐跨服务器使用)。
 镜像统一 Ubuntu 22.04 / CUDA 12.8.0 用户态并包含 T4 架构。宿主机仍需兼容驱动和 NVIDIA
-Container Toolkit。镜像实测状态见 [Docker 验证记录](../status/docker-validation.md)。
+Container Toolkit。镜像实测状态见 [Docker 验证记录](../status/validation/docker-validation.md)。
 下文保留原生部署和 GPUMD 对照 benchmark 的操作方法；宿主机旧工具链不影响容器依赖。
 
 ### PMIx 压缩库警告导致 domain 验收失败
 
-若环境预检显示 PASS，但 domain 测试在 `lattice: P=1 oracle failed` 后只打印
-`PMIx was unable to find a usable compression library`，该警告已足以触发失败：
-`run_mpi_domain.py` 同时要求退出码为零和 stderr 为空，而环境预检允许 stderr 警告。
-这段报错本身不能证明数值不一致，也不能证明 P=1 的退出码为零。
+domain runner 要求退出码为零且 stderr 为空。若预检 PASS 而 domain 报
+`PMIx was unable to find a usable compression library`，需检查完整 stdout/stderr；警告可
+触发 runner 失败，不足以判定数值错误或 oracle 退出码。
 
 现有镜像可仅关闭这条可选压缩功能警告后重跑，其他错误及数值检查仍然生效：
 
@@ -58,8 +57,8 @@ md-stack/
   lammps-matpl-reference/ # 使用三引擎对照时的 MatPL 锁定只读 checkout
 ```
 
-复制源码和势，不搬旧 build、CMakeCache、CUDA 对象文件。保留 `.git` 以记录 revision；本次新增
-benchmark 文件尚未提交时，要用工作树复制，单用 `git archive HEAD` 会遗漏它们。
+复制源码和势，不搬旧 build、CMakeCache、CUDA 对象文件。保留 `.git` 以记录 revision；有未提交修改时同时保存 dirty patch/新增文件，
+单用 `git archive HEAD` 不包含它们。
 
 源服务器示例（把 host 和目标路径换成实际值；不会删除目标已有文件）：
 
@@ -94,7 +93,7 @@ cuBLAS/cuSOLVER/cuFFT；DMG-MD 必须使用带 CUDA 的 Open MPI+UCX。
 `mpirun` 或容器中的可执行文件并不足够。不要因门槛失败改用另一 MPI 实现或绕过自检。
 
 缺少工具链时，在用户目录编译 UCX，再编译 Open MPI。发行版管理员准备编译依赖（Ubuntu
-示例：build-essential、gfortran、pkg-config、libevent-dev、libhwloc-dev、libpmix-dev；有 IB 时
+示例：build-essential、gfortran、pkg-config、libevent-dev、libhwloc-dev、libpmix-dev、zlib1g-dev；有 IB 时
 增加 libibverbs-dev、librdmacm-dev）。CMake/Python 版本和 NVIDIA 驱动由目标机管理员确认。
 从 UCX/Open MPI 官方发行包或原服务器保留的源码包取对应版本，并记录包 SHA-256。
 
@@ -179,7 +178,7 @@ source ../env/md-mpi.sh
 ctest --test-dir build-benchmark --output-on-failure -E domain_neighbor_cuda
 
 # devices 换成实际可用设备；此门槛会真的启动 GPU/MPI 自检
-python3 tests/mpi/check_environment.py --candidate ./build-benchmark/dmg-md --devices 0,1 --ranks 2
+python3 tests/mpi/check_environment.py --candidate ./build-benchmark/dmg-md --devices 0,1,2,3 --ranks 4
 
 # 单卡 golden 与 MPI 正确性测试；新服务器上先做这一步，再评估性能
 python3 tests/baseline/run_baselines.py --candidate ./build-benchmark/dmg-md --device 0

@@ -4,7 +4,7 @@
 
 ## 测试范围与来源
 
-原始目录：[dmgmd-bench-docker-confirm-20260926-174639](../../dmgmd-bench-docker-confirm-20260926-174639)。汇总以 `summary.csv`、`summary.md`、`metadata.json`、`preflight.txt` 为准，逐项记录位于各 trial 子目录。此次完成 36 个汇总配置：3 个算例 × 3 个实现（DMG-MD HostStaged、DMG-MD CudaAware、GPUMD）× 4 个 rank 数；每项 5/5 次有效重复。DMG-MD 覆盖 1/2/4/8 rank、两种通信后端；GPUMD 覆盖 1/2/4/8 rank。
+原始目录：[dmgmd-bench-docker-confirm-20260926-174639](../../../dmgmd-bench-docker-confirm-20260926-174639)。汇总以 `summary.csv`、`summary.md`、`metadata.json`、`preflight.txt` 为准，逐项记录位于各 trial 子目录。此次完成 36 个汇总配置：3 个算例 × 3 个配置（DMG-MD HostStaged、DMG-MD CudaAware、GPUMD）× 4 个 GPU 数；每项 5/5 次有效重复。DMG-MD 覆盖 1/2/4/8 rank、两种通信后端；GPUMD 为单进程，分别使用 1/2/4/8 张 GPU。
 
 - 算例：carbon_200k（196,608 atoms）、carbon_1m（1,048,576 atoms）、water_400k（393,216 atoms）；均为 strong scaling。
 - profile：500 步 warmup、1500 步计时、5 次重复、至少 20 秒；GPU 设备 0–7。
@@ -25,7 +25,7 @@
 | water_400k | HostStaged | 1.71× | 3.18× | 5.39× | 0.67 | 26.00 |
 | water_400k | CudaAware | 1.67× | 3.05× | 5.17× | 0.65 | 26.73 |
 
-同一 rank 数下，DMG-MD 单 rank与 GPUMD 基线大致相当；rank 增加后，三组算例中 DMG-MD 的多 rank效率均高于 GPUMD。比如 8-rank 的 carbon_1m，DMG-MD 获得 7.52–7.66× 相对自身单 rank的加速，而 GPUMD 为 5.41×。water_400k 的 DMG-MD 8-rank 加速为 5.17–5.39×，GPUMD 为 3.37×。这些结论限于该单机八卡 strong-scaling 测试，不代表跨节点表现、其他工作负载或 CPU 使用特征。
+同一 GPU 数下，DMG-MD 单 rank 与 GPUMD 单卡大致相当；多卡时三组算例的 DMG-MD 自身强扩展高于 GPUMD。比如 8 GPU 的 carbon_1m，DMG-MD 获得 7.52–7.66× 相对自身单 rank的加速，而 GPUMD 为 5.41×。water_400k 的 DMG-MD 8-rank 加速为 5.17–5.39×，GPUMD 为 3.37×。这些结论限于该单机八卡 strong-scaling 测试，不代表跨节点表现、其他工作负载或 CPU 使用特征。
 
 HostStaged 与 CudaAware 在本批结果相近，HostStaged略快；这与“CudaAware 必然更快”的假设不符，后续重叠实验应将两者都作为基线。原始 `summary.csv` 的完整测量值、波动范围与所有中间 rank 结果保留在结果目录，不在本文重复维护。
 

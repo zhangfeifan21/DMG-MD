@@ -210,8 +210,8 @@ static __global__ void gpu_find_force_many_body(
   }
 }
 
-// M2a domain variant of the same gather (docs/plans/domain-decomposition.md
-// section 5.2): the per-row sort key is the candidate's global ID instead of
+// M2a domain variant of the same gather (docs/standards/mpi-runtime.md):
+// the per-row sort key is the candidate's global ID instead of
 // the local index, so the reverse-edge binary search compares global IDs.
 // Slot indices stored in NL remain local. The arithmetic (force and virial
 // accumulation) is copied verbatim from gpu_find_force_many_body above.

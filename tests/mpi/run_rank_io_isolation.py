@@ -3,7 +3,7 @@
 
 Complements tests/mpi/run_mpi_differential.py: instead of numerics, this gate
 exercises the per-rank node-local scratch I/O isolation contract in
-docs/standards/replicated-mpi.md ("I/O 与 NEP_MULTIGPU"; decision record:
+docs/standards/mpi-runtime.md ("I/O 与 NEP_MULTIGPU"; decision record:
 docs/plans/multi-node-io.md) against the real executable under mpiexec:
 
 * every non-root rank works inside its OWN node-local scratch directory -

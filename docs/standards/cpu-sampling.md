@@ -3,8 +3,8 @@
 类别：当前测试工具合同。实现入口：`tests/benchmark/cpu_sampling.py`、
 `analyze_cpu.py`、`run_benchmark.py`；CLI/运行示例见
 [benchmark README](../../tests/benchmark/README.md#cpu-采样c1)。不改变 runtime 默认行为。
-本工具记录 affinity/cpuset/quota，不设置它们；固定每 rank CPU 核数与 NUMA 绑定
-仍是 [待实施 P0](../plans/mpi-cpu-binding.md)。
+本工具记录 affinity/cpuset/quota，不设置它们。O1 的 expected-cores/expected-numa
+参数核验手工映射；统一设置策略仍为[待实施 P0](../plans/mpi-cpu-binding.md)。
 
 ## 支持范围与身份
 
@@ -110,7 +110,7 @@ global_step/epoch。按身份+sequence+phase配对；缺端、重复begin、非�
 rank/PID/start ticks/clock domain 后把 raw stdout 转成 `cpu/markers.jsonl`，再传给现有
 `analyze_cpu`。它给 run-loop 与逐步 ordinary/rebuild 窗口；短步没有完整采样区间时
 CPU 值仍为 null。默认关闭，`DMGMD_TIMING`/`DMGMD_DOMAIN_TIMING` 的相对耗时
-本身仍不能替代绝对 marker；具体 trace 范围见 [M2a 合同](./replicated-mpi.md)。
+本身仍不能替代绝对 marker；具体 trace 范围见 [M2a 合同](mpi-runtime.md)。
 
 正常结束、timeout、KeyboardInterrupt/SIGTERM 均回收本次 launcher 后代与 collector。
 launcher 沿已有 ancestry+PID/starttime 清理；collector/诊断工具只通过本次 Popen handle 回收，

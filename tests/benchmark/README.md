@@ -244,7 +244,7 @@ trace 原始行在 trial `stdout.txt`；同时采 CPU 时，runner 将 rank/PID/
 trace 单调纳秒关联为 `cpu/markers.jsonl`，C1 `summary.json` 包含 `run`、
 `step_ordinary`、`step_rebuild` 阶段的有效采样窗口。短步可能没有完整窗口，CPU 值保持
 `null`，不能补算。时间字段的语义、CUDA event 与 host 时钟的关联限制见
-[M2a 现行合同](../../docs/standards/replicated-mpi.md)。trace 组的逐行日志和 event 会扰动
+[M2a 现行合同](../../docs/standards/mpi-runtime.md)。trace 组的逐行日志和 event 会扰动
 性能；性能组保持 profiler off，CPU sampler 开销需另用 off 模式的 proc/off 配对校准。
 
 重建步使用已有 `tests/mpi/run_mpi_domain.py` 的 `CROSSINGS_MODEL/CROSSINGS_RUN` 定向
@@ -314,7 +314,7 @@ CPU 测试覆盖几何门槛、预热排除、后端回退/错误绑定拒绝、
 默认 `--cpu-sampling off`，保留原有 benchmark 启动行为。CPU 工具只支持单节点 Linux、
 Open MPI 的 DMG-MD rank；GPUMD 不在 rank 采样范围。指标、原始 schema、共享 quota 与
 缺失数据语义见 [CPU 采样合同](../../docs/standards/cpu-sampling.md)，
-本轮验证见 [C1 记录](../../docs/status/cpu-sampling-c1-20261009.md)。
+本轮验证见 [C1 记录](../../docs/status/validation/cpu-sampling-c1-20261009.md)。
 
 ```bash
 source ../env/md-mpi.sh
@@ -378,4 +378,4 @@ A=off、B=proc，同输入、GPU telemetry 与绑定，随机化组序、至少�
 并用程序的 CONFIG 与累计执行 SUMMARY 检查实际模式，结果写 actual_partition。
 serial 仍先完成 halo，再分区串行运行；它没有 overlap。正式成本比较使用相同输入与
 CPU/NUMA/GPU、关闭详细 profiler，另用 trace 组诊断，禁止用 verify 的双计算测速度。
-O2 原始成本样本与限制见 [状态](../../docs/status/overlap-partition-20261015.md)。
+O2 原始成本样本与限制见 [状态](../../docs/status/validation/overlap-partition-20261015.md)。

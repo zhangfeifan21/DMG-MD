@@ -27,7 +27,7 @@ enum class ByteClass {
   control,
 };
 
-// Keep this public boundary synchronized with docs/standards/replicated-mpi.md: callers
+// Keep this public boundary synchronized with docs/standards/mpi-runtime.md: callers
 // supply replicated input buffers plus an M1 indexed ownership plan, while
 // MpiRuntime owns backend selection, staging, collective calls, and byte
 // accounting.
@@ -257,7 +257,7 @@ class MpiRuntime {
       bool locally_valid) const;
 
   // Control-plane collectives for the rank I/O isolation handshake
-  // (docs/standards/replicated-mpi.md). They are one-time setup/teardown
+  // (docs/standards/mpi-runtime.md). They are one-time setup/teardown
   // coordination, so they are deliberately outside CommunicationVolume.
   //
   // allreduce_all_passed returns true only when every rank passed true; the
@@ -318,8 +318,8 @@ class MpiRuntime {
       int count) const;
 
   // -----------------------------------------------------------------------
-  // M2a local-domain exchanges (docs/plans/domain-decomposition.md section
-  // 6.1). Point-to-point directions use independent tags and buffers so the
+  // M2a local-domain exchanges (docs/standards/mpi-runtime.md). Point-to-point
+  // directions use independent tags and buffers so the
   // identical left/right peer at P=2 can never mismatch, and every zero
   // count (empty face, empty rank) is a legal no-op.
   // -----------------------------------------------------------------------

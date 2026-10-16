@@ -1,223 +1,87 @@
-# DMG-MD Golden Test 标准
+# Golden Test 与验收原则
 
-类别：现行测试标准。  
-状态：ACTIVE。  
-锁定参考：GPUMD commit `9d23496e41319b9e2af5221a7df6285387401d1e`。
+类别：现行测试标准。状态：ACTIVE。核对日期：2026-10-16。
+GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 
-## 1. 文档边界与事实源
+## 事实源与边界
 
-本标准说明当前已实现测试的验收层级和判定原则，不复制所有机器可读参数。发生冲突时按以下
-顺序处理：
+测试脚本决定实际执行，manifest 决定 case/profile/哈希/容差，测试目录 README 维护 CLI。
+本文只定义比较层级；通过结果在[当前状态](../status/current.md)和带日期的 status 报告，
+不得把测试已定义、skip 或子集通过写成完整矩阵已通过。
 
-1. 测试脚本决定实际执行行为；
-2. `manifest.json` 决定 case、profile、哈希、容差和统计门槛；
-3. 测试目录 README 说明命令行和运维方法；
-4. 本文件说明为什么测试、如何判定以及哪些门槛尚未实现；
-5. `docs/status/` 只记录某次实际运行结果，不能反向定义标准。
+## 自动化入口
 
-不得把“脚本中已经定义”写成“已经执行通过”。任何通过声明必须给出日期、代码 revision、
-环境、精确命令和结果，并写入 `docs/status/`。
-
-## 2. 当前自动化入口
-
-### 2.1 CPU/CTest
-
-`ctest --test-dir build --output-on-failure` 当前注册十项：
-
-| test | 当前覆盖 |
+| 入口 | 覆盖 / 必须断言 |
 | --- | --- |
-| `dmgmd.run_parser` | `run.in` typed IR、支持和拒绝路径、参数校验 |
-| `dmgmd.model_parser` | model schema、类型、质量、盒和输入错误 |
-| `dmgmd.spatial_ownership` | M1 slab 纯逻辑：s=0/s=1/内部边界及两侧、周期首尾迁移、一步跨多 slab、空 owned list 与 N<P、cube/最长轴 tie（含负向 lattice edge）、owner 唯一覆盖、index 排序、mask/list 一致、malformed global_id，以及非 canonical displacement/local send count/非 permutation scatter plan 拒绝（取代 M0 的 balanced owned range 测试） |
-| `dmgmd.domain_layout` | M2a 纯逻辑：typewise 半径、eligibility/fallback reason、ghost 分类边界（恰在 d_dep/d_coord）、P=2 同 peer 去重、空 rank/N<P、确定性槽位序、malformed exchange/migration plan 拒绝、一步跨多 slab 路由、membership 记录布局 |
-| `dmgmd.domain_partition` | O2 图闭包/两跳分类 CPU oracle |
-| `dmgmd.domain_neighbor_cuda` | CUDA 容器与邻域索引；无 GPU 环境返回 skip |
-| `dmgmd.long_nve_analysis` | fixture/potential 生成、哈希、统计量、checkpoint、重试和失败分类 |
-| `dmgmd.benchmark_analysis` | 三引擎 benchmark 日志解析、统计与报告 |
-| `dmgmd.cpu_sampling` | CPU 采样和记录解析 |
-| `dmgmd.lammps_reference` | 势格式等价转换、输入单位与物理量比较器 |
+| CTest | 见下表；不自动启动 baseline/MPI/long_nve GPU 矩阵 |
+| `tests/baseline/run_baselines.py` | 四个 committed case；reference 身份/输入/golden hash 与单 GPU，结构 exact、数值按 manifest；reference 复现还须 byte-exact |
+| `tests/mpi/check_environment.py` | 指定 executable/linkage、Open MPI/UCX CUDA transport、唯一 GPU、device collective 与 p2p 主动自检；环境变化先过此门 |
+| `tests/mpi/run_mpi_differential.py` | P1/2/4、两后端，committed baseline、owned 覆盖、输出/通信及跨 rank/backend 比较；明确 M1 fallback |
+| `tests/mpi/run_mpi_migration.py` | M1 逐步几何 owner、内部/周期/多 slab/N<P/空 slab、修速、多 run、跨 rank restart；精确字节与 P1 oracle；P>1 unsupported-box 门 |
+| `tests/mpi/run_mpi_domain.py` | P2/4 两后端、同输入 P1 oracle，强制 mode=m2a；两跳/空域1000步、NEP5/typewise/ZBL、缓存/迁移/多 run/restart、计时 A/B、精确通信与 allocation |
+| `tests/mpi/run_halo_lifecycle.py` | 独立 GPU 作业：P1/2/4、两后端、收发独立完成、unpack/复用、零 count/增长/幂等和单 rank 故障有界退出 |
+| `tests/mpi/run_rank_io_isolation.py` | 本地 scratch、健康输出/清理与 mkdir/file/chdir/restore/cleanup 故障；物理双节点验收暂缓 |
+| `tests/long_nve/run_long_nve.py` | NVE/NVT 长程、双向静态回放、跨 rank restart 及兼容势静态/短轨迹 |
+| `tests/lammps_reference/compare_static.py` | 三引擎物理量等价；阈值在该目录 manifest，不能套用跨软件字节一致 |
 
-CTest 不会自动启动 baseline GPU、MPI differential 或长程 GPU 矩阵。
+### CTest 注册项
 
-### 2.5 GPUMD/LAMMPS/DMG-MD 横向对照
+`ctest --test-dir build --output-on-failure` 当前注册十项（以 tests/CMakeLists.txt 为准）：
 
-LAMMPS 输入生成器与静态物理量比较器位于 `tests/lammps_reference/`，三引擎
-benchmark 编排位于 `tests/benchmark/`。这一路径以**相同物理体系和物理量等价**
-作为通过条件，允许经证明等价的势格式与单位转换，不要求不同软件的输入或输出
-文件哈希相同。逐原子能量、力、virial 和总势能的现行机器门槛见
-`tests/lammps_reference/manifest.json`；完整规则见
-[三引擎对照标准](./cross-engine-reference.md)。短程/长程三引擎动力学与固定
-CPU/NUMA 下的正式性能矩阵仍待验收。
+| test | 覆盖 |
+| --- | --- |
+| `dmgmd.run_parser` / `dmgmd.model_parser` | typed IR、schema、参数、支持/拒绝路径 |
+| `dmgmd.spatial_ownership` | M1 边界/tie、槽位/ID/plan、空 slab/N<P、owner 覆盖 |
+| `dmgmd.domain_layout` | typewise 半径/float 上界、eligibility、P2 去重、ghost/迁移/空域计划 |
+| `dmgmd.domain_partition` | 独立图闭包、producer 唯一性与 key/ticket |
+| `dmgmd.domain_neighbor_cuda` | CUDA 容器、非零 center offset、分类/oracle、key 失效和非法 row/token/反边拒绝；无 GPU 返回 skip |
+| `dmgmd.long_nve_analysis` | 几何/势/hash、统计量、checkpoint、重试/失败分类 |
+| `dmgmd.benchmark_analysis` | 三引擎日志、统计、报告/超时与实验配置 |
+| `dmgmd.cpu_sampling` | 原始计数、窗口、身份/容量/缺失与采样生命周期 |
+| `dmgmd.lammps_reference` | 等价势格式、单位、物理量比较器 |
 
-### 2.2 单 GPU committed baseline
+### O2/O3 额外门槛
 
-入口为 `tests/baseline/run_baselines.py`，由 `tests/baseline/manifest.json` 定义四个 case：
+domain 验收显式 `--partition-modes off,serial,verify`：同 rank/backend 三模式科学文件
+byte-exact，另保持原 P1 manifest 差分；不能全 fallback 冒充 split。verify 用同快照 full
+oracle、CPU/GPU mask 比较、scratch/ghost poison，检查有效 R/A、Fp/sums/partial 与全部
+9 virial，replay 不推进逻辑 call/MPI/I/O。key、反边、辅助 E\I、skin、新旧布局与空域须实际触发。
 
-- `single_small_static`；
-- `single_large_nve`；
-- `multi_nvt_restart`；
-- `nep_zbl_boundary`。
+O3 生产立即 finish，保留完整三模式矩阵，并与锁定 O2 输出核对；生命周期测试不注册为
+自动 CTest GPU 作业。接口和错误合同见[分区](domain-partition.md)、[halo](halo-lifecycle.md)。
+修改 compat 必须连同 baseline/long_nve 验证；GPU skip 只能记 PARTIAL。
 
-reference 模式必须校验 reference repository、commit、executable hash、输入 hash、单 GPU
-可见性和 committed golden hash，并要求输出逐字节一致。candidate 模式对结构字段做 exact
-比较，对浮点物理量使用 manifest 容差。
+### 长程 profile
 
-### 2.3 Replicated-data MPI differential
+精确几何、步数、seed、rank/backend、sections 和统计门槛只在 long_nve manifest 维护。
+smoke/nightly/release 分别为 100/10000/100000 步；nightly/release 的 P>1 专属长轴几何
+必须命中 M2a、最大 P slab>2*d_coord。三物理势执行适用动力学/回放/restart，四兼容势
+只执行静态/短轨迹。缩小 cases/seeds/ranks/sections 只算子集，不等于完整 profile。
+100000-step release 尚无完整通过记录；最新 O3 只重跑 smoke。
 
-入口为 `tests/mpi/run_mpi_differential.py`。默认矩阵为 1/2/4 rank × HostStaged/CudaAware，
-每个组合运行完整四组 baseline case，并进一步检查：
+## 比较层级
 
-- Open MPI+UCX/CUDA 环境预检先于 numerical case；
-- 每 rank 唯一 GPU UUID、后端 capability 与主动数值自检；
-- M1 空间 ownership：coverage proof 无遗漏、无重叠，per-rank owned counts 覆盖
-  global_count（个别 rank 可为 0）；
-- rank 0 输出与 committed golden 一致；
-- `DMGMD_COMM` 的采样步、collective 次数和分后端字节字段合法；
-- 短 NVE excursion/drift 与 reference 的差异不超过由 energy 容差导出的门槛；
-- 不同 rank/backend 的输出直接互比。
+1. **完全一致**：成功/失败分类、文件集合/名称、schema/header/列/帧/step、整数、species、
+   gid 顺序、输入版本/类型/hash、owned 唯一覆盖。身份/邻居/越界错误不能用浮点容差掩盖。
+2. **确定性数值容差**：position/velocity/force/energy/virial/thermo/restart 等按
+   `abs(test-ref) <= atol + rtol*abs(ref)`，阈值只在对应 manifest。candidate 跨 GPU/MPI
+   reduction 不默认 byte-exact；明确要求的同二进制路径 A/B 除外。
+3. **长期/统计**：混沌长轨迹不逐步对坐标；NVE 比真实 E(0) 的 excursion、drift、detrended
+   RMS、相邻跳变、动量、距离直方图与双向静态回放；NVT 比温度、MSD、时间平均 partial RDF。
+   多初态 median/q95、非劣 margin/floor 以 manifest 为准。Berendsen 兼容不证明 canonical 采样质量。
 
-该矩阵验证 replicated-data + M1 空间所有权的 correctness，不是 halo 域分解或性能测试。
+[三引擎标准](cross-engine-reference.md)允许有证明的格式/单位转换；不同软件输入/输出哈希
+不必相同，转换前后哈希用于追溯。物理正确性先于正式效率排名。
 
-### 2.3a M1 迁移矩阵
+## 基线与运行纪律
 
-入口为 `tests/mpi/run_mpi_migration.py`，fixture（显式初速度，不依赖随机初速度）在
-同一环境门槛后以 1/2/4 rank × HostStaged/CudaAware 运行，覆盖：跨内部边界、周期端
-回绕、一步跨多 slab、暂时空 slab、N<P、correct_velocity 触发步、多段 run、
-velocity/force/potential/virial/unwrapped 输出、dump_restart 后跨 rank 数恢复。
-判定包括：每 epoch 的 `owned_sum==N` 与 transitions 记账；用逐步 double 精度
-wrapped position 重算期望 owner 并要求日志迁移完全一致；P=1 永不迁移；各 fixture
-必须实际产生其声明的内部/周期/多 slab/空 slab/N<P 场景；每步 collective 数量以及
-MPI、HostStaged D2H/H2D、CudaAware output-download 字节逐字段精确匹配协议公式；跨
-rank/backend 输出对 1-rank 参考的 committed 容差比较（容差不放宽）；作业目录只有
-rank 0 输出。同一 runner 还含 unsupported-box 门：triclinic 与非周期方向输入在
-P=2 上必须被所有 rank 以完全相同、可诊断的错误拒绝且不产生 MD 输出，同时同一输入
-在 P=1 仍被接受（M0 兼容路径不选择分区轴）。机器可读参数以脚本内 fixture 常量为
-第一事实源。
+- reference 仅暴露单 GPU，禁止自动 NEP_MULTIGPU；各 stage 用独立空目录，避免 append 污染。
+- 锁定源码、binary、输入/potential/golden hash。动力学用显式速度，随机初始化另做专项。
+- 更新 golden 仅显式 `--update-goldens` 并审查；不因失败任意放宽容差。压力 fixture 不当生产平衡体系。
+- long_nve 失败 stage 可按 CLI 重试，保留 failed-attempt 与失败文件；checkpoint 锁定身份/输出，
+  resume 仅复用匹配结果，adopt-existing 显式标未验证 provenance。分区模式进入 candidate 身份。
+- candidate 必须有合法 timing。墙钟与吞吐是诊断或单独 benchmark 的测量口径，正确性 suite
+  不设性能通过门；不能将各 rank min/max 当重复实验误差。
 
-### 2.3b M2a local-domain 矩阵
-
-入口为 `tests/mpi/run_mpi_domain.py`。默认矩阵使用脚本定义的 cases、2/4 rank 与
-HostStaged/CudaAware，每个 case 先运行同输入 P=1 M1 oracle，并强制断言 P>1
-为 `DMGMD_DOMAIN mode=m2a`。覆盖：两跳 coordinate halo、真正 `local_count=0` 连续
-1000 步、force call 0/1000 的 `neighbor.out` 逐字节一致与周期 MPI_MAX 精确记账、
-迁移/restart、NEP5、mixed typewise cutoff、flexible ZBL、typewise ZBL。每步 collective、
-三类 p2p 字节、布局计数及逐原子 energy/force/virial/轨迹均按 P=1 oracle 和现行协议断言。
-默认安静/显式诊断日志、段末分配摘要、相同完整 logical shape 的 layout upload 零重新分配也由
-该 runner 覆盖。非零 `center_begin` 的 ELL 行寻址及 `GPU_Vector` logical size/capacity
-分离（复用初始化与扩容计数）另由 `dmgmd.domain_neighbor_cuda` 覆盖；无 GPU 的普通 CTest
-环境返回 skip，GPU 验收环境必须实际运行通过。
-
-O2 验收显式使用 `--partition-modes off,serial,verify`：同 rank/backend 的三模式科学输出
-逐字节比较，另按原 manifest 比 P1 的逐原子量；verify 从同快照重放 full kernel，比较有效
-中间产物和全部 9 virial，并 poison early 的 ghost 坐标。新辅助/skin/周期/重建/迁移 fixture
-必须实际 split、失效、fallback；不能以全 fallback 通过代替。`--work-root` 保存实际启动环境、
-输入与输出。独立 CPU/GPU 图 oracle 以及失效/非法 row 测试见
-[分区标准](./domain-partition.md)。GPU skip 只能记 PARTIAL。兼容内核变更仍需 baseline 与
-long_nve；`--partition-mode` 显式进入 long_nve candidate 环境与 checkpoint 身份。
-
-### 2.4 长程 NVE/NVT suite
-
-入口为 `tests/long_nve/run_long_nve.py`，机器可读合同位于
-`tests/long_nve/manifest.json`。当前包含：
-
-- 三个物理 fixture 使用 profile 专属几何：smoke 为 4096/12288/5000 atoms，nightly 为
-  24576/24576/20000 atoms，release 为 49152/49152/40000 atoms；nightly 的 2/4 rank 与
-  release 的 2/4/8 rank 均必须命中 M2a，最大-rank slab 宽度大于 `2*d_coord`；
-- 四个只跑静态/短轨迹的兼容分支：NEP5、typewise cutoff、flexible ZBL、typewise ZBL
-  cutoff；
-- `short`、`long`、`replay`、`restart`、`nvt` 五个 section；
-- smoke 100 steps、nightly 10000 steps、release 100000 steps；
-- release 使用 5 组显式初态（seed 0–4）、1/2/4/8 rank 和两种通信后端。
-
-精确 profile 列表以 manifest 为准。命令行的 `--cases`、`--seeds`、`--ranks`、`--backends`
-和 `--sections` 只用于缩小诊断范围；用子集通过不能宣称完整 profile 通过。
-
-## 3. 比较层级
-
-### 3.1 必须完全一致（GPUMD committed golden 兼容性回归）
-
-- 成功/失败分类；
-- 文件集合、文件名、frame 数、输出 step；
-- N、species、整数列、原子 global-ID 顺序；
-- header、Properties schema、列顺序和 token 数；
-- parser IR 中的命令类别和离散参数；
-- potential 版本、type/symbol 顺序、参数数量和输入哈希；
-- ownership 覆盖（无遗漏/无重叠/owned counts 覆盖）、rank 0 唯一输出等结构不变量。
-
-reference 在锁定环境中还要求与 committed golden byte-exact。不能由此推导 candidate、跨
-GPU 架构或跨 MPI reduction tree 必须 byte-exact；上述输入哈希要求也不适用于
-经证明等价的跨软件格式转换。
-
-### 3.2 使用确定性数值容差
-
-position、velocity、force、energy、virial、thermo、stress、restart 量化值和短轨迹采用：
-
-```text
-abs(test - reference) <= atol + rtol * abs(reference)
-```
-
-精确阈值只在 `tests/baseline/manifest.json` 维护。身份、schema、neighbor 集合或所有权错误
-不能用浮点容差掩盖；失败后也不得为单个 case 原地放宽门槛。
-
-### 3.3 使用长期或统计判定
-
-长 NVE 不要求混沌分叉后的逐步坐标重合，而比较：
-
-- 真正 `E(0)` 对应的每原子最大 excursion；
-- drift slope、detrended RMS、最大相邻采样跳变；
-- 每原子总动量变化；
-- 元素对距离直方图；
-- GPUMD 与 DMG-MD 长期快照的双向静态回放。
-
-NVT 比较温度 mean/std/RMSE、MSD mean/final/slope 和时间平均 partial RDF。多初态汇总使用
-median/q95；非劣 margin、absolute floor 和双侧统计门槛只在 long-NVE manifest 维护。
-Berendsen 结果只证明与锁定 GPUMD 的实现兼容，不代表 canonical NVT 采样质量。
-
-## 4. fixture 与基线纪律
-
-- reference 必须只看见一张 GPU，禁止自动进入 `NEP_MULTIGPU`；
-- 每个 case/stage 在独立空目录执行，避免 append 输出污染；
-- 输入、potential、reference executable 和 committed golden 均由 SHA-256 锁定；
-- dynamics fixture 使用显式 velocity，随机初始化另设专项测试；
-- 更新 golden 必须使用显式 `--update-goldens` 并审查 diff；
-- 容差只能根据重复基线实验、格式量化和数值分析更新；
-- 长程压力 fixture 不宣称为生产科学用的已平衡体系。
-
-## 5. 长作业恢复、失败证据与 timing
-
-长程 runner 默认每个失败 stage 额外重试一次，可用 `--retries` 调整。每次重试从干净 stage
-目录开始，失败尝试保留为 `.failed-attempt-*`；最终失败写
-`.dmgmd-stage-failure.json`。
-
-成功 stage 的 `.dmgmd-stage-complete.json` 锁定输入、executable、launcher、关键环境和输出
-哈希。`--resume-work` 只复用签名及输出哈希仍匹配的 stage；旧版无 checkpoint 的目录只有显式
-`--adopt-existing` 才能采用，并在报告中标记为未验证 provenance。
-
-candidate stage 还必须存在结构合法的 `DMGMD_TIMING phase=run/total` 记录。timing、wall time
-和 `global_atom_steps_per_second` 目前只用于诊断，没有 speedup、scaling 或吞吐通过门槛。
-
-## 6. 当前实现状态与未来测试
-
-| 层级 | 当前状态 | 归属 |
-| --- | --- | --- |
-| GPUMD 单 GPU committed baseline | 已实现 | baseline runner |
-| DMG-MD 单 rank differential | 已实现 | baseline runner |
-| replicated-data MPI 1/2/4 rank | 已实现 | MPI runner |
-| 长 NVE/NVT、回放、跨 rank restart | 已实现 | long-NVE runner |
-| M1 空间所有权逻辑迁移 fixtures | 已实现（`run_mpi_migration.py`，含 mode=m1-fallback 断言） | MPI migration runner |
-| M2a 域分解 owned/ghost halo | 已实现并通过（`run_mpi_domain.py`：2/4 rank × 双后端大盒矩阵，含两跳链、迁移/周期/多 slab、restart 跨 rank 数、P=1 oracle 差分与逐字段通信字节断言；nightly 长程矩阵另有完整通过记录） | MPI domain runner |
-| M2a 长程守恒 nightly | 已通过（2026-09-18 手动执行：7 个 case、seed 0、1/2/4 rank、HostStaged/CudaAware，共 42 个配置；其中 M2a 2/4 rank 共 28 个配置） | long-NVE runner 扩展 |
-| 分区面精确边界、周期 ghost 的大盒边界 fixture | 已实现（`run_mpi_domain.py` 的 chain/crossings fixtures） | MPI domain runner |
-| LAMMPS 与 GPUMD 静态物理量对照 | 已实现；2026-10-09 baseline 4 case 与 long-NVE 7 case smoke 静态通过 | `tests/lammps_reference/` |
-| 三引擎 benchmark 编排 | 已实现；1/2 GPU smoke 通过，固定 CPU/NUMA 正式矩阵待执行 | `tests/benchmark/` |
-| 多节点本地 scratch/故障注入 | 自动化已定义；严格双节点验收 IN PROGRESS | `tests/mpi/run_rank_io_isolation.py`、`docs/plans/multi-node-io.md` |
-| 完整 malformed/invalid compatibility corpus | 未完成 | `docs/plans/risk-and-backlog.md` |
-
-未来计划不得提前写入本标准的“当前通过矩阵”。实现并通过验证后，再把生效合同迁入
-`docs/standards/`，并在 `docs/status/` 记录实际结果。
-
-O3 生命周期验收由 `tests/mpi/run_halo_lifecycle.py` 独立执行，不注册为自动 CTest GPU
-作业；须先通过环境门槛。验证两后端 P=1/2/4、发送/接收独立完成、物理 unpack 与复用、
-零 count/增长/重复 finish，以及单 rank 故障的整作业退出。生产立即 finish 的数值验收
-复用完整 O2 domain off/serial/verify 矩阵并对锁定 O2 输出逐字节核对，不放宽容差。
-接口和同步依据见 [halo 生命周期](./halo-lifecycle.md)。
+操作见[baseline](../../tests/baseline/README.md)、[MPI](../../tests/mpi/README.md)、
+[long_nve](../../tests/long_nve/README.md)、[benchmark](../../tests/benchmark/README.md)。

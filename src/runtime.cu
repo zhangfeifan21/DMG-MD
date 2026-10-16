@@ -10,7 +10,7 @@
 // with the local-domain runtime; the pieces both runtimes need live in
 // src/runtime_internal.hpp, and the M2a local-domain runtime lives in
 // src/domain_runtime.cu. run_replicated() is the mode dispatcher
-// (docs/plans/domain-decomposition.md section 3.3).
+// (docs/standards/mpi-runtime.md).
 #include "runtime_internal.hpp"
 
 #include <cuda_runtime.h>
@@ -105,7 +105,7 @@ class DeviceAtoms {
 // Persistent M1 spatial ownership state plus its device mirrors and the
 // indexed communication plan. The ownership epoch survives across run
 // segments (never resets to a balanced range). The per-step migration
-// protocol is steps 6-7 of docs/standards/replicated-mpi.md:
+// protocol is defined by the M1 section of docs/standards/mpi-runtime.md:
 //   * recompute the owner map from the wrapped replicated positions;
 //   * verify every rank derived the identical map (fixed-size Allreduce,
 //     before ANY collective whose counts depend on the new epoch);
@@ -514,7 +514,7 @@ class NepForce {
   {
     const int local = checked_int(counts.local_count(), "local_count");
     nep_->allocate_workspace(local);
-    // See the NEP completeness proof in docs/standards/replicated-mpi.md. The
+    // See the NEP completeness proof in docs/standards/mpi-runtime.md. The
     // pinned ordinary NEP implementation reads Fp(n2) and reverse directed
     // partials belonging to neighboring centers. Merely assigning a rank-local
     // N1/N2 leaves those arrays incomplete. Until phase-level intermediate
@@ -650,7 +650,7 @@ void run_segment(
     RuntimeOwnership& ownership,
     MpiRuntime& mpi)
 {
-  // Per-step protocol (docs/standards/replicated-mpi.md, M1): integrate the
+  // Per-step protocol (docs/standards/mpi-runtime.md, M1): integrate the
   // currently owned slots, allgather replicated coordinates, evaluate full
   // NEP scratch, recompute spatial ownership and migrate the dynamic state
   // under the old ownership, then integrate/thermo/output under the new
@@ -794,7 +794,7 @@ void run_m1_replicated(
   // fully replicated (no ghost slots, no local compaction) and NEP stays
   // replicated-full. Ownership migrates logically between epochs; atoms are
   // never inserted or removed from the replicated slots.
-  // Keep this boundary aligned with docs/standards/replicated-mpi.md.
+  // Keep this boundary aligned with docs/standards/mpi-runtime.md.
   if (model.atoms.counts.ghost_count != 0 ||
       model.atoms.counts.owned_count != model.atoms.counts.global_count) {
     throw std::logic_error(
@@ -1249,7 +1249,7 @@ void run_replicated(
     MpiRuntime& mpi)
 {
   using gpumd_compat::NEP;
-  // Mode dispatcher (docs/plans/domain-decomposition.md section 3.3): the
+  // Mode dispatcher (docs/standards/mpi-runtime.md): the
   // potential is parsed exactly once here; eligibility is decided from the
   // parsed cutoffs and the box; P=1 always keeps the existing path, P>1
   // inputs that fail an M2a criterion keep the M1 replicated-full runtime as

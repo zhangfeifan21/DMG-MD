@@ -1,8 +1,8 @@
 #pragma once
 
 // M2a local-domain layout: pure host-side geometry, classification, counting
-// and exchange-plan generation (docs/plans/domain-decomposition.md sections
-// 3-8). Nothing here touches MPI or CUDA; the domain runtime in
+// and exchange-plan generation (docs/standards/mpi-runtime.md). Nothing here
+// touches MPI or CUDA; the domain runtime in
 // src/domain_runtime.cu drives these helpers, and tests/domain_layout_tests.cpp
 // exercises them directly.
 //
@@ -38,7 +38,7 @@ namespace dmgmd {
 inline constexpr double kNeighborSkin = 1.0;
 
 // ---------------------------------------------------------------------------
-// Typewise consumption radii (plan section 4.3/4.4).
+// Typewise consumption radii (docs/standards/mpi-runtime.md).
 // ---------------------------------------------------------------------------
 
 // Per-type cutoff description taken from the parsed NEP parameters. Kept free
@@ -170,7 +170,7 @@ struct DomainRadii {
 }
 
 // ---------------------------------------------------------------------------
-// Eligibility (plan section 3.3).
+// Eligibility (docs/standards/mpi-runtime.md).
 // ---------------------------------------------------------------------------
 
 struct DomainEligibility {
@@ -260,7 +260,7 @@ struct DomainEligibility {
 }
 
 // ---------------------------------------------------------------------------
-// Local layout (plan sections 3.2, 7).
+// Local layout (docs/standards/data-layout.md).
 // ---------------------------------------------------------------------------
 
 // Full per-atom record for a rank-owned atom. Static fields (type, mass,
@@ -475,7 +475,7 @@ struct LocalLayout {
 }
 
 // ---------------------------------------------------------------------------
-// Halo exchange plans (plan section 6.1 / 7).
+// Halo exchange plans (docs/standards/mpi-runtime.md).
 // ---------------------------------------------------------------------------
 
 // Membership record carried by the rebuild-time face exchange: 40 bytes per
@@ -639,7 +639,7 @@ inline void validate_exchange_plan(
 }
 
 // ---------------------------------------------------------------------------
-// Migration routing (plan section 8).
+// Migration routing (docs/standards/mpi-runtime.md).
 // ---------------------------------------------------------------------------
 
 // Final owner of a wrapped (or wrap-compatible) fractional coordinate along

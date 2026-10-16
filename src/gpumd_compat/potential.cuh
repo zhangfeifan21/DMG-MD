@@ -47,7 +47,7 @@ Adaptations for this replica are listed at the bottom of this header block.
 DMG-MD domain additions (M2a): the base class carries a second center range
 ND1..ND2 (dependency/descriptor centers) in addition to the legacy force-center
 range N1..N2, plus a global-ID-keyed many-body gather used by the local-domain
-NEP path (docs/plans/domain-decomposition.md section 5). The legacy
+NEP path (docs/standards/mpi-runtime.md). The legacy
 find_properties_many_body and the P1/M1 center semantics are unchanged.
 ----------------------------------------------------------------------------*/
 

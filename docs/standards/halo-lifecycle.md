@@ -105,4 +105,4 @@ D2H 括号含发送源 event 等待，MPI wait/post 语义保持。不得把新�
 增长/复用、重复 finish、progress-only、两种完成顺序和 rank0 单边故障；故障注入通过
 独立测试二进制的链接 wrapper，生产没有故障开关。完整 O2 domain 三模式矩阵继续保留，
 同时比对已锁定 O2 输出；验收命令/结果/串行成本见
-[O3 实测](../status/halo-lifecycle-20261015.md)。
+[O3 实测](../status/validation/halo-lifecycle-20261015.md)。

@@ -3,19 +3,12 @@
 类别：实测/实现备忘。C1 完成；C2/C3、正式矩阵、M2b 未启动。本记录验证工具接线、
 指标计算与生命周期，不发布生产 CPU 利用率、采样低扰动或 MPI 等待归因结论。
 
-## 基线与改动
+## 实现身份
 
-- 开始时两个仓库均干净；DMG-MD HEAD `0ba54eea4e16d157a01c0fb6e371b0af7d33032e`，
-  参考 HEAD `9d23496e41319b9e2af5221a7df6285387401d1e`。本轮保留用户状态，无提交/推送。
-- 新增 `tests/benchmark/cpu_sampling.py`：Session/wrap/collect/sample/capacity，独立
-  collector、exec 握手与内容哈希核验、rank/task 原始计数、资源限制、observer/诊断和清理。
-- 新增 `tests/benchmark/analyze_cpu.py`：interval/shared_capacity/mapping/analyze，
-  可重算 CSV/JSON、marker 支持、部分结果、不重复计数及缺失语义。
-- `run_benchmark.py`：默认 off 的 CLI、dry-run、metadata、生命周期接入；GPU telemetry
-  增加 monotonic 读取区间。`test_cpu_sampling.py` 新增测试并注册 tests/CMakeLists.txt。
-- 已实施合同迁入 [cpu-sampling 标准](../standards/cpu-sampling.md)，操作说明在
-  [benchmark README](../../tests/benchmark/README.md#cpu-采样c1)，计划和 docs 索引已更新。
-  未修改生产源码、runtime 默认行为、manifest、NEP 或参考仓库。
+DMG-MD 起始 HEAD 为 0ba54eea4e16d157a01c0fb6e371b0af7d33032e，当时采样/编排改动未提交。
+生产 runtime/NEP、manifest 与参考树未修改。实现入口、schema 和指标合同在
+[CPU 标准](../../standards/cpu-sampling.md)，操作在[benchmark README](../../../tests/benchmark/README.md#cpu-采样c1)。
+以下为当次验证，后续 O1 已接入 marker，当前能力见[状态](../current.md)。
 
 ## 环境、命令与结果
 
@@ -108,6 +101,5 @@ python3 tests/benchmark/analyze_cpu.py \
 
 P>1 的 proc sweep 不是同步读数，job 通常只报 observed subtotal；未提供正式 run/step
 归因、可发布的跨 trial CPU 均值/峰值、线程库角色或 MPI 忙轮询结论。collector 原始成本
-已记，但低扰动结论仍 UNKNOWN。下一阶段为计划 **C2**：按现有 pilot/manifest 选择输入，
-核验实际 affinity/祖先 quota，随机化至少五次 off/proc A/B，比较 run 与 process wall，
-校准窗口数量/周期/步数和存储量；需要 marker 时与 O1 单独实施。不直接启动完整矩阵。
+已记，但低扰动结论仍 UNKNOWN。C2/C3 的剩余矩阵和校准要求见[CPU 研究计划](../../plans/cpu-usage-study.md)。
+本次没有 run marker；O1 后续接入不改变本报告数据的观测窗口。

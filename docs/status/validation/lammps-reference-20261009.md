@@ -1,8 +1,8 @@
 # LAMMPS/MatPL 三引擎对照验证（2026-10-09）
 
 类别：进度与实测备忘。此记录对应 `newmd` HEAD
-`0ba54eea4e16d157a01c0fb6e371b0af7d33032e` 加当前未提交工作树；
-新增输入/比较脚本尚未提交，单靠该 HEAD 不能复现本记录。
+`0ba54eea4e16d157a01c0fb6e371b0af7d33032e` 加实验当时未提交的工作树；
+当时新增输入/比较脚本未提交，单靠该 HEAD 不能复现本记录。
 
 ## 环境与软件身份
 
@@ -76,10 +76,8 @@ python3 tests/lammps_reference/compare_static.py \
   --report /tmp/dmgmd-threeway-carbon/physics.json
 ```
 
-`dense_water_typewise_cutoff` 的 GPUMD 原势与 LAMMPS 势哈希不同：其逐元素
-径向 cutoff 全为 6 Å、角向全为 4 Å，折叠成统一格式后与锁定的普通水 NEP
-势逐字节相同。原格式会被当前 MatPL 解析器拒绝，等价转换后静态检查通过。
-因此该结果证明当前势的物理等价，不证明 MatPL 支持非统一 typewise cutoff。
+本次 dense_water_typewise_cutoff 通过逐元素相同 cutoff 的等价折叠，保留源/目标哈希。
+该结果不证明 MatPL 支持非统一 typewise 语法；转换规则见[三引擎标准](../../standards/cross-engine-reference.md)。
 
 ## benchmark 编排 smoke
 

@@ -1,77 +1,68 @@
-# DMG-MD 文档索引
+# DMG-MD 文档
 
-类别：文档索引。
+类别：文档索引。更新日期：2026-10-16。
 
-本文档是 `docs/` 的统一入口。文档按“当前生效的标准、带日期的进度证据、尚未实施的计划”
-分类；代码和测试中的事实发生变化时，不应在三类文档中复制维护同一个参数表。
+先看[当前状态](status/current.md)。代码已完成 M1/M2a 与 O1–O3；O3 仍在 begin 后立即
+finish，实际通信/计算重叠尚未接入。
 
-## 现行标准
+| 目录 | 内容 | 维护边界 |
+| --- | --- | --- |
+| `standards/` | 已生效的产品、runtime 与测试合同 | 随代码更新，不复制历史验收表 |
+| `reference/` | 锁定 GPUMD 的调用链与 kernel 证据 | 与 DMG-MD 当前实现区分 |
+| `operations/` | 部署与运行方法 | CLI 以脚本为准 |
+| `status/current.md` | 当前状态入口 | 汇总能力、最新证据和缺口 |
+| `status/validation/` | 带日期的正确性和工具验收 | 结果限于记录的源码、二进制与环境 |
+| `status/performance/` | 带日期的成本和性能实测 | 保留测量条件、原始数据位置和限制 |
+| `plans/` | 未完成的方案、验收和风险 | 完成部分迁入标准和实测记录 |
 
-这些文档描述已经生效的产品、架构和测试合同：
+## 当前合同
 
-- [架构决策](./standards/architecture-decisions.md)
-- [输入/输出兼容矩阵](./standards/compatibility-matrix.md)
-- [数据结构与内存布局](./standards/data-layout.md)
-- [Replicated-data MPI 协议](./standards/replicated-mpi.md)
-- [GPUMD runtime 审计与最小源码闭包](./standards/gpumd-runtime-audit.md)
-- [M2a halo 生命周期](./standards/halo-lifecycle.md)
-- [M2a 普通步串行 NEP 分区](./standards/domain-partition.md)
-- [NEP kernel 与通信依赖](./standards/kernel-inventory.md)
-- [Benchmark CPU 采样合同](./standards/cpu-sampling.md)
-- [Golden Test 标准](./standards/golden-test-standard.md)
-- [GPUMD、LAMMPS、DMG-MD 横向对照标准](./standards/cross-engine-reference.md)
+- 产品：[架构决策](standards/architecture-decisions.md)、[输入/输出兼容矩阵](standards/compatibility-matrix.md)。
+- Runtime：[MPI 双路径与通信记账](standards/mpi-runtime.md)、[数据布局](standards/data-layout.md)、[缓存有效性证明](standards/cache-validity.md)。
+- O2/O3：[串行 NEP 分区](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
+- 验证：[Golden Test 原则](standards/golden-test-standard.md)、[三引擎对照](standards/cross-engine-reference.md)、[CPU 采样](standards/cpu-sampling.md)。
+- 参考证据：[GPUMD runtime 审计](reference/gpumd-runtime-audit.md)、[NEP kernel 与依赖](reference/kernel-inventory.md)。
 
-测试的机器可读参数仍以 `tests/**/manifest.json` 和测试脚本为第一事实源；标准文档解释合同，
-不复制全部 profile 和容差。
+## 操作入口
 
-## 进度与实测备忘
+- [Docker 快速开始](../README.md#docker-部署推荐跨服务器使用)、[跨服务器部署](operations/deployment.md)。
+- 测试目录：[单 GPU baseline](../tests/baseline/README.md)、[MPI/halo](../tests/mpi/README.md)、[长程 NVE/NVT](../tests/long_nve/README.md)。
+- [Benchmark](../tests/benchmark/README.md)、[LAMMPS 输入与静态比较](../tests/lammps_reference/README.md)。
 
-这些文档只说明某个日期、revision 和环境下已经完成或实际运行的内容：
+## 验证记录
 
-- [CPU 采样 C1 验证（2026-10-09）](./status/cpu-sampling-c1-20261009.md)
-- [通信/计算重叠 O3 halo 生命周期（2026-10-15）](./status/halo-lifecycle-20261015.md)
-- [通信/计算重叠 O2 串行分区（2026-10-15）](./status/overlap-partition-20261015.md)
-- [通信/计算重叠 O1 串行基线（2026-10-12）](./status/overlap-baseline-20261012.md)
-- [LAMMPS/MatPL 三引擎静态与 smoke 验证（2026-10-09）](./status/lammps-reference-20261009.md)
-- [当前实现进度](./status/current.md)
-- [多 GPU Benchmark 实测结果（2026-09-26）](./status/benchmark-multigpu-results-20260926.md)
-- [Docker 适配验证与待验收项（2026-09-23）](./status/docker-validation.md)
-- [Benchmark 功能验证（2026-09-22）](./status/benchmark-validation.md)
-- [GPUMD/DMG-MD baseline 实测结果](./status/baseline-results.md)
-- [第二阶段统一重建与分步计时成本报告](./status/stage2-cost-report.md)
+| 日期 | 范围 |
+| --- | --- |
+| 2026-10-15 | [O3 halo 生命周期](status/validation/halo-lifecycle-20261015.md)、[O2 串行分区](status/validation/overlap-partition-20261015.md) |
+| 2026-10-09 | [CPU 采样 C1](status/validation/cpu-sampling-c1-20261009.md)、[LAMMPS 静态与 smoke](status/validation/lammps-reference-20261009.md) |
+| 2026-09-23 | [Docker 适配与待验收项](status/validation/docker-validation.md) |
+| 2026-09-22 | [Benchmark 工具](status/validation/benchmark-validation.md) |
+| 2026-09-09 | [Committed baseline 与重复校准](status/validation/baseline-results.md) |
 
-“测试已定义”不等于“当前 revision 已执行通过”。新的通过结论必须在此类文档中记录日期、
-代码 revision、环境、精确命令和结果。
+## 性能与成本记录
 
-## 操作手册与测试入口
+- [2026-10-12：O1 串行时间线与 CPU 基线](status/performance/overlap-baseline-20261012.md)。
+- [2026-09-26：单机八卡 benchmark](status/performance/benchmark-multigpu-results-20260926.md)。
+- [2026-09-22：统一重建与分步成本](status/performance/stage2-cost-report.md)。
 
-- [MPI 与 halo 生命周期验收](../tests/mpi/README.md)
+O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 收益。
 
-- [单节点多 GPU benchmark：样例、测量口径与操作](../tests/benchmark/README.md)
-- [LAMMPS/MatPL NEP 对照输入与静态物理量检查](../tests/lammps_reference/README.md)
-- [DMG-MD 与参考软件跨服务器部署](./operations/deployment.md)
+## 剩余计划
 
-## 待实施计划
-
-这些内容尚未成为生产合同：
-
-- [MPI 启动 CPU 核数与 NUMA 绑定](./plans/mpi-cpu-binding.md)（PROPOSED，P0）
-- [LAMMPS 多 GPU + MPI NEP benchmark](./plans/lammps-multigpu-benchmark.md)（IN PROGRESS，P0：输入、静态比较和三引擎 smoke 已实现；固定 CPU/NUMA 正式矩阵待完成）
-- [通信与计算重叠](./plans/communication-computation-overlap.md)（IN PROGRESS，P0：O0 方向已确认，O2 串行分区与 O3 生命周期完成；O4–O5 未执行）
-- [CPU 使用率研究](./plans/cpu-usage-study.md)（IN PROGRESS：C0/C1 完成；C2/C3 改作绑定验收后的辅助诊断）
-- [域分解与 halo 通信计划](./plans/domain-decomposition.md)（IN PROGRESS：M0、M1、M2a 已实施，M2b 起待审批；M2a 生效合同见 standards/replicated-mpi.md）
-- [M2a 缓存有效性统一重建与分步计时设计](./plans/cache-validity-and-step-timing.md)（APPROVED：已实施；现行合同见 standards，实测见 stage2 成本报告）
-- [多节点 rank I/O 隔离验收计划](./plans/multi-node-io.md)（暂缓）
-- [风险与待办登记](./plans/risk-and-backlog.md)
-
-计划获批并实施后，应把最终合同迁入 `standards/`，把实测结果写入 `status/`，再从计划中删除
-已经完成的详细执行步骤。Git 历史负责保存旧方案，不在当前工作树中另建重复的归档副本。
+| 优先级 | 计划 | 状态 |
+| --- | --- | --- |
+| P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | PROPOSED；统一启动策略未实现 |
+| P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
+| P0 | [通信与计算重叠](plans/communication-computation-overlap.md) | IN PROGRESS；O1–O3 完成，下一阶段 O4 |
+| 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，C2/C3 待执行 |
+| 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；M2b、release 等未完成 |
+| 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |
 
 ## 维护规则
 
-- 每份文档开头必须标明类别；计划还必须标明 `PROPOSED`、`APPROVED` 或 `IN PROGRESS`。
-- 标准只用来描述当前有效行为；未实现内容只能链接到计划。
-- 状态文档不得成为容差、profile 或支持范围的唯一来源。
-- 修改测试时同时检查脚本、manifest、相邻测试 README 和 Golden Test 标准。
-- 修改当前 runtime 协议时同步更新 `replicated-mpi.md`；域分解真正启用后再调整其归类。
-- 文档移动或改名后必须扫描仓库中的 Markdown 链接、源码注释和测试 docstring。
+测试脚本决定执行行为，manifest 决定 case/profile/哈希/容差，测试 README 维护操作方法。
+标准解释合同；实测保留日期、revision/dirty 身份、环境、精确命令、结果与原始证据位置。
+未运行、skip 和子集通过须分别标注；本机生成物不属于随仓库分发的文档。
+
+计划完成后删除重复步骤，Git 保存旧方案，不另建 archive 副本。移动文档时同步检查
+Markdown 链接、源码注释和测试 docstring；新增文档须从本页链接。

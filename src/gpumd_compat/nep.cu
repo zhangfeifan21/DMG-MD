@@ -1237,7 +1237,7 @@ void NEP::compute_large_box(
 }
 
 // M2a local-domain large-box orchestration
-// (docs/plans/domain-decomposition.md sections 4-5). Same kernel sequence and
+// (docs/standards/mpi-runtime.md). Same kernel sequence and
 // arithmetic as compute_large_box, but with the center domains split:
 //   * [N1, N2)   final-force centers (owned prefix);
 //   * [ND1, ND2) dependency centers (owned + dependency ghosts) that get

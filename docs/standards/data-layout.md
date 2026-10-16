@@ -1,136 +1,44 @@
-# DMG-MD 数据结构与内存布局
+# 数据结构与内存布局
 
-类别：现行标准。
+类别：现行标准。核对日期：2026-10-16。
 
-更新日期：2026-09-22。
+## 计数、身份与权限
 
-本文档描述 single-rank、M1 空间所有权 replicated MPI 与 M2a rank-local
-domain `dmg-md` 的数据面，并以现有代码为权威来源。运行时在两种数据面之间
-按 `DMGMD_DOMAIN` eligibility 记录分派（见
-[replicated-mpi.md](./replicated-mpi.md)）。
+`include/dmgmd/model.hpp` 的 AtomCounts 保存 global_count、owned_count、ghost_count，
+`local_count()=owned_count+ghost_count`。global_count 是元数据，不作为 M2a device stride。
 
-## 1. 数据域约定
+| 域 | M1 replicated-full | M2a local-domain |
+| --- | --- | --- |
+| reader HostAtoms | 每 rank 完整 N；owned=N、ghost=0 | bootstrap 从完整输入挑 owned；完整 host identity 仍保留 |
+| device local_count | N | owned + dependency ghosts + coordinate-only ghosts |
+| 权威 owned | SpatialOwnership 的任意槽位集合，按 gid 升序 | LocalLayout 的 `[0,owned)` 前缀，按 gid 升序 |
+| ghost | 无；non-owned 仍为 replicated scratch | 两个后缀按 `(source face, source rank, gid)` 排序，携带 image shift 元数据 |
+| NEP producer / final | 全 N scratch / owned 槽位权威 | `[0,owned+dep)` descriptor/partial，`[0,owned)` final force；owned=0 时 producer 为空 |
 
-原子数量由 `include/dmgmd/model.hpp` 中的 `AtomCounts` 显式表示：
+global_id 为 64-bit 输入行号，跨迁移稳定；local slot 不是身份。M1 的 reader owned=N
+不能误当每 rank 都拥有 N 份物理贡献。M2a manager owner 在 cache epoch 内固定，可能
+暂时不同于当前位置的 geometric owner；只在统一 rebuild 提交迁移。
 
-```cpp
-struct AtomCounts {
-  std::size_t global_count;
-  std::size_t owned_count;
-  std::size_t ghost_count;
+HostAtoms 当前为 O(N)/rank，整个作业为 O(NP)；root 输出还需 N-sized snapshot，不能据
+local device 布局宣称端到端内存 scaling。
 
-  std::size_t local_count() const {
-    return owned_count + ghost_count;
-  }
-};
-```
+## Host 模型与 Box
 
-各计数的含义为：
+Model 包含 BoxData 与 HostAtoms。reader 数组在两路径初始化时都为全局长度 N。
 
-| 计数 | M1 replicated 路径 | M2a local-domain 路径 | 可用于数组寻址 |
-| --- | --- | --- | --- |
-| `global_count` | 全局原子数元数据 | 全局原子数元数据 | 否 |
-| `owned_count` | reader 模型中的记录数；M1 为 N | 本 rank 空间 owned 原子数 | 否 |
-| `ghost_count` | 当前必须为 0 | 本 rank 可寻址但不拥有的原子数 | 否 |
-| `local_count()` | `N`（replicated stride） | `owned + ghost` | 是，所有每原子 SoA 的 stride |
+| 字段 | 类型 / 逻辑尺寸 | 语义 |
+| --- | --- | --- |
+| global_id | uint64 / local | 稳定身份 |
+| species、type | string、int / local | 元素及 potential header 类型索引 |
+| mass、charge | double、float / local | amu；缺省质量来自 GPUMD 元素表、charge=0 |
+| position、velocity | double / 3local | Å；速度输入 Å/fs 乘 10.18051 为内部单位 |
+| group_labels | int / methods×local | 原子持久 labels，contents 可重建 |
+| has_input_velocity | bool | model 有 vel 时 velocity 命令不重新初始化 |
 
-M1 路径的 reader 初始化为：
+HostAtoms::validate 检查计数溢出、owned≤global、各标量长度=local、向量长度=3local 和
+每组 label 长度；它不证明 MPI owned 覆盖，后者由 runtime 校验。
 
-```text
-global_count = N
-owned_count  = N
-ghost_count  = 0
-global_id    = [0, 1, ..., N - 1]
-```
-
-这些值在 M1 replicated runtime 中也保持相等：`local_count() == N` 仍是所有 SoA per-atom
-数组的唯一 stride。实际 MPI 权威所有权由独立的 `SpatialOwnership`
-（`include/dmgmd/spatial_ownership.hpp`）表示——P>1 时是沿最长边的等宽 fractional slab
-给出的**槽位子集**，P=1 时是 rank 0 的平凡全集映射；不得把 reader 的 `owned_count=N`
-误当成每 rank 都拥有 N 份物理输出，也不得把它误当成空间 owned 数量。
-
-M2a 路径下 reader 的完整模型在 bootstrap 时用于推导初始 owned 集
-（`include/dmgmd/domain_layout.hpp` 的 `DomainAtomRecord`）；此后 `LocalLayout` 是 device
-数据面的权威布局。完整 `HostAtoms` 当前仍在每个 rank 保留，作为静态 identity/输出格式
-元数据，因此 host 内存仍为 O(NP)；它不得重新成为 force/integration/thermo 数据面。
-local 槽位顺序为 `[0, owned)`（global_id 升序）| dependency
-ghosts | coordinate-only ghosts，ghost 段按 `(source face, source rank, global_id)`
-排序；`local_count` 是全部 SoA 与 NEP workspace 的唯一 stride，`global_count`
-只是元数据。每个槽位携带 global_id、owner/source rank、face 与 image shift。
-
-
-
-## 2. Host 模型
-
-`dmgmd::Model` 由模拟盒和 `HostAtoms` 组成：
-
-```text
-Model
-├── BoxData
-│   ├── periodic[3]
-│   └── h[9]
-└── HostAtoms
-    ├── AtomCounts
-    ├── has_input_velocity
-    ├── global_id[local]
-    ├── species[local]
-    ├── type[local]
-    ├── mass[local]
-    ├── charge[local]
-    ├── position[3 * local]
-    ├── velocity[3 * local]
-    └── group_labels[method][local]
-```
-
-字段的存储类型和来源如下：
-
-| 字段 | C++ 类型 | 尺寸 | 说明 |
-| --- | --- | ---: | --- |
-| `global_id` | `std::uint64_t` | `local` | 稳定身份；当前按 `model.xyz` 输入顺序生成 |
-| `species` | `std::string` | `local` | 输入元素符号，用于输出和类型映射 |
-| `type` | `int` | `local` | 元素在 NEP potential header 中的下标 |
-| `mass` | `double` | `local` | 显式 mass 或 GPUMD 默认元素质量 |
-| `charge` | `float` | `local` | 输入 charge；缺省为 0，与 GPUMD 类型一致 |
-| `position` | `double` | `3 * local` | 笛卡尔坐标，单位 Å |
-| `velocity` | `double` | `3 * local` | parser 已从 Å/fs 转为 GPUMD 内部单位 |
-| `group_labels` | `int` | `methods * local` | 每种 grouping method 一条 local 数组 |
-
-`HostAtoms::validate()` 检查：
-
-- `owned_count + ghost_count` 不发生溢出；
-- `owned_count <= global_count`；
-- 每个标量数组长度等于 `local_count()`；
-- position/velocity 长度等于 `3 * local_count()`；
-- 每条 group label 数组长度等于 `local_count()`。
-
-## 3. SoA 地址规则
-
-三分量数组使用 GPUMD 兼容的分量分块 SoA。令 `L = local_count()`：
-
-```text
-position = [x[0:L]) [y[0:L]) [z[0:L])
-velocity = [x[0:L]) [y[0:L]) [z[0:L])
-force    = [x[0:L]) [y[0:L]) [z[0:L])
-```
-
-分量 `axis`、本地下标 `atom` 的地址为：
-
-```cpp
-base[axis * L + atom]
-```
-
-每原子 virial 使用九个同样的分量块：
-
-```text
-virial = [xx:L][yy:L][zz:L][xy:L][xz:L][yz:L][yx:L][zx:L][zy:L]
-```
-
-该顺序直接沿用锁定 GPUMD 实现，不得在输出或 thermo 中重新解释。
-
-## 4. Box 布局
-
-`BoxData::periodic[3]` 保存 x/y/z 三个方向的 PBC 标志。`BoxData::h[9]` 使用 GPUMD
-`Box::cpu_h[0..8]` 的矩阵存储顺序：
+BoxData 保存 periodic[3] 与 h[9]：
 
 ```text
 h = [ ax bx cx
@@ -138,137 +46,65 @@ h = [ ax bx cx
       az bz cz ]
 ```
 
-extended XYZ 的 `Lattice` 按 `a, b, c` 三个向量依次给出，所以 parser 在写入 `h` 时执行
-转置映射。runtime 将 `h` 直接复制到 GPUMD `Box`，再由共享实现计算逆矩阵、体积、正交性
-和 minimum-image 行为。
+XYZ Lattice 按 a/b/c 向量排列，parser 转置进 h；runtime 使用 compat Box 求逆、体积和 MIC。
+P1 支持范围与 P>1 正交全周期约束见[MPI](mpi-runtime.md)，不由矩阵布局推导分布式支持。
 
-## 5. DeviceAtoms
+## SoA / ELL 寻址
 
-`src/runtime.cu` 中的 `DeviceAtoms` 是当前 GPU 数据所有者。它保留完整 `AtomCounts`，并使用
-GPUMD 的 `GPU_Vector` 管理设备内存：
-
-| buffer | 设备类型 | 分配尺寸 | 当前有效域 |
-| --- | --- | ---: | --- |
-| `global_id` | `unsigned long long` | `local` | 全部 local；输出恢复稳定顺序 |
-| `type` | `int` | `local` | NEP 可寻址域 |
-| `mass` | `double` | `local` | replicated input；积分/thermo 按 MPI 空间 owned 槽位读 |
-| `charge` | `float` | `local` | replicated input；rank 0 formatter 使用 |
-| `position` | `double` | `3 * local` | replicated input；积分只写 MPI 空间 owned 槽位 |
-| `velocity` | `double` | `3 * local` | replicated buffer；非 owned 槽位不每步同步（M0），correct_velocity 触发步与 ownership 迁移步恢复复制态；积分/控温只写 MPI 空间 owned 槽位 |
-| `force` | `double` | `3 * local` | NEP 写全量 scratch；仅 MPI 空间 owned 槽位 authoritative |
-| `potential` | `double` | `local` | NEP 写全量 scratch；thermo/dump 只认 MPI 空间 owned 槽位 |
-| `virial` | `double` | `9 * local` | NEP 写全量 scratch；thermo/dump 只认 MPI 空间 owned 槽位 |
-| `unwrapped` | `double` | 按需 `3 * local` | `dump_xyz position_unwrapped` 时启用 |
-| `previous_position` | `double` | 按需 `3 * local` | 更新 unwrapped position 时使用 |
-
-`species` 和 group labels 当前保留在 host identity 模型中；普通 NEP force 不需要它们驻留
-GPU。创建输出快照时，各 rank 只打包自己的 owned 槽位（indexed pack），`MPI_Gatherv` 在
-rank 0 按 global_id/slot scatter plan 恢复全局 SoA。
-
-## 6. Kernel 所有权边界
-
-当前 runtime kernel 明确接收 MPI 空间 owned 槽位索引列表（`device_owned_indices`，
-按 global_id 升序）和 replicated stride：
-
-- velocity-Verlet、速度缩放和 unwrapped position 更新只 launch/写入 owned 槽位；
-- thermo reduction 只遍历 owned 槽位；
-- force 前清零全量 NEP scratch，但后续积分/reduction/gather 只承认 owned 槽位；
-- position PBC wrap 仍是 full-N（wrap 结果同时是 M1 ownership 重算的确定性输入）；
-- XYZ/restart 只收集 owned records，再按 `global_id` 排序且只由 rank 0 写。
-
-因此 ghost 即使将来出现在 local 数组尾部，也不会自动被积分、计入 thermo 或直接输出。
-这并不表示当前 force 路径已经支持 ghost。
-
-## 7. Replicated MPI NEP 边界
-
-`NepForce` 直接构造锁定 GPUMD 源码中的 `NEP`：
+令 L 为逻辑 local_count，所有 kernel 显式使用 L，不能用 owned/interior 数量或 capacity：
 
 ```text
-NEP workspace/input stride = global_count
-NEP scratch center range   = [0, global_count)
-authoritative output range = owned MPI range [begin_r, end_r)
+position/velocity/force[axis*L + slot]             # 3 分量
+virial[component*L + slot]                       # 9 分量
+Fp[descriptor_component*L + slot]
+NN[center], NL[neighbor_ordinal*L + center]       # ELL 存 local slot
+f12{x,y,z}[angular_ordinal*L + center]
 ```
 
-reader 仍生成完整无 ghost 模型：
+内部 virial 顺序为 `xx,yy,zz,xy,xz,yz,yx,zx,zy`。XYZ/thermo 的映射与单位由
+[兼容矩阵](compatibility-matrix.md)维护。domain 邻居按 candidate gid 排序但存 local slot；
+反边按 gid 查找本步 filtered angular ordinal，不能持久化其位置。
 
-```text
-global_count == local_count
-ghost_count == 0
-```
+## Device 所有者与 buffer
 
-MPI 空间所有权（`SpatialOwnership`）与 `AtomCounts::owned_count` 不混用：后者描述 reader
-得到的完整 replicated input（M1 中仍是 N，即 SoA stride），前者决定积分、local thermo sum
-和输出 gather 的槽位集合；每 rank 的空间 owned 数量记录在 `SpatialOwnership` 内，空集合
-（空 slab）合法，且 M1 明确支持 `N<P`。NEP scratch 保持全中心，是因为直接按 owned 设置 `N1/N2` 会缺失分片外
-`Fp` 和 reverse partial。详见 `replicated-mpi.md`。
+M1 的 DeviceAtoms 位于 `src/runtime.cu`，M2a 的 DomainDeviceAtoms/DomainState 位于
+`src/domain_runtime.cu`；MPI staging 由 `src/mpi_runtime.cu` 管理。
 
-## 8. M2a local-domain 数据面（现行）
+| buffer | 逻辑尺寸 | M2a 有效域 |
+| --- | --- | --- |
+| gid/type | L | 全 local 身份/typewise filter |
+| mass/charge | L | owned 权威；ghost 不积分/thermo/输出 |
+| position | 3L | owned 更新；ghost 每步按固定 face plan 刷新 |
+| velocity | 3L | owned 权威，修速经 root gather/scatter |
+| force/PE/virial | 3L / L / 9L | force 前全 L 清零；owned 权威，ghost 仅 scratch |
+| unwrapped/previous_position | 按需 3L | owned；启用时 unwrapped 随迁移载荷传递 |
+| epoch_displacement | 3L | owned wrap 前累计，rebuild 清零；与用户 unwrapped 输出无关 |
+| decision_max_squared/reasons | 各一标量 | 从 owned manager copy 得出统一决议 |
+| NEP Fp/sums/partial/count/list | L stride | producer 域 `[0,owned+dep)`，candidate `[0,L)` |
+| face send/recv index | face plan 长度 | send 指 owned、recv 指 ghost；与 mapping epoch 绑定 |
 
-M2a（`src/domain_runtime.cu`）的 device 数组按上述 local 布局寻址：
+M1 的 mass/type/position 为完整副本，VV/thermo 按 owned index list。普通步不再复制 velocity；
+迁移/修速前先恢复必要复制态。NEP 写全 N scratch，只有 owned 部分用于物理输出。
 
-| buffer | 分配尺寸 | 有效域 |
-| --- | ---: | --- |
-| `global_id` / `type` | `local_count` | 全部 local 槽位（身份/typewise 过滤） |
-| `mass` / `charge` | `local_count` | owned 权威；ghost 槽位不参与积分/thermo/输出 |
-| `position` | `3 * local_count` | 全部 local（ghost 位置每步 24 B p2p 刷新） |
-| `velocity` | `3 * local_count` | owned 权威（correct_velocity 经 gather/scatter 维护） |
-| `force` / `potential` / `virial` | `3 / 1 / 9 * local_count` | owned 权威；ghost 槽位是 scratch（清零无害，永不 gather） |
-| `unwrapped` / `previous_position` | 按需 `3 * local_count` | owned（unwrapped 随迁移载荷传递） |
-| `epoch_displacement` | `3 * local_count` | owned 在 wrap 前累计的 cache-reference 位移；rebuild commit 清零，ghost/padding 不读 |
-| `decision_max_squared` / `decision_reasons` | 各 1 个标量 | 唯一 cache decision 的 device scratch；只从 owned manager copy 归约 |
-| NEP `Fp/sum_fxyz/f12/NN/NL` workspace | `local_count` stride | descriptor 域 `[0, owned+dep)`；候选 `[0, local_count)` |
+表中为逻辑 size。L=0 时部分 GPU_Vector capacity 至少为 1，domain API 仍显式接收 L=0，
+空中心 launch 前短路，不访问 padding。Atom/NEP/Neighbor 使用 resize_reuse，容量足够只改
+逻辑尺寸，扩容留 25% 余量；capacity 不作 stride。默认长度 copy/fill 以逻辑 size 为准。
 
-`LocalLayout`、face send/receive map 与 Neighbor reference 共用单调 `layout/mapping` epoch。
-普通步只更新 owned dynamics、epoch displacement 与固定 ghost position slots；只有统一 rebuild
-transaction 才能改变 owner、槽位/stride、ghost 分类或 map，并在新布局全部上传后一起发布
-epoch。capacity 是物理存储属性，不是 layout/cache version；capacity 增长后所有 view 在同一
-transaction 中重新取得。
+## 布局提交与输出
 
-表中的尺寸是**逻辑尺寸/stride**。为避免底层零字节 device allocation 的实现差异，
-`local_count==0` 时部分 `GPU_Vector` 物理 capacity 保留 1 个元素；NEP domain 接口另行显式
-接收逻辑 `local_count`，所有中心范围均为空，任何 kernel、D2H 或邻居重建都不得访问该填充
-元素。物理 allocation capacity 可以大于表中的逻辑尺寸：M2a Atom、NEP 与 Neighbor
-workspace 在容量足够时只更新 `GPU_Vector::size()`，扩容时保留 25% 余量。capacity 不是
-kernel stride；所有 SoA 分量偏移、ELL 行跨度、默认长度 copy/fill 仍以逻辑 size 或显式
-`local_count` 计算，禁止读取余量。
+LocalLayout、membership、face map、neighbor reference 的 epoch/身份必须一致。普通步不改
+槽位/分类/map；rebuild 才统一迁移、重建并上传。workspace 逻辑 size 随 L 更新，超 capacity
+才分配；布局变化强制 neighbor 失效、重新取得 view，清零全部逻辑输出。
+缓存证明见[cache-validity](cache-validity.md)。
 
-每原子输出 gather 使用 local-owned-prefix + global ID（root 按 input-slot 顺序恢复
-恰好 N 条记录），`global_count` 从不作为 device 数组 stride。布局在迁移或 halo
-membership 重建时整体重建（epoch++），NEP workspace 只在 `local_count` 变化时
-更新逻辑尺寸；只有超出 capacity 才发生物理扩容。每次布局变化仍强制 neighbor 重建并使
-全部缓存 view 失效，force/PE/virial 的整个逻辑区在 layout upload 时重新清零。
+M2a bootstrap 的首次 wrap 使用共享 device kernel，unwrapped 从 raw 输入播种；host 重算
+wrap 可能因 FMA 差 1 ULP。XYZ/restart 只 gather owned prefix + gid，root 恢复输入顺序；
+ghost 不参与 thermo、控温或直接输出。restart 新进程重新 bootstrap，不复用 epoch。
 
-## 9. 初始化与输出合同（双路径）
+## O2/O3 附加状态
 
-M1 replicated runtime 入口要求：
+分区保持原 slot/grid/block/L stride；三张 L 长 int mask 加三个 int scratch，逻辑额外
+空间 12L+12 B，高水位 capacity 可保留。只在启用时分配，生命周期见[分区合同](domain-partition.md)。
 
-```text
-local_count == global_count
-ghost_count == 0
-```
-
-每 rank device input 都使用 `global_count` 寻址。实际 per-atom 输出只来自该 rank 的 MPI
-空间 owned 槽位，并在 rank 0 按 `global_id` 恢复顺序；thermo 只对 owned 槽位求 local sum
-后做全局归约。
-
-M2a local-domain 入口在 eligibility 判定后由 bootstrap 建立：初始 owned 集来自 wrapped
-输入坐标的 slab 归属，owned 位置的首次 wrap 使用共享的 device `wrap_positions` kernel
-（与 M1 首次 force 的 wrap 逐位一致，host 端复算会因 FMA 收缩差一个 ULP），unwrapped
-种子为 raw 输入坐标。输出/thermo 只承认 owned 前缀。
-
-single-rank 实现以及 Open MPI+UCX 环境下的 HostStaged/CudaAware 1/2/4-rank prototype 均已
-在沙箱外 GPU 上通过四组锁定 GPUMD golden；M1 空间所有权的 P=1 路径与 M0 逐字节一致，
-P>1 由 differential 与迁移矩阵验证；M2a 由大盒 domain 矩阵验证（实测 per-atom
-输出与 P=1 oracle 逐字节一致）。验证状态与命令见
-[current.md](../status/current.md)。
-
-## O2 实验串行分区
-
-默认关闭的 `DMGMD_DOMAIN_PARTITION=serial|verify` 仅选择 M2a 普通步中心；halo 先完成，
-沿用原布局、L stride、行序、半径和每中心累加。集合、辅助产物唯一写入、epoch/连续位移
-缓存有效性、fallback、诊断与 split timing 口径以
-[串行分区合同](./domain-partition.md)为准；不引入异步通信或 overlap。
-
-O3 halo 的专用 device/pinned staging 采用单在途槽位，lease 期间禁止 reserve/覆盖/释放，
-直到 MPI 两组请求与 unpack event 都完成；详见 [halo 生命周期](./halo-lifecycle.md)。
-粒子 SoA、stride、owned/ghost 身份与通信字节不变。
+halo 为单在途槽位。device/pinned staging lease 内禁止 reserve/覆盖/释放，直到发送、接收、
+物理 unpack 都完成；无第二份 payload。详见[halo 生命周期](halo-lifecycle.md)。

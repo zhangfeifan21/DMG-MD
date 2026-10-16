@@ -43,5 +43,5 @@ GNU 链接 wrapper 只存在于独立测试程序，生产没有测试开关。
 数值 runner 继续比较 P1 oracle、full/serial/verify 的逐原子 energy/force/virial、
 轨迹/输出/restart，验证实际 split、回退、空 rank、多段 run、skin/rebuild/迁移与精确字节。
 O3 验收另将结果与锁定 O2 产物逐字节核对；本轮具体命令、哈希、结果见
-[O3 状态](../../docs/status/halo-lifecycle-20261015.md)，接口见
+[O3 状态](../../docs/status/validation/halo-lifecycle-20261015.md)，接口见
 [halo 生命周期标准](../../docs/standards/halo-lifecycle.md)。

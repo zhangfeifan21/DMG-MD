@@ -7,19 +7,20 @@ DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读�
 “计算环境包”：准备好服务器后，一条命令就能调用它进行计算，无需逐个安装 CUDA、MPI 等依赖。
 
 查看项目目前已实现和验证的功能：
-[开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/benchmark-multigpu-results-20260926.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
+[开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/performance/benchmark-multigpu-results-20260926.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
 
 近期 P0 研发需求为：[MPI 启动固定 CPU 核数与 NUMA 绑定](docs/plans/mpi-cpu-binding.md)、
 [LAMMPS 多 GPU + MPI NEP 性能对比](docs/plans/lammps-multigpu-benchmark.md)、
-[通信与计算重叠](docs/plans/communication-computation-overlap.md)。三项仍为计划；
-已有 [CPU 采样工具](docs/standards/cpu-sampling.md)用于核验与性能归因，采样本身不会绑定 CPU。
+[通信与计算重叠](docs/plans/communication-computation-overlap.md)。LAMMPS 静态/smoke 与
+O1–O3 已完成，统一绑定入口、正式三引擎矩阵和 O4 实际 overlap 尚待完成。
+[CPU 采样](docs/standards/cpu-sampling.md)及 O1 核验参数可检查手工映射，不设置 CPU 绑定。
 
 ## Docker 部署（推荐跨服务器使用）
 
 本指南适用于 Ubuntu 22.04 / 24.04、Intel/AMD 64 位 CPU 和 NVIDIA GPU 的新服务器。
 默认镜像包含 `sm_75`、`sm_80`、`sm_86`、`sm_89`、`sm_90` GPU 架构；实际显卡须与其中一个匹配。
 命令先以一张 GPU 为例，多卡操作见后文。Docker 镜像和目标服务器的验证状态见
-[验证记录](docs/status/docker-validation.md)。
+[验证记录](docs/status/validation/docker-validation.md)。
 
 ### 开始前：这些命令在哪里输入？
 
@@ -363,7 +364,7 @@ docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 ### 依赖选择与兼容边界
 
 Dockerfile 固定以下基线，适用于 Linux x86_64 主机（包括 Ubuntu 22.04/24.04）和 NVIDIA GPU。镜像默认编入 `sm_75`、`sm_80`、`sm_86`、`sm_89`、`sm_90` 五种 GPU 架构；这是依据上游支持范围选定的组合。编译成功不等于目标机数值验收通过，
-每台机器还须执行下方自检。当前验证情况见 [Docker 验证记录](docs/status/docker-validation.md)。
+每台机器还须执行下方自检。当前验证情况见 [Docker 验证记录](docs/status/validation/docker-validation.md)。
 
 | 组件 | 镜像内版本 / 配置 | 选择原因 |
 | --- | --- | --- |
@@ -423,16 +424,11 @@ eligibility 的输入自动回退 M1，small-box 输入继续可运行。M2b 的
 
 ## 当前进度
 
-M2a 已于 2026-09-18 完成专属验收矩阵，并手动通过 nightly 正确性验证：
-
-- `tests/mpi/run_mpi_domain.py`：9 cases × 2/4 rank × HostStaged/CudaAware，共 36 组全通过；
-- `scripts/run_long_nve_nightly.sh`：7 cases、seed 0、1/2/4 rank、双通信后端，共 42 个配置全通过；
-  其中 M2a 的 2/4-rank 配置 28/28 命中 `mode=m2a` 并通过；
-- 100000-step release 矩阵尚未执行；2026-09-26 已有另一台服务器的单节点多 GPU
-  benchmark 实测，详见[结果记录](docs/status/benchmark-multigpu-results-20260926.md)，
-  不代表多节点或固定 CPU 绑定下的结果。
-
-详细环境、命令和结果证据见 [当前进度与验证结果](docs/status/current.md)。
+当前代码已完成 M1/M2a、统一缓存重建和 O1–O3。O2 实验分区默认关闭，O3 仍在 halo
+begin 后立即 finish，实际通信/计算重叠尚未实现。2026-10-15 O3 已通过 192 组 domain
+三模式、68 个生命周期/故障作业、golden/CTest 与 long_nve smoke；完整证据与历史
+nightly/单机八卡 benchmark 见[当前状态](docs/status/current.md)。100000-step release
+和跨节点 scaling 尚无完整通过记录。
 
 ## 当前支持范围
 
@@ -486,7 +482,7 @@ mpiexec -n <ranks> /absolute/path/to/dmg-md
 
 默认通信后端是 `HostStaged`：CUDA device buffer → pinned host buffer → Open MPI/UCX →
 pinned host buffer → CUDA device buffer。可选 `CudaAware` 必须显式请求，并通过启动时覆盖
-`MPI_Allreduce(MPI_IN_PLACE)`、`MPI_Allgatherv`、`MPI_Gatherv`、`MPI_Bcast` 的
+`MPI_Allreduce(MPI_IN_PLACE)`、`MPI_Allgatherv`、`MPI_Gatherv`、`MPI_Bcast` 和 p2p 的
 device-pointer 数值自检后才会启用：
 
 ```bash
@@ -500,8 +496,8 @@ passed，生产 collective 才能接收 device pointer；否则回退 `HostStage
 
 每个 rank 启动时记录 Open MPI library version、Open MPI+UCX stack、hostname、world/local
 rank、CUDA ordinal/UUID、capability、自检结果、实际 backend 和 ordinary single-device NEP
-策略。默认每步的 collective buffer 字节数写到 rank 0 stdout；长期正确性测试可设置正整数
-`DMGMD_COMM_LOG_INTERVAL` 做低频采样。物理链路字节数取决于 collective 算法，不伪装成
+策略。collective buffer 字节数默认每 1000 步在 rank 0 stdout 采样，
+`DMGMD_COMM_LOG_INTERVAL` 可调整；每行仍是对应单步量，逐步验收显式设为 1。物理链路字节数取决于 collective 算法，不伪装成
 精确值。每个 run segment 和整个 replicated runtime 还会输出 rank 0 汇总的 `DMGMD_TIMING`，
 包含各 rank wall time 的 min/mean/max 和按最慢 rank 计算的全局 atom-steps/s；它是诊断记录，
 不是当前正确性 suite 的性能通过门槛。
@@ -548,8 +544,8 @@ python3 tests/mpi/run_mpi_domain.py \
   --candidate ./build/dmg-md --devices 0,1,2,3
 ```
 
-100/10000/100000-step 长程正确性 suite 独立运行，不把长轨迹混入短程 committed golden，也
-不采集性能数据。除 NVE 外，它还比较确定性 NVT 的温度统计、时间平均 RDF 和 MSD；
+100/10000/100000-step 长程正确性 suite 独立运行，不把长轨迹混入短程 committed golden。
+它保留墙钟/吞吐诊断，可显式启用性能测量，但正确性不设速度门槛。除 NVE 外，它还比较确定性 NVT 的温度统计、时间平均 RDF 和 MSD；
 nightly/release 默认覆盖 HostStaged 与 CudaAware，并包含 NEP5、typewise cutoff、flexible ZBL
 和 typewise ZBL cutoff 的静态/短轨迹分支。smoke 示例：
 
@@ -569,7 +565,7 @@ scripts/run_long_nve_nightly.sh
 跨 rank restart 见 [长程正确性测试说明](tests/long_nve/README.md)。
 
 实现协议、中心分片完整性结论和逐步通信量公式见
-[replicated-mpi.md](docs/standards/replicated-mpi.md)。
+[MPI runtime](docs/standards/mpi-runtime.md)。
 
 ## 性能测试与迁移部署
 
@@ -578,7 +574,7 @@ scripts/run_long_nve_nightly.sh
 静态物理量检查及 1/2 GPU smoke；输入允许经证明等价的格式转换，三软件横向比较
 能量、力、virial 等物理量，不要求文件哈希相同。当前尚无固定每 rank CPU 核数/NUMA
 的一等启动参数，三引擎 smoke 不能作为正式效率结论；见[对照标准](docs/standards/cross-engine-reference.md)
-与[2026-10-09 验证记录](docs/status/lammps-reference-20261009.md)。
+与[2026-10-09 验证记录](docs/status/validation/lammps-reference-20261009.md)。
 benchmark 不代替长程正确性验收。
 
 ```bash
@@ -618,6 +614,6 @@ database，它会错误地认为该宏未定义，并且可能找不到 `dmgmd/m
 - [当前数据布局](docs/standards/data-layout.md)
 - [输入兼容矩阵](docs/standards/compatibility-matrix.md)
 - [待实施计划](docs/plans/domain-decomposition.md)
-- [近期 P0：CPU 绑定、LAMMPS 对比、通信重叠](docs/plans/risk-and-backlog.md#当前开发优先级2026-10-09)
+- [近期 P0：CPU 绑定、LAMMPS 对比、通信重叠](docs/plans/risk-and-backlog.md#当前开发优先级)
 - [Golden test 说明](tests/baseline/README.md)
 - [长程 NVE/NVT 正确性测试](tests/long_nve/README.md)

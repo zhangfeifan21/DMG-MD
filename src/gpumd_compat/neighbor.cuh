@@ -157,7 +157,7 @@ static __global__ void gpu_sort_neighbor_list(const int N, const int* NN, int* N
 }
 
 // M2a domain row sort: same rank-by-counting scheme, but the ordering key is
-// the candidate's global ID (docs/plans/domain-decomposition.md section 5.2),
+// the candidate's global ID (docs/standards/mpi-runtime.md),
 // so the row order is independent of the local slot numbering and the many-body
 // reverse-edge binary search in gpu_find_force_many_body_domain can use the
 // same key. Slot indices stored in NL stay local.

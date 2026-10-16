@@ -1,4 +1,4 @@
-// M2a local-domain runtime (docs/plans/domain-decomposition.md).
+// M2a local-domain runtime (docs/standards/mpi-runtime.md).
 //
 // Owns the rank-local owned/ghost data plane on top of the pure-CPU layout
 // module (include/dmgmd/domain_layout.hpp) and the p2p MpiRuntime extension:
@@ -6,14 +6,14 @@
 //     ghosts, local_count as the only SoA stride;
 //   * conservative two-hop position halo (d_dep / d_coord) with per-step
 //     position refresh through cached face plans and membership rebuilds tied
-//     to the global neighbor-rebuild OR;
+//     to the unified displacement/reason decision;
 //   * direct migration to the final owner (Alltoall count handshake +
 //     Alltoallv), one step may cross any number of slabs including the
 //     periodic ends;
-//   * the mandated per-step order of docs/plans/domain-decomposition.md
-//     section 6 (correct_velocity -> adaptive dt -> VV1 -> wrap -> migration
-//     -> halo refresh/rebuild -> global rebuild OR -> domain NEP -> VV2 ->
-//     thermo -> thermostat -> output);
+//   * the M2a per-step order in docs/standards/mpi-runtime.md:
+//     correct_velocity -> adaptive dt -> VV1 -> wrap -> unified cache decision
+//     -> refresh or rebuild/migrate -> domain NEP -> VV2 -> thermo ->
+//     thermostat -> output;
 //   * local-owned-prefix gathers carrying global IDs, root-side global-order
 //     reconstruction, and the shared GPUMD-compatible formatters.
 #include "runtime_internal.hpp"
@@ -250,7 +250,7 @@ __global__ void inspect_domain_cache(
 // Host-side state.
 // ---------------------------------------------------------------------------
 
-// Migration wire record (plan section 8): every persistent per-atom field a
+// Migration wire record (docs/standards/mpi-runtime.md): every persistent field a
 // migrated atom needs; force/PE/virial are recomputed and never travel.
 // Group labels (group_count int32 values) are appended directly after the
 // fixed part. When unwrapped tracking is off, the trailing unwrapped[3] is
@@ -1023,8 +1023,8 @@ void log_domain_migration(
             << (truncated ? " truncated=true" : " truncated=false") << '\n';
 }
 
-// Direct migration (plan section 8): refreshes the owned dynamics, computes
-// the final owner of every owned atom from the wrapped positions, ships the
+// Direct migration (docs/standards/mpi-runtime.md): refreshes owned dynamics,
+// computes the final owner from wrapped positions, ships the
 // records with Alltoall(count) + Alltoallv(bytes), and rebuilds the local
 // layout / halo / workspace. Force, PE and virial never travel: the halo
 // that follows re-derives them.
@@ -1335,7 +1335,7 @@ double adaptive_domain_time_step(
   return limited < initial_time_step ? limited : initial_time_step;
 }
 
-// correct_velocity on the local layout (plan section 6 step 1): gather
+// correct_velocity on the local layout (docs/standards/mpi-runtime.md): gather
 // (global_id, owned position, owned velocity) to the root, restore the
 // global input-slot order, reuse the shared CPU correction, then scatter the
 // corrected velocities back to the current owners. The global 3N data never
@@ -1431,7 +1431,7 @@ void correct_domain_velocity(
       communication);
 }
 
-// Local-owned-prefix output gather (plan section 6 step 12): every field
+// Local-owned-prefix output gather (docs/standards/mpi-runtime.md): every field
 // gather carries the owned prefix plus the global IDs; the root restores
 // exactly N records in global input-slot order and hands them to the shared
 // GPUMD-compatible formatters.
