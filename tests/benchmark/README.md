@@ -3,7 +3,8 @@
 类别：测试操作说明。参数以本目录 `manifest.json` 为准；不改变 `long_nve` 正确性验收。
 
 当前 runner 支持 `gpumd,lammps,dmgmd`，并将 GPUMD 与 LAMMPS 一同作为 DMG-MD
-对照组。固定每 rank CPU 核数/NUMA 绑定与 LAMMPS 正式性能矩阵仍为 P0 后续工作，见
+对照组。DMG-MD 固定每 rank CPU 核数/NUMA 入口已补充，见下方 O5 小节；跨引擎绑定
+验收与 LAMMPS 正式性能矩阵仍为 P0 后续工作，见
 [绑定计划](../../docs/plans/mpi-cpu-binding.md)与
 [LAMMPS benchmark 计划](../../docs/plans/lammps-multigpu-benchmark.md)。
 三引擎按物理量等价而非输入哈希相同判定，规则见
@@ -201,7 +202,7 @@ python3 tests/benchmark/run_benchmark.py --profile standard \
 验证实际 affinity。临时实验可用 Open MPI 5 的例如
 `--mpiexec-arg=--map-by --mpiexec-arg=core:PE=4 --mpiexec-arg=--bind-to --mpiexec-arg=core --mpiexec-arg=--report-bindings`
 指定每 rank 四个物理核心并打印映射；这取决于实际可用拓扑，必须再检查各 rank 的
-`Cpus_allowed_list` 与 CPU→core/NUMA 关系。该透传不是尚待实现的一等 P0 接口，
+`Cpus_allowed_list` 与 CPU→core/NUMA 关系。该旧透传不执行统一策略生成，
 不能据此宣称 GPUMD/DMG-MD/LAMMPS 已用相同 CPU 资源。
 `--timeout` 是每次启动的总时限（包括读入、预热），默认 7200 s。
 已有结果目录拒绝覆盖；结果逐 trial 原子写入，Ctrl-C 会终止当前启动进程及其后代（包括独立进程组的 MPI rank）并保留已完成项。
@@ -390,3 +391,71 @@ wait 是 early 后 finish；poll 最多 8 次 progress 后 finish，无 progress
 O4 只做固定 GPU UUID/CPU 物理核/NUMA、同 binary/input/seed 的小样本 full/serial/wait/poll
 比较，不等于 O5 正式性能矩阵。程序的 finish wall/线程 CPU 包含剩余 MPI、可见性、early
 和 unpack 等待；C1 的 process_observed 还包含启动与退出，不能相互代替。
+
+## O5 统一绑定与正式实验
+
+常规入口与本 runner 共用物理核心策略，详细边界见[绑定合同](../../docs/standards/cpu-binding.md)。
+不设置 K 时沿用旧行为；固定绑定时不能再传另一个 map/bind/rankfile/oversubscribe 策略。
+默认禁止 rank 间共享物理核心，CPU sampler=off 也持续检查实际 exec 后的各 task affinity。
+
+```bash
+source ../env/md-mpi.sh
+# 从仓库根目录开始；将 /path/to/input 替换为含 run.in/model.xyz/nep.txt 的目录。
+dmgmd_repo="$PWD"
+(
+  cd /path/to/input
+  python3 "$dmgmd_repo/scripts/launch_dmgmd.py" -n 2 --cpu-cores-per-rank 4 \
+    --cpu-placement numa --cpu-numa-nodes 0 \
+    --audit-directory /tmp/dmgmd_binding_example -- "$dmgmd_repo/build/dmg-md"
+)
+
+python3 tests/benchmark/run_benchmark.py --engines dmgmd --profile smoke \
+  --ranks 1,2,4,8 --devices 0,1,2,3,4,5,6,7 \
+  --cpu-cores-per-rank 4 --cpu-placement numa \
+  --cpu-numa-nodes 0,0,0,0,1,1,1,1 --cpu-sampling off \
+  --output dmgmd-bound-smoke
+python3 tests/benchmark/test_cpu_binding.py
+python3 tests/benchmark/test_overlap_o5.py
+```
+
+`core|numa|rankfile` 三种策略及 `--cpu-rankfile FILE` 由 `--help` 说明。显式文件使用
+hwloc 全局逻辑 Core 编号，工具保存 Core→OS CPU 映射；不能填 OS CPU ID 冒充逻辑核。
+例子要求目标机器有足够资源，GPU/NUMA 顺序须按本机拓扑选择。
+CPU affinity 不证明内存页绑定/驻留；`numactl --show` 原始输出另存。
+GPUMD 合计 P×K 的入口尚未实施，固定绑定请求会明确拒绝；LAMMPS 接线未在 O5 验收。
+
+O5 专用 `run_overlap_o5.py --root DIR PHASE` 使用独立的 design、science、pilot、calibration、
+frozen-plan 和完整随机顺序；以文件锁串行调度，独立进程 trial 的输入/输出不覆盖。
+已有 result 只有身份/配置签名相符时可跳过，残留半成品目录拒绝复用；改变身份或配置要
+新批次。失败保留，不按速度删除，也不把 verify/trace/pilot 混进主统计。
+
+本轮实际目录为 `dmgmd-overlap-o5-20261016/`，冻结基本方案 710 个，按规则追加至
+870 个（主矩阵 600、历史 150、退化 120），独立采用验证另有 40 个；实际完成状态以[O5 报告](../../docs/status/performance/communication-computation-overlap-o5-results-20261021.md)
+和产物 `analysis-status.json` 为准。实验环境采用显式白名单，继承的 DMGMD 调试开关清除；
+基础环境、工具、输入与二进制身份在正式采集前冻结。详细诊断采用相同 warmup，C1 与主性能分组。不将脚本、pilot 或 smoke 通过写成 O5 完成。
+
+```bash
+source ../env/md-mpi.sh
+# 完成前门槛和 pilot 后，采集命令及实际顺序见对应 workflow/plan；main 支持安全续跑。
+python3 tests/benchmark/run_overlap_o5.py --root dmgmd-overlap-o5-20261016 main
+# 离线校验工具/原始证据哈希，重算初轮五重复、最终统计、CPU/诊断/Nsight 与图。
+bash dmgmd-overlap-o5-20261016/recompute.sh
+```
+
+O5 的 `observe_o5_gpu_mapping.py` 可独立核验诊断期 PID→GPU UUID，使用 affinity audit
+的 PID/start ticks 与程序 run-loop trace，不依赖 C1 CPU ticks。它在本轮主性能阶段
+休眠，只在独立诊断阶段查询 NVML；主 trial 的 UUID 来自 CUDA 初始化实际查询，
+固定设备调用链与诊断期观测作交叉核验。输出与缺失情况以 O5 报告为准。
+
+本机 Open MPI/PRRTE 的合并长日志及原生 `--output-filename` 均实测有跨 rank 片段；
+详细诊断须使用 `o5_rank_output.py` 的直接 rank 重定向适配器，在 exec 前将 stdout/stderr
+写入各自文件，保留 launcher 流与派生拼接/哈希。冻结主 runner 的源码不原位改变；
+实际补采调用、两后端 P8 smoke 与 additive plan/resolution 在 O5 目录的
+`recover-diagnostics-20261021-v3.py`、`diagnostic-recovery-resolution.json`、launch JSON 中。
+`diagnostic/` 原 88 组不覆盖，`diagnostic-20261021/` 的 88 组作为最终诊断；observer
+按 resolution 选择独立的新 GPU 证据目录。诊断 I/O 路径的时长不进入主性能结果。
+
+`analyze_overlap_o5.py` 对逐步 trace 完整性、同窗口 full 科学输出、C1 完整窗口、
+独立运行时 GPU 映射及采集前冻结的采用验证分别准入。`summarize_overlap_o5.py` 生成
+可读结果表；跨默认后端比较明确标为事后探索。`inventory_overlap_o5.py` 保留全部带
+launch 的尝试/状态，并生成原始日志、CPU ticks、trace、GPU context 证据的 SHA 清单。

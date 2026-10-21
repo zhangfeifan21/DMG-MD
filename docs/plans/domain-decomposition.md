@@ -1,11 +1,12 @@
 # 域分解后续扩展
 
-类别：后续计划。状态：**PROPOSED**。更新日期：2026-10-16。
+类别：后续计划。状态：**PROPOSED**。更新日期：2026-10-21。
 
 M0、M1、M2a 已实施；双路径、两跳 halo、迁移、缓存与字节合同分别由
 [MPI runtime](../standards/mpi-runtime.md)、[布局](../standards/data-layout.md)和
-[缓存有效性](../standards/cache-validity.md)定义。近期 P0 为 CPU 绑定、LAMMPS 对照
-和 O4 overlap，见[待办](risk-and-backlog.md)。
+[缓存有效性](../standards/cache-validity.md)定义。O1–O5 本机阶段及 DMG-MD 绑定已完成；
+近期性能工作按 [O6–O11](communication-computation-overlap.md) 推进，跨引擎绑定和
+LAMMPS 验收独立管理，见[待办](risk-and-backlog.md)。M2b/3D 不是当前默认下一切口。
 
 ## M2b：分阶段中间场交换
 

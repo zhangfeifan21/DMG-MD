@@ -31,6 +31,9 @@ import lammps_inputs
 from check_environment import validate_environment
 from cpu_sampling import Session as CpuSession, sample as cpu_sample, cpu_set
 from analyze_cpu import analyze as analyze_cpu
+sys.path.insert(0, str(ROOT / 'scripts'))
+from cpu_binding import Audit as BindingAudit
+from launch_dmgmd import add_options as add_binding_options, plan_for as binding_plan
 
 
 def sha(path):
@@ -394,7 +397,7 @@ def stop_process_tree(process):
     process.wait()
 
 
-def execute(command, directory, environment, timeout, interval, cpu_session=None):
+def execute(command, directory, environment, timeout, interval, cpu_session=None, binding_audit=None):
     timed_out = False
     start = time.monotonic()
     with (directory / 'stdout.txt').open('w') as out, (directory / 'stderr.txt').open('w') as err, \
@@ -404,15 +407,20 @@ def execute(command, directory, environment, timeout, interval, cpu_session=None
         try:
             if cpu_session:
                 save(cpu_session.directory / 'launcher.json', cpu_sample(process.pid))
+            next_telemetry = 0.
             while process.poll() is None:
-                sample = snapshot()
-                telemetry.write(json.dumps(sample) + '\n')
-                telemetry.flush()
+                if time.monotonic() >= next_telemetry:
+                    sample = snapshot()
+                    telemetry.write(json.dumps(sample) + '\n')
+                    telemetry.flush()
+                    next_telemetry = time.monotonic() + interval
+                if binding_audit:
+                    binding_audit.poll()
                 if time.monotonic() - start > timeout:
                     timed_out = True
                     break
                 try:
-                    process.wait(timeout=interval)
+                    process.wait(timeout=min(.2, interval) if binding_audit else interval)
                 except subprocess.TimeoutExpired:
                     pass
         finally:
@@ -501,6 +509,7 @@ def main():
     p.add_argument('--lammps-bin', type=Path, default=ROOT / 'build-lammps-nep-kk-preserved/lmp')
     p.add_argument('--mpiexec', default='mpiexec')
     p.add_argument('--mpiexec-arg', action='append', default=[])
+    add_binding_options(p)
     p.add_argument('--dmgmd-partition', choices=('off', 'serial'), default='off',
                    help='O2 partition selection; completed-halo serial unless --dmgmd-overlap is enabled')
     p.add_argument('--dmgmd-overlap', choices=('off', 'wait', 'poll'), default='off')
@@ -529,6 +538,10 @@ def main():
     p.add_argument('--cpu-capacity-scope', choices=['unknown', 'host'], default='unknown',
                    help='host attests complete host cgroup hierarchy is visible; unknown disables quota normalization')
     args = p.parse_args()
+    if args.cpu_cores_per_rank is not None and args.cpu_cores_per_rank <= 0:
+        p.error('--cpu-cores-per-rank must be positive')
+    if args.cpu_cores_per_rank is None and (args.cpu_placement != 'core' or args.cpu_rankfile or args.cpu_numa_nodes):
+        p.error('CPU placement/rankfile/nodes require --cpu-cores-per-rank')
     if not math.isfinite(args.cpu_sample_interval) or args.cpu_sample_interval <= 0:
         p.error('CPU interval must be finite and positive')
     if args.cpu_sampling == 'proc':
@@ -574,6 +587,9 @@ def main():
         p.error('invalid engine/backend')
     if len(set(engines)) != len(engines) or len(set(backends)) != len(backends) or len(set(cases)) != len(cases):
         p.error('duplicate matrix entries')
+    if args.cpu_cores_per_rank and 'gpumd' in engines:
+        p.error('GPUMD aggregate CPU entry is not yet accepted; use MPI engines for fixed binding')
+    bindings = {rank: binding_plan(args, rank) for rank in ranks} if args.cpu_cores_per_rank else {}
     if any(profile[k] <= 0 for k in ('warmup', 'steps', 'repeats')) or profile['min_seconds'] < 0:
         p.error('warmup/steps/repeats must be positive; min-seconds must be nonnegative')
     if args.timeout <= 0 or args.sample_interval <= 0:
@@ -612,7 +628,7 @@ def main():
                                      'DMGMD_DOMAIN_PARTITION': args.dmgmd_partition,
                                      'DMGMD_DOMAIN_OVERLAP': args.dmgmd_overlap,
                                      'DMGMD_OVERLAP_TRACE': str(int(args.overlap_trace))} for mode in profiling},
-                          'mpiexec_args': args.mpiexec_arg}, indent=2))
+                          'mpiexec_args': args.mpiexec_arg, 'cpu_binding': bindings}, indent=2))
         return 0
     output = create_output_directory(args.output)
     print(f'Output: {output}', flush=True)
@@ -652,6 +668,10 @@ def main():
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
             metadata[name] = str(error)
     metadata['cpu_sampling'] = cpu_options
+    metadata['cpu_binding'] = bindings
+    if bindings:
+        for path in (ROOT/'scripts/cpu_binding.py',ROOT/'scripts/launch_dmgmd.py',HERE/'cpu_sampling.py'):
+            metadata['sources'][str(path.relative_to(ROOT))] = sha(path)
     if args.cpu_sampling == 'proc':
         for path in (HERE / 'cpu_sampling.py', HERE / 'analyze_cpu.py'):
             metadata['sources'][str(path.relative_to(ROOT))] = sha(path)
@@ -675,8 +695,13 @@ def main():
     save(output / 'metadata.json', metadata)
     if 'dmgmd' in engines or 'lammps' in engines:
         with (output / 'preflight.txt').open('w') as stream, contextlib.redirect_stdout(stream):
+            preflight_args = args.mpiexec_arg
+            if bindings:
+                preflight_binding = BindingAudit(output / 'preflight-binding', bindings[max(ranks)], binaries['dmgmd'])
+                preflight_args = [*args.mpiexec_arg, *preflight_binding.mpi_args()]
+                preflight_binding.close()
             validate_environment(binaries['dmgmd'], args.mpiexec, selected, max(ranks),
-                                 min(300, int(args.timeout)), args.mpiexec_arg)
+                                 min(300, int(args.timeout)), preflight_args)
     results = []
     inputs = {}
     try:
@@ -685,6 +710,7 @@ def main():
             directory.mkdir()
             result = dict(job, status='failed')
             cpu_session = None
+            binding_audit = None
             print(f'BENCHMARK {job["id"]} atoms={job["atoms"]}', flush=True)
             try:
                 key = (job['case'], tuple(job['cells']))
@@ -753,6 +779,11 @@ def main():
                     command = [args.mpiexec, *args.mpiexec_arg, '-n', str(job['ranks']),
                                sys.executable, str(ROOT / 'tests/lammps_reference/launch_rank.py'),
                                '--binary', str(binaries['lammps']), '--input', 'in.lmp']
+                if bindings:
+                    binding_audit = BindingAudit(directory / 'binding', bindings[job['ranks']], binaries[job['engine']])
+                    prefix_length = 1 + len(args.mpiexec_arg) + 2
+                    command = [args.mpiexec, *args.mpiexec_arg, *binding_audit.mpi_args(),
+                               '-n', str(job['ranks']), *binding_audit.wrapper(command[prefix_length:])]
                 result['command'] = command
                 result['launch_environment'] = {k: environment[k] for k in environment
                                                 if k.startswith(('CUDA_', 'DMGMD_', 'LAMMPS_', 'OMP_'))}
@@ -764,11 +795,14 @@ def main():
                     cpu_session.start()
                 try:
                     code, wall, timeout = execute(command, directory, environment,
-                                                  args.timeout, args.sample_interval, cpu_session)
+                                                  args.timeout, args.sample_interval, cpu_session, binding_audit)
                 finally:
                     if cpu_session:
                         cpu_session.stop('launcher_finished_or_interrupted')
                 result.update(returncode=code, process_wall_seconds=wall)
+                if binding_audit:
+                    result['binding'] = binding_audit.finish((directory / 'stdout.txt').read_text(),
+                                                              gpu_check=job['engine'] == 'dmgmd')
                 if timeout:
                     raise RuntimeError('trial timeout (process group terminated)')
                 if code:

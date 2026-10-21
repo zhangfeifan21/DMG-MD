@@ -4,7 +4,8 @@
 `analyze_cpu.py`、`run_benchmark.py`；CLI/运行示例见
 [benchmark README](../../tests/benchmark/README.md#cpu-采样c1)。不改变 runtime 默认行为。
 本工具记录 affinity/cpuset/quota，不设置它们。O1 的 expected-cores/expected-numa
-参数核验手工映射；统一设置策略仍为[待实施 P0](../plans/mpi-cpu-binding.md)。
+参数核验手工映射；统一设置策略与独立于采样器的核验见[绑定合同](cpu-binding.md)，
+未验收的跨引擎面仍在[计划](../plans/mpi-cpu-binding.md)。
 
 ## 支持范围与身份
 
@@ -84,7 +85,9 @@ cgroup 都是重叠范围，不能相加，更不能加到 rank CPU。需要 C2 
 
 每个 rank 的 allowed_cpus 为已观测 task affinity 并集与有效 cpuset/online 集合的交集；
 线程快照数不一致则 hierarchy_complete=false。逻辑 CPU 是调度容量，不等价于物理核心吞吐。
-quota_cores 是可见祖先 quota/period 的最小值；cpu.max=max 不设上限。默认 scope=unknown，
+quota_cores 是可见祖先 quota/period 的最小值；cpu.max=max 不设上限。
+controller 未委派时对应文件可能不存在，此层继承可见祖先限制；存在但不可读的文件仍为
+unavailable，不能当作无限 quota。cpuset 也取最近可见祖先的有效值。默认 scope=unknown，
 隐藏祖先可能存在，保留 upper_bound，正式容量归一化 null。`--cpu-capacity-scope host` 是
 操作者对完整宿主层次可见性的**显式声明**，还要求 mount root=/；容器内 root=/ 不能自行证明。
 cgroup v1、不可读/逃逸路径保留原因，CPU ticks 仍可用。

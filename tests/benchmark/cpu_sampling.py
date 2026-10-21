@@ -137,12 +137,18 @@ def capacity(pid, tasks, host_verified=False):
         while True:
             values = {name: read_optional(node / name) for name in
                       ('cpu.max', 'cpu.weight', 'cpu.stat', 'cpuset.cpus.effective')}
+            # A non-delegated controller has no file at this level; its limits
+            # are inherited. An existing but unreadable file is not unlimited.
+            for name in ('cpu.max', 'cpuset.cpus.effective'):
+                if values[name] is None and (node / name).exists():
+                    raise ValueError(f'unreadable ancestor {name}')
             result['ancestors'].append(dict(path=str(node), **values))
             if node == base:
                 break
             node = node.parent
         usable = [t for t in tasks if t['status'] == 'ok']
-        cpuset = result['ancestors'][0]['cpuset.cpus.effective']
+        cpuset = next((a['cpuset.cpus.effective'] for a in result['ancestors']
+                       if a['cpuset.cpus.effective'] is not None), None)
         online = read_optional('/sys/devices/system/cpu/online')
         if len(usable) != len(tasks) or not usable or cpuset is None or online is None:
             raise ValueError('incomplete task affinity/cpuset snapshot')
@@ -151,9 +157,7 @@ def capacity(pid, tasks, host_verified=False):
         quotas = []
         for a in result['ancestors']:
             if a['cpu.max'] is None:
-                if a['path'] != str(base):
-                    raise ValueError('unreadable ancestor cpu.max')
-                continue  # cgroup root need not expose cpu.max
+                continue  # absent controller inherits all visible ancestor limits
             q, period = a['cpu.max'].split()
             if q != 'max':
                 quotas.append(int(q) / int(period))

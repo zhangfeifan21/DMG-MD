@@ -46,6 +46,11 @@ add_test(
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_cpu_sampling.py
 )
 
+add_test(NAME dmgmd.cpu_binding
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_cpu_binding.py)
+add_test(NAME dmgmd.overlap_o5_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o5.py)
+
 add_test(
   NAME dmgmd.lammps_reference
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/lammps_reference/test_lammps_reference.py

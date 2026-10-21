@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1/M2a + O1–O4；近期 P0：CPU 绑定、LAMMPS 对比、O5 验证
+## 当前代码基线：M1/M2a + O1–O4；O5 本机实验完成，后续为 O6–O11 性能优化
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -56,14 +56,20 @@ nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026
 多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。M2b（Fp/partial 分阶段交换）、3D 分解、
 triclinic/非周期 local-domain 仍待后续审批。
 
-2026-10-09 的近期 P0 方向：固定 MPI 启动时每 rank 的 CPU 物理核心数并支持 NUMA
-放置；增加 LAMMPS 多 GPU + MPI 的 NEP benchmark；继续通信与计算重叠。
-计划分别位于 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md`
-与 `docs/plans/communication-computation-overlap.md`。LAMMPS 输入、静态物理量对照与
-三引擎 benchmark smoke 已实施；正式效率矩阵仍待固定 CPU/NUMA 绑定和更多正确性验收。
-现有 C1 与 O1 expected-cores/expected-numa 参数核验手工映射，不执行绑定；
-O1 时间线、O2 默认关闭的串行分区、O3 halo 生命周期已实施并验收。生产仍 begin 后立即
-finish，再计算 NEP；O4 已接入默认关闭的普通步实际 overlap，本轮验收完成、仍默认关闭，O5 未执行。最新证据见 docs/status/current.md，
+2026-10-21 的后续 P0 方向由 `docs/plans/communication-computation-overlap.md` 的
+O6–O11 分步管理：先诊断拆分成本，分别验证缓存判定归约、按需 NVE thermo 与单个
+NEP 执行候选，条件性评估分消息后端，最后相对优化后的 full 复验采用条件。
+这些是 PROPOSED 任务，不能描述为已经实现。跨引擎绑定与 LAMMPS 对照仍由
+`docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md` 独立管理。
+LAMMPS 输入、静态物理量对照与三引擎 benchmark smoke 已实施；正式效率矩阵仍待
+跨引擎 CPU/NUMA 绑定验收和更多正确性验收。
+C1 与 O1 expected-cores/expected-numa 参数只观测；O5 已补充 DMG-MD 共用
+core/numa/rankfile 启动及独立 affinity audit，合同见 `docs/standards/cpu-binding.md`。
+跨引擎绑定、任意调度器与内存页放置仍待验收；
+O1 时间线、O2 默认关闭的串行分区、O3 halo 生命周期已实施并验收。默认路径仍 begin 后立即
+finish，再计算 NEP；O4 已接入默认关闭的普通步实际 overlap，已验收、仍默认关闭；
+O5 本机正式矩阵、四阶段归因和独立采用验证于 2026-10-21 完成；仍默认 off，
+限定收益与默认后端比较的范围见 docs/status/current.md，
 M2b 不是当前下一实施切口。
 
 ## GPUMD 复现边界（强制）

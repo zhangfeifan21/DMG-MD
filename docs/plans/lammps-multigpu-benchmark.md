@@ -1,6 +1,6 @@
 # LAMMPS 多 GPU 对照剩余验收
 
-类别：实施计划。状态：**IN PROGRESS**。优先级：P0。更新日期：2026-10-16。
+类别：实施计划。状态：**IN PROGRESS**。优先级：P0。更新日期：2026-10-21。
 
 输入转换、静态物理量比较和三引擎 benchmark 编排已实现；锁定版本、势等价转换、单位、
 张量与计时规则统一见[三引擎标准](../standards/cross-engine-reference.md)，CLI 见
@@ -12,8 +12,10 @@
 
 ## 剩余步骤
 
-1. 接入[统一 CPU/NUMA 策略](mpi-cpu-binding.md)：DMG-MD/LAMMPS 各 K 核/rank，
-   GPUMD 单进程 P 张 GPU 使用相同总量 P×K 核。保留实际 affinity、quota、NUMA、GPU UUID、
+1. 完成[统一 CPU/NUMA 策略的跨引擎验收](mpi-cpu-binding.md)：DMG-MD 本机入口已验收，
+   LAMMPS 已接线但尚未执行固定绑定科学门槛；GPUMD 合计 P×K 核的入口尚未实现。
+   DMG-MD/LAMMPS 各 K 核/rank，GPUMD 单进程 P 张 GPU 使用相同总量 P×K 核。
+   保留实际 affinity、quota、NUMA、GPU UUID、
    版本/编译精度、温度时钟和独占条件；不能从 affinity 推断内存页放置。
 2. 验证正式性能 case 的同势静态正确性、三引擎短程 NVE 的有限值/动能/势能趋势与原子数，
    建立长程守恒/统计门槛。pair-style 回退、未用 GPU、势不兼容或物理量失败不得进入正式速度比。

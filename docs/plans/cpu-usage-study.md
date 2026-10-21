@@ -1,11 +1,12 @@
 # CPU 使用率后续研究
 
-类别：辅助诊断计划。状态：**IN PROGRESS**（C0/C1 完成；C2/C3 待执行）。
-更新日期：2026-10-16。
+类别：辅助诊断计划。状态：**IN PROGRESS**（C0/C1 完成；O5 窄 C2 已测，完整 C2/C3 待执行）。
+更新日期：2026-10-21。
 
 已有[CPU 采样合同](../standards/cpu-sampling.md)、[C1 验收](../status/validation/cpu-sampling-c1-20261009.md)
 与[O1 固定资源窄基线](../status/performance/overlap-baseline-20261012.md)。采样不执行绑定；
-正式 C2/C3 使用[MPI CPU/NUMA 入口](mpi-cpu-binding.md)交付的策略。O1–O3 已通过手工映射
+DMG-MD 已有[固定 CPU/NUMA 入口](../standards/cpu-binding.md)；
+跨引擎及其他调度器验收仍见[绑定剩余计划](mpi-cpu-binding.md)。O1–O3 已通过手工映射
 与 C1 核验推进，C2/C3 不阻塞其正确性工作。
 
 ## 已知职责与限制
@@ -14,14 +15,19 @@
 GPU launch、MPI、layout/迁移和 root formatter；修速在 root CPU，自适应步长在 CPU 扫 owned
 速度。MPI/UCX/CUDA 内部线程职责须实测。O3 检查 FUNNELED/main-thread，生产立即 finish。
 
+O5 在 carbon_200k/P2/CudaAware/wait 固定四物理核/rank 下完成 off/proc/详细诊断
+各五次随机重复，采样周期 0.2 s；比较正式段、进程墙钟及启动/采集器完整生命周期，
+主性能 CPU 关闭。数据与不确定性见 [O5 记录](../status/performance/communication-computation-overlap-o5-results-20261021.md)。
+这仅满足 O5 的局部扰动校准，不代表下列完整 C2/C3 已完成。
+
 工具可读 rank/task ticks、affinity、可见 cgroup 限制和 marker；指标/缺失语义只在合同维护。
 CPU 时间无法区分 MPI 忙轮询与有效工作；墙钟、CUDA event、MPI call wall 不可相加还原 CPU
 利用率。只有完整落在同机 marker 内的采样窗可归因；短步缺窗保留 null。无栈/trace 不推断等待原因。
 
 ## C2：pilot 与扰动校准
 
-1. 固定 GPU UUID、每 rank 物理核心、NUMA、cpuset/quota 与独占条件，保存实际 affinity；
-   统一绑定接口前的试验注明临时配置。
+1. 使用已验收的统一入口固定 GPU UUID、每 rank 物理核心、NUMA、cpuset/quota，
+   保存实际 affinity 与独占条件；其他尚未验收的调度器环境先补相应门槛。
 2. 复用 manifest，以 carbon_1m/water_400k、P1/2、两后端 pilot，资源允许再补 P4。
    P1 为 M1；OOM/缺卡/后端回退保留 FAILED/PARTIAL。
 3. 同输入、binary、步数和资源下，随机化无采样、proc、详细 trace 三组，至少五次重复。

@@ -9,11 +9,13 @@ DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读�
 查看项目目前已实现和验证的功能：
 [开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/performance/benchmark-multigpu-results-20260926.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
 
-近期 P0 研发需求为：[MPI 启动固定 CPU 核数与 NUMA 绑定](docs/plans/mpi-cpu-binding.md)、
-[LAMMPS 多 GPU + MPI NEP 性能对比](docs/plans/lammps-multigpu-benchmark.md)、
-[通信与计算重叠](docs/plans/communication-computation-overlap.md)。LAMMPS 静态/smoke 与
-O1–O3 已完成，统一绑定入口、正式三引擎矩阵和 O4 实际 overlap 尚待完成。
-[CPU 采样](docs/standards/cpu-sampling.md)及 O1 核验参数可检查手工映射，不设置 CPU 绑定。
+O1–O5 本机阶段及 DMG-MD [统一 CPU/NUMA 启动与独立核验](docs/standards/cpu-binding.md)
+已完成；overlap 仍默认关闭，多数配置的拆分成本抵消了收益，见
+[O5 正式结果](docs/status/performance/communication-computation-overlap-o5-results-20261021.md)。
+下一步按 [O6–O11](docs/plans/communication-computation-overlap.md) 分别诊断拆分成本、
+优化 full/NEP 执行并复验采用条件。跨引擎/调度器[绑定验收](docs/plans/mpi-cpu-binding.md)
+及 [LAMMPS 动力学与正式三引擎矩阵](docs/plans/lammps-multigpu-benchmark.md)独立推进，
+目前仅完成 LAMMPS 静态/smoke。CPU 采样负责观测，绑定由启动入口执行。
 
 ## Docker 部署（推荐跨服务器使用）
 

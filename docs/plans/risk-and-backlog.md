@@ -1,15 +1,15 @@
 # 风险与剩余待办
 
-类别：持续登记。状态：**IN PROGRESS**。核对日期：2026-10-16。
+类别：持续登记。状态：**IN PROGRESS**。核对日期：2026-10-21。
 
 ## 当前开发优先级
 
 | 优先级 | 工作 | 当前缺口 |
 | --- | --- | --- |
-| P0 | [CPU 核数/NUMA 绑定](mpi-cpu-binding.md) | 统一启动策略、冲突/资源检查、无需采样的实际绑定验收 |
+| P0 | [CPU 核数/NUMA 绑定](mpi-cpu-binding.md) | DMG-MD 本机入口与独立核验已完成；跨引擎/调度器、内存驻留仍未验收 |
 | P0 | [LAMMPS 对比](lammps-multigpu-benchmark.md) | 三引擎动力学和固定资源正式矩阵 |
-| P0 | [通信计算重叠](communication-computation-overlap.md) | O1–O3 完成；O4 实际 overlap、O5 归因待执行 |
-| 辅助 | [CPU 使用率](cpu-usage-study.md) | C2/C3；复用 C1，按需校准 |
+| P0 | [性能优化 O6–O11](communication-computation-overlap.md) | O1–O5 本机阶段完成；后续成本诊断、full/NEP 优化和采用复验尚未执行 |
+| 辅助 | [CPU 使用率](cpu-usage-study.md) | O5 窄 C2 已测；完整 C2/C3 仍未完成 |
 | 后续 | [域分解扩展](domain-decomposition.md) | M2b、3D/box 扩展、100000-step release |
 | 暂缓 | [双节点 I/O](multi-node-io.md) | R28 物理双节点验收 |
 
@@ -61,8 +61,9 @@
 | B15 | 普通 NEP charge 单位 | 参考代码/manual 与兼容测试 |
 
 B7 的多 potential/方向选项已明确 unsupported，不再作为语义待决；B16 的 adaptive timestep
-已实现，剩余负值/多段边界归 B6。性能候选还包括 rank-local cell 网格和按需 NVE thermo，
-均未实施；NVT 每步全局 thermo 与兼容输出不得改变。
+已实现，剩余负值/多段边界归 B6。按需 NVE thermo 与缓存判定归约分别由
+[O8、O7](communication-computation-overlap.md)管理，尚未实施；NVT 每步全局 thermo
+与兼容输出不得改变。rank-local cell 网格仍是后备候选，没有本轮优先实施依据。
 
 ## 后续实现的不变量
 

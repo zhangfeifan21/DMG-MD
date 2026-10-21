@@ -157,6 +157,11 @@ unpack 等待，不能解释为纯网络时间；也不能当完整线程 CPU �
 `nep_device` 是包含 begin/halo/early/late 的 pipeline 包围区间，旧 halo 区间与它相交，
 不能相加当阶段总和；`halo_transfer_wait` 也可包含 early/可见性等待。
 
+`cumulative_calls` 只计真实 early；finish wall/CPU 则覆盖 overlap 请求模式下所有普通步
+的 halo 回调，包括空 interior/local 等 full fallback。poll 的最多 8 次上限是**每次
+普通 halo 回调**，不是每次 early。因而 full fallback 可以有非零 progress/finish 成本，
+不构成 GPU overlap 证据；平均回调成本必须用普通 halo 回调数作分母。
+
 `DMGMD_OVERLAP_TRACE=1` 独立于旧 O1 诊断，记录 rank/step/call/key/halo generation、
 owned-ready、pack-ready、post 起止、early/late enqueue、独立收发观察、unpack/force 物理
 完成的 host 观察，另给 early/late CUDA event elapsed。host 为 CLOCK_MONOTONIC，CUDA
