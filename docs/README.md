@@ -8,6 +8,8 @@ O6 已完成[稳态成本定位](status/performance/overlap-o6-results-20261021.
 O7 的实现、语义证明与配对验收见[O7 记录](status/performance/overlap-o7-results-20261023.md)。
 O8 已采用[按需 NVE thermo](status/performance/overlap-o8-results-20261026.md)，原 full/O7/O8 三版本实测与 CPU 诊断已完成。
 O9 已完成[执行候选证据复核](status/performance/overlap-o9-results-20261026.md)，真实 NCU 重试仍受权限限制，以 NO_ADOPTION 结束，未改 NEP 执行。
+后续先按[O6.5/O8.5 计划](plans/communication-computation-overlap.md)补齐单因素原因验证和
+仅 producer 拆分实验，再依据新证据重新执行 O9；这些任务尚未实施。
 
 | 目录 | 内容 | 维护边界 |
 | --- | --- | --- |
@@ -69,7 +71,7 @@ O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 
 | --- | --- | --- |
 | P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | IN PROGRESS；DMG-MD 入口已验收，跨引擎/调度器仍待验收 |
 | P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
-| P0 | [通信与计算性能优化 O10–O11](plans/communication-computation-overlap.md) | PROPOSED；O1–O9 本机阶段完成，O9 以 NO_ADOPTION 结束，后续条件性后端评估与采用复验 |
+| P0 | [通信与计算性能优化 O6.5/O8.5、O9–O11](plans/communication-computation-overlap.md) | PROPOSED；先补原因验证与 producer 拆分实验，再重新执行 O9；首轮 O9 的 NO_ADOPTION 保留 |
 | 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，O5 窄 C2 已测，完整 C2/C3 待执行 |
 | 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；M2b、release 等未完成 |
 | 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |

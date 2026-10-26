@@ -21,7 +21,7 @@ O5 的本机正式实验于 2026-10-21 完成：主矩阵 600、历史归因 150
 O6 于 2026-10-21 完成稳态诊断与复验：45 个新正式 trial、27 份稳态 trace；carbon
 拆分墙钟增加约 4.630 ms/step，主要新增 GPU 成本位于 radial。water/P8 的 partial 增量
 更大，不能统一归因为 radial。NCU/LaunchStats 均受计数器权限拒绝，微架构原因仍为
-INCONCLUSIVE；O9 当前 NO_ADOPTION，不启动未经证实的执行改写。见 [O6 报告](performance/overlap-o6-results-20261021.md)。
+INCONCLUSIVE，后续单因素原因验证由 O6.5 补充。见 [O6 报告](performance/overlap-o6-results-20261021.md)。
 
 O7 于 2026-10-23 完成并采用：缓存判定从 MAX→reason OR 合并为一次 OR；普通步固定
 collective 从 3 次降为 2 次。数值、实际调用次数及 60 个正式 trial 均通过；六个性能
@@ -83,9 +83,11 @@ candidate SHA-256 `07c8f0a0d4b9305cfd3f506ad7172960dbe2b72f02edf5589b73eae4fb250
 
 ## 剩余工作
 
-- P0：[O10–O11 分步性能优化](../plans/communication-computation-overlap.md)：O6–O9 已完成，
-  O9 以 NO_ADOPTION 结束；条件性 O10 分消息后端选择，O11 相对 O7+O8 full 的受控复验
-  与采用决策仍为 PROPOSED，未实施。O9 重新开启须另有因果证据。
+- P0：[O6.5/O8.5 与 O9–O11 分步性能优化](../plans/communication-computation-overlap.md)：
+  O6.5 补齐 mask 分布、单因素执行对照及计数器受限时的替代证据；O8.5 实测只拆
+  filter/descriptor、完整执行力计算的候选；完成后依据新证据重新执行 O9。
+  首轮 O9 的 NO_ADOPTION 历史保留。新增任务、条件性 O10 及 O11 采用复验均为 PROPOSED，
+  尚未实施，生产默认不变。
 - 独立 P0：[跨引擎/调度器绑定剩余验收](../plans/mpi-cpu-binding.md)、
   [三引擎动力学与正式性能矩阵](../plans/lammps-multigpu-benchmark.md)。
   DMG-MD 本机统一启动与独立核验已完成，不再列为未实现。

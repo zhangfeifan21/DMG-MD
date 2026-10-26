@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1/M2a + O1–O4/O7/O8；O9 以 NO_ADOPTION 完成，后续为 O10–O11 性能优化
+## 当前代码基线：M1/M2a + O1–O4/O7/O8；后续补 O6.5/O8.5 并重新执行 O9
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -56,9 +56,9 @@ nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026
 多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。M2b（Fp/partial 分阶段交换）、3D 分解、
 triclinic/非周期 local-domain 仍待后续审批。
 
-2026-10-21 的后续 P0 方向由 `docs/plans/communication-computation-overlap.md` 的
-O7–O11 分步管理：O6 已完成稳态拆分诊断，carbon 主损失位于 radial，硬件计数器权限
-受限使微架构原因仍为 INCONCLUSIVE，O9 当前 NO_ADOPTION，报告见
+后续 P0 方向由 `docs/plans/communication-computation-overlap.md` 分步管理：
+O6 已完成稳态拆分诊断，carbon 主损失位于 radial，硬件计数器权限
+受限使微架构原因仍为 INCONCLUSIVE，首轮 O9 以 NO_ADOPTION 结束，报告见
 `docs/status/performance/overlap-o6-results-20261021.md`。O7 于 2026-10-23 已采用一次 reason OR
 缓存判定；golden/MPI/nightly NVE、实际调用计数与 60 个配对 trial 完成，整步收益
 INCONCLUSIVE，见 `docs/status/performance/overlap-o7-results-20261023.md`。O8 于 2026-10-26
@@ -67,8 +67,11 @@ INCONCLUSIVE，见 `docs/status/performance/overlap-o7-results-20261023.md`。O8
 相对 O7 三组增量确认、一组 INCONCLUSIVE，见 `docs/status/performance/overlap-o8-results-20261026.md`。
 O9 于 2026-10-26 完成证据门槛复核；真实 NCU 稳态重试仍受权限拒绝，
 无可信执行候选，按原完成条件以 NO_ADOPTION 结束，未改 NEP 执行；见
-`docs/status/performance/overlap-o9-results-20261026.md`。后续 O10–O11 条件性评估分消息后端，
-最后相对 O7+O8 full 复验采用条件；它们仍为 PROPOSED，不能描述为已经实现。
+`docs/status/performance/overlap-o9-results-20261026.md`。2026-10-26 补充计划按
+O6.5 → O8.5 → O9 重新执行 → 条件性 O10 → O11 推进：先做单因素原因验证，
+再实测仅 filter/descriptor 拆分、力计算完整执行的候选，依据新证据重新筛选与确认。
+NCU 权限失败不能单独使新一轮研究完成；首轮结果保留。新增任务与 O10–O11 均为
+PROPOSED，尚未实施，生产默认仍 HostStaged/full、overlap=off。
 跨引擎绑定与 LAMMPS 对照仍由
 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md` 独立管理。
 LAMMPS 输入、静态物理量对照与三引擎 benchmark smoke 已实施；正式效率矩阵仍待
