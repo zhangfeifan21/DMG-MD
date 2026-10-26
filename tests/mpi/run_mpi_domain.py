@@ -809,6 +809,28 @@ def verify_transitions_against_trajectory(
                 f"!= {expected}")
 
 
+def thermo_consuming_steps(run_text: str) -> Set[int]:
+    result: Set[int] = set()
+    intervals: List[int] = []
+    ensemble = "nve"
+    offset = 0
+    for line in run_text.splitlines():
+        tokens = line.split("#", 1)[0].split()
+        if not tokens:
+            continue
+        if tokens[0] == "ensemble":
+            ensemble = tokens[1]
+        elif tokens[0] in ("dump_thermo", "dump_xyz"):
+            intervals.append(int(tokens[1]))
+        elif tokens[0] == "run":
+            steps = int(tokens[1])
+            result.update(offset + step for step in range(1, steps + 1)
+                          if ensemble != "nve" or any(step % interval == 0 for interval in intervals))
+            offset += steps
+            intervals.clear()
+    return result
+
+
 def expected_communication(
     case: DomainCase,
     index: StepIndex,
@@ -832,6 +854,7 @@ def expected_communication(
     migration_steps = index.migration_steps()
     rebuild_steps = index.rebuild_steps()
     periodic_record_steps = neighbor_record_steps(case.run)
+    thermo_steps = thermo_consuming_steps(case.run)
     model: List[Dict[str, Dict[str, int]]] = []
     for step in range(1, case.steps + 1):
         global_fields = {
@@ -850,10 +873,10 @@ def expected_communication(
         }
         P = ranks
         N = case.natoms
-        # Unified decision: displacement MAX (double) + reason OR (uint32).
-        global_fields["collective_calls"] += 2
-        global_fields["mpi_input_bytes_global"] += 12 * P
-        global_fields["mpi_output_bytes_global"] += 12 * P
+        # Unified decision: local strict displacement predicate + reason OR.
+        global_fields["collective_calls"] += 1
+        global_fields["mpi_input_bytes_global"] += 4 * P
+        global_fields["mpi_output_bytes_global"] += 4 * P
         migrated = step in migration_steps
         rebuilt = migrated or step in rebuild_steps
         if not rebuilt:
@@ -899,12 +922,12 @@ def expected_communication(
             global_fields["collective_calls"] += 1
             global_fields["mpi_input_bytes_global"] += 8 * P
             global_fields["mpi_output_bytes_global"] += 8 * P
-        # thermo Allreduce (8 doubles).
-        global_fields["collective_calls"] += 1
-        global_fields["mpi_input_bytes_global"] += 64 * P
-        global_fields["mpi_output_bytes_global"] += 64 * P
-        staging["device_to_host"] += 64 * P
-        staging["host_to_device"] += 64 * P
+        if step in thermo_steps:
+            global_fields["collective_calls"] += 1
+            global_fields["mpi_input_bytes_global"] += 64 * P
+            global_fields["mpi_output_bytes_global"] += 64 * P
+            staging["device_to_host"] += 64 * P
+            staging["host_to_device"] += 64 * P
         # Every 1000th domain force call performs two scalar MPI_MAX
         # reductions for the rank-local radial/angular occupancy maxima.
         if step in periodic_record_steps:

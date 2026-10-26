@@ -1,6 +1,6 @@
 # MPI runtime：M1 与 M2a
 
-类别：现行标准。核对日期：2026-10-16。
+类别：现行标准。核对日期：2026-10-23。
 
 `run_replicated` 每 rank 只加载一次 NEP 参数，deferred workspace 在选定模式后分配。
 P1 恒 M1 replicated-full；P>1 在正交全周期、各方向厚度>2.5*(rc_radial_max+1)、
@@ -149,8 +149,9 @@ double 平均低估实际消费 cutoff。
 4. owned 位置按 pinned 单次 `<0/+1`、`>1/-1` 语义 wrap；若单步位移导致坐标一次 wrap 后
    仍在盒外，则统一 decision 在任何 halo/force 前报 unsupported multi-box displacement；
 5. 唯一 cache decision：VV1 在 wrap 前把 owned 原子的真实位移累加到 epoch
-   displacement；只检查每个 global ID 的 manager copy，做一次全局最大位移归约与一次
-   reason-mask OR。非有限位移、无法证明的连续性或单步超过一个盒长在 halo/force 前全 rank
+   displacement；只检查每个 global ID 的 manager copy，将局部最大位移平方的严格超限
+   判定合入一次 uint32 reason-mask OR。空 owned rank 仍参加 OR，不做缓存位移 MAX。
+   非有限位移、无法证明的连续性或单步超过一个盒长在 halo/force 前全 rank
    报错；全局位移 `> skin/2` 才进入 rebuild，恰好阈值仍复用。Neighbor 接受明确的
    `confirmed_reuse` / `must_rebuild` action，不再执行第二次位移检查；
 6. 普通步保持 manager、slot/layout、membership、communication map 与 neighbor rows 不变，
@@ -166,7 +167,8 @@ double 平均低估实际消费 cutoff。
    （`[0, owned+dep)`），owned radial force/many-body/ZBL（`[0, owned)`），
    候选 `[0, local_count)`；
 9. owned VV second half；
-10. owned thermo 求和 + 8-double Allreduce（ghost 的 PE/virial scratch 不参与）；
+10. 按[消费者需求](thermo-demand.md)执行 owned thermo 求和 + 8-double Allreduce
+    （NVE 只在 thermo/XYZ 输出步需要；NVT 每步保留，ghost 的 PE/virial scratch 不参与）；
 11. owned thermostat；
 12. 输出/measurement：local-owned-prefix gather 携带 global ID，root 恢复恰好
     N 条按 global ID 排序的记录后复用既有 formatter（ghost 永不直接输出）。
@@ -204,17 +206,21 @@ buffer，P=2 同 peer 安全；P=1 无操作；零 count 合法）。CudaAware �
 `DMGMD_DOMAIN_MIGRATION` 默认关闭，设置 `DMGMD_DOMAIN_DIAGNOSTICS=1` 后恢复，字段与
 rank 语义不变。无论详细诊断是否开启，每个 run 段末每 rank 输出一条
 `DMGMD_DOMAIN_SUMMARY`，记录该段的 migration/rebuild 步数、layout upload、workspace
-逻辑更新、capacity growth event、GPU allocation 次数；这些计数为 rank-local，不新增
+逻辑更新、capacity growth event、GPU allocation 与 thermo 实际计算/跳过次数；这些计数为 rank-local，不新增
 逐步 collective。详细 layout 记录中的 `gpu_allocations` 是本次 Atom+NEP+Neighbor layout
 更新实际触发的 `GPU_Vector` 分配次数。
 
 普通 M2a 步不含任何 N-scaled collective（position Allgatherv 不存在于此协议）；
 输出步增加 gid gather（8N）+ 各字段 gather（8 B/atom/component，root 侧恢复
 input-slot 顺序）；correct_velocity 触发步增加 80N 的 gather/scatter。除下述周期记录外，
-每步固定执行 displacement MAX（8P）、decision reason OR（4P）与 thermo（64P），所以
-input/output 各为 `76P` B、3 次 collective；rebuild 若发生 owner 变化再增加 Alltoall count
+每步固定执行 decision reason OR（4P）；有 thermo 消费者时增加 64P 与一次 SUM，所以
+input/output 各为 `4P + 64P * needs_thermo` B、`1 + needs_thermo` 次 collective；
+NVT 的 `needs_thermo` 恒为 1。rebuild 若发生 owner 变化再增加 Alltoall count
 和 migration payload，所有 rebuild 增加 face-count/membership p2p。统一 decision 取代旧的
 migration-OR + neighbor-rebuild-OR 双判定，不得由 Neighbor 再发起位移 collective。
+O7 将原缓存 displacement MAX 的阈值判定移到各 rank 后合入 OR；自适应时间步的
+MAX 及下述 neighbor 周期 MAX 保留。证明、独立实际调用计数与配对实测见
+[O7 报告](../status/performance/overlap-o7-results-20261023.md)。
 `neighbor.out` 每 1000 次 force 调用（含首次）由各 rank dependency-center local
 max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须在**本次** Verlet/typewise
 邻居表生成后读取；真正 `local_count=0` 的 rank 贡献零但仍参加 collective。初始力或段首力
@@ -222,10 +228,11 @@ max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须
 2 次 collective、`mpi_input_bytes_global += 16P`、`mpi_output_bytes_global += 16P`。
 
 设置 `DMGMD_DOMAIN_TIMING=1` 后，每个积分步恰好分类为 `ordinary` 或 `rebuild`，并用固定
-CUDA event 集与 host monotonic clock 记录 decision、migration、membership/layout、
+CUDA event 与 host monotonic clock 记录 decision、migration、membership/layout、
 allocation/upload、halo pack/transfer-wait/unpack、cell/neighbor、NEP、integration、thermo、
 scientific output 和 remaining。默认关闭时不创建计时 event（O3 生命周期 event 始终存在）、不输出逐步记录、也不增加计时专用
-同步；开启时只在既有 thermo D2H/段末 device synchronization 读取 event，并在每个 run 段末
+同步；开启时为每步保留 event，在既有段末 device synchronization 后读取，不依赖 NVE thermo D2H；
+诊断资源为 O(段步数)，并在每个 run 段末
 各做一次 SUM/MIN/MAX 归约，输出有界 summary/histogram。device interval、host critical-path
 interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端性能仍以详细计时关闭时的
 `DMGMD_TIMING phase=run seconds_max` 为准。
@@ -233,7 +240,8 @@ interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端
 `DMGMD_DOMAIN_TRACE=1` 仅在同时设置 `DMGMD_DOMAIN_TIMING=1` 的 M2a 路径有效，默认关闭。
 `DMGMD_DOMAIN_DIAGNOSTICS` 启动记录中的 `timing`/`trace` 是程序实际模式。每 rank/步
 输出 `DMGMD_DOMAIN_TRACE`：`CLOCK_MONOTONIC` 的整数纳秒记录 step、decision、rebuild、
-ordinary halo、NEP host enqueue 和 thermo readiness 边界；ordinary halo 还记录 pack/unpack
+ordinary halo、NEP host enqueue 和可选 thermo 的 host 结束边界；跳过 thermo 时该边界不证明 GPU readiness。
+ordinary halo 还记录 pack/unpack
 enqueue、HostStaged D2H（含完成等待）/H2D enqueue、CudaAware 输入/输出同步、MPI post 与 `MPI_Waitall` 调用边界。
 rebuild 的同类内部阶段目前只在整体 rebuild host 区间内，未单独拆出。缺席阶段用零时间戳，
 不得解释为耗时零。每行带 rank/PID、sequence/global step、当前步各类通信字节和整段 NEP
@@ -247,7 +255,7 @@ post 至完成是请求在途窗口，不证明网卡正在传输。pack/unpack/
 stream 上的设备耗时，不携带 `CLOCK_MONOTONIC` 绝对时间。host enqueue 时间与既有 thermo
 D2H/段末同步提供先后及就绪边界，无法从这些字段给设备事件构造精确主机时间戳；跨 CPU/GPU
 重叠只能在更强的时钟校准或外部 profiler 证据下声称。诊断没有新增逐步 barrier 或同步；
-段末只执行原有一次 device synchronization，随后读取末个 event。
+段末只执行原有一次 device synchronization，随后读取保存的各步 event 并输出 trace。
 
 ## 验证入口与后续
 

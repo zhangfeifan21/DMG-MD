@@ -1,8 +1,8 @@
 # DMG-MD 当前状态
 
-类别：实现状态索引。核对日期：2026-10-21；O5 起始 HEAD：`6b8efc5`（主工作树原先干净）。
+类别：实现状态索引。核对日期：2026-10-26；O8 起始 HEAD：`cf6d098`（已有 O6/O7 未提交修改，已保留）。
 
-当前已实现 M1/M2a、统一缓存重建、CPU 采样、三引擎 benchmark 编排及 O1–O4。
+当前已实现 M1/M2a、统一缓存重建、CPU 采样、三引擎 benchmark 编排及 O1–O4/O7/O8。
 O4 默认关闭的普通步实际重叠已实现并通过本轮验收；默认仍同步 full。
 O4 身份见 [O4 报告](validation/overlap-o4-20261016.md)。
 O5 的本机正式实验于 2026-10-21 完成：主矩阵 600、历史归因 150、退化场景 120，
@@ -18,6 +18,26 @@ O5 的本机正式实验于 2026-10-21 完成：主矩阵 600、历史归因 150
 完整 grid 加掩码的执行效率是候选原因，具体微架构归因尚未证实。
 模式解释、证据与限制见[O5 后续成本分析](performance/overlap-o5-cost-analysis-20261021.md)。
 
+O6 于 2026-10-21 完成稳态诊断与复验：45 个新正式 trial、27 份稳态 trace；carbon
+拆分墙钟增加约 4.630 ms/step，主要新增 GPU 成本位于 radial。water/P8 的 partial 增量
+更大，不能统一归因为 radial。NCU/LaunchStats 均受计数器权限拒绝，微架构原因仍为
+INCONCLUSIVE；O9 当前 NO_ADOPTION，不启动未经证实的执行改写。见 [O6 报告](performance/overlap-o6-results-20261021.md)。
+
+O7 于 2026-10-23 完成并采用：缓存判定从 MAX→reason OR 合并为一次 OR；普通步固定
+collective 从 3 次降为 2 次。数值、实际调用次数及 60 个正式 trial 均通过；六个性能
+区间均跨过 1，整步收益 INCONCLUSIVE。见 [O7 报告](performance/overlap-o7-results-20261023.md)。
+
+O8 于 2026-10-26 完成并采用：M2a NVE 只在 thermo/XYZ 输出步计算辅助 thermo，
+NVT 保留每步反馈。292 个实际调用计数作业、MPI 68、nightly 18 + restart 12、
+105 个正式 trial 与 8 个 marker CPU 诊断完成；相对 O7 三组确认 1.019–1.028×，
+carbon/HostStaged 增量 INCONCLUSIVE。范围、慢样本与采集器修正见
+[O8 报告](performance/overlap-o8-results-20261026.md)，默认仍 HostStaged/full、overlap=off。
+
+O9 于 2026-10-26 完成证据门槛复核：两份既有二进制均通过八 rank 环境预检和四个
+golden case，CPU CTest 15/15；实际重试原 O6 稳态窗口仍被 ERR_NVGPUCTRPERM 拒绝。
+没有新的单因素证据选定执行候选，按计划以 NO_ADOPTION 结束该分支；生产源码及当前
+二进制不变，新候选性能未测，微架构原因仍 INCONCLUSIVE。见 [O9 报告](performance/overlap-o9-results-20261026.md)。
+
 ## 已实现能力
 
 | 能力 | 当前行为 / 合同 |
@@ -25,7 +45,8 @@ O5 的本机正式实验于 2026-10-21 完成：主矩阵 600、历史归因 150
 | 输入与 MD | GPUMD 格式 model/run/NEP4/5、NEP-ZBL，NVE、`nvt_ber`、兼容输出及跨 rank restart；详见[支持矩阵](../standards/compatibility-matrix.md) |
 | M1 replicated-full | P=1 固定使用；P>1 不满足 M2a eligibility 时回退。每 rank 完整 NEP scratch，积分/thermo/输出由 slab owner 唯一负责 |
 | M2a local-domain | 正交全周期大盒且 slab 足够宽时，使用 owned/ghost 本地 device 数据、两跳位置 halo、p2p 通信和直接迁移；详见[MPI 合同](../standards/mpi-runtime.md) |
-| 缓存与分配 | epoch 内 manager/layout/map 固定；全局连续位移超过 skin/2 才统一重建和迁移；capacity 可复用，host identity 仍每 rank 完整保存 |
+| 缓存与分配 | epoch 内 manager/layout/map 固定；局部严格位移超限位经一次全局 OR 决议重建和迁移；capacity 可复用，host identity 仍每 rank 完整保存 |
+| O8 thermo | NVE 按 thermo/XYZ 消费者步号并集执行，NVT 每步保留；无旧值复用，M1/P1 不变；[合同](../standards/thermo-demand.md) |
 | O1 诊断 | 默认关闭的 M2a 时间线、benchmark A/B 编排与 C1 marker 对齐；整段计时不等于 CPU 利用率 |
 | O2 串行分区 | `DMGMD_DOMAIN_PARTITION=off|serial|verify`，默认 off；普通步按完整 Verlet 图分区，halo 后串行执行；[合同](../standards/domain-partition.md) |
 | O3 halo 生命周期 | begin/progress/finish、单槽位与请求/事件完成检查；默认立即 finish，O4 可插入 early；无新 stream/progress thread；[合同](../standards/halo-lifecycle.md) |
@@ -41,6 +62,10 @@ query、device collective 与 p2p 数值自检。支持范围、字节公式和�
 
 | 日期 / 实现 | 已记录结果 | 范围与证据 |
 | --- | --- | --- |
+| 2026-10-26 O9 | 两份二进制各环境 P8/golden 4/4，CPU CTest 15/15；一次 NCU 重试 INCONCLUSIVE | [O9 复核](performance/overlap-o9-results-20261026.md)；NO_ADOPTION，无新候选性能或 NEP 执行改动 |
+| 2026-10-26 O8 | 调用计数 292、MPI 68、nightly NVE/NVT 18 + restart 12、实际输入 smoke 48、正式 trial 105、CPU 诊断 8 全部通过 | [O8 实测](performance/overlap-o8-results-20261026.md)；采用按需 NVE thermo，增量收益限于冻结范围 |
+| 2026-10-23 O7 | 边界/调用计数 108 + M1 4、MPI 主矩阵 68、nightly NVE 子矩阵 18 + restart 12、实际输入 smoke 36、正式 trial 60 全部通过 | [O7 实测](performance/overlap-o7-results-20261023.md)；采用单次 OR，整步收益 INCONCLUSIVE，默认 HostStaged/full、overlap=off |
+| 2026-10-21 O6 | 45/45 主 trial、27/27 稳态 trace、27/27 短控制、12/12 实际输入科学门槛；CPU CTest 12/12；NCU 两项 INCONCLUSIVE | [O6 实测](performance/overlap-o6-results-20261021.md)；生产二进制未变、默认未改，硬件因果未定 |
 | 2026-10-21 O5 | 870/870 主/历史/退化 trial；40/40 独立验证；C1 88/88、GPU 映射 384/384、Nsight 20/20；工具 CPU 单测 53/53 | [O5 正式报告](performance/communication-computation-overlap-o5-results-20261021.md)；未改生产二进制或默认；R=N/A、历史小接口成本部分 INCONCLUSIVE |
 | 2026-10-16 O4 | domain 七模式 476 组；生命周期 68/68、调度/配置 25/25；golden 4/4、CTest 10/10、long_nve smoke 7/7；24 cost trial、24 profiler rank-step 证据 | [O4](validation/overlap-o4-20261016.md)、[固定资源成本](performance/communication-computation-overlap-results-20261016.md)；candidate SHA-256 `860c1ba319a3bae55f1f3cb52eaf05dc1d3524d6a71766790b78fc0b1d68ceb6`；仍慢于 full，默认关闭 |
 | 2026-10-15 O3 | 生命周期/错误作业 68/68；domain 三模式 192 组；O2/O3 科学文件 808 次字节比较；CTest 10/10；golden 4/4；long_nve smoke 7/7 | [O3](validation/halo-lifecycle-20261015.md)；candidate SHA-256 `d1abb2deb8e54d1552a54c1030a33dc89a12795fe946b890671d93d77989e646` |
@@ -58,9 +83,9 @@ candidate SHA-256 `07c8f0a0d4b9305cfd3f506ad7172960dbe2b72f02edf5589b73eae4fb250
 
 ## 剩余工作
 
-- P0：[O6–O11 分步性能优化](../plans/communication-computation-overlap.md)：O6 拆分成本诊断，
-  O7 合并缓存判定归约，O8 按需 NVE thermo，O9 单一 NEP 执行候选，
-  条件性 O10 分消息后端选择，O11 相对新 full 的受控复验与采用决策。均为 PROPOSED，未执行。
+- P0：[O10–O11 分步性能优化](../plans/communication-computation-overlap.md)：O6–O9 已完成，
+  O9 以 NO_ADOPTION 结束；条件性 O10 分消息后端选择，O11 相对 O7+O8 full 的受控复验
+  与采用决策仍为 PROPOSED，未实施。O9 重新开启须另有因果证据。
 - 独立 P0：[跨引擎/调度器绑定剩余验收](../plans/mpi-cpu-binding.md)、
   [三引擎动力学与正式性能矩阵](../plans/lammps-multigpu-benchmark.md)。
   DMG-MD 本机统一启动与独立核验已完成，不再列为未实现。

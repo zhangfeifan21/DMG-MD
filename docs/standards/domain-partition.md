@@ -3,7 +3,7 @@
 类别：现行实验接口合同。默认关闭。O2 serial/verify 默认仍先完成 halo；O4 可显式将
 early 提交放在 begin 与 finish 之间，沿用同一默认 stream。
 方向于 2026-10-15 获维护者确认；本页保存已落地的闭包与缓存合同，
-剩余调度见[O4/O5 计划](../plans/communication-computation-overlap.md)。
+剩余优化见[分阶段性能计划](../plans/communication-computation-overlap.md)。
 O2 证据见 [O2 状态](../status/validation/overlap-partition-20261015.md)，O4 范围与验收见
 [O4 状态](../status/validation/overlap-o4-20261016.md)。
 
@@ -120,6 +120,15 @@ split 的旧 `cell_neighbor_device` 区间包含缓存分类；旧 `nep_device` 
 hit 只是 key 检查。分类占用三个 L 长 int mask（S/I/E）及三个 int scratch，逻辑额外设备空间为 12L+12 bytes，
 物理 capacity 可保留高水位；cache miss 使用三次分类 kernel、mask/scratch fill 和两次小型 D2H 检查。
 分区额外成本由同输入、固定 CPU/GPU 的 off/serial 无详细诊断 A/B 另测。
+
+逐 kernel 归因须比较同输入、绑定、工具链的稳态 full/serial/wait 实际 CUDA activity；
+段首 setup、重建 fallback 和 ordinary split 分开。当前普通 split 对上述五类基础
+pipeline 各执行 early/late 一次，grid 仍为完整 owned/dependency 范围，用 mask 选择
+中心，不能用中心数比例代替有效线程或访存指标。独立进程是重复单位，步与 rank
+只作 trial 内统计。额外 launch API、分类、同步和 MPI 各自报告，不能与 GPU kernel
+时间相加来拼出整步墙钟。Nsight Compute 须记录 replay/cache/clock control；计数器
+不可用时微架构归因为 INCONCLUSIVE，不据寄存器数或阶段包络推断 cache/occupancy 瓶颈。
+采集、逐步匹配和离线重算入口见[benchmark 工具](../../tests/benchmark/README.md#o6-稳态-kernel-归因)。
 
 ## 必须保留的反例
 

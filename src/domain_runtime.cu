@@ -391,6 +391,18 @@ struct StepTrace {
   double nep_device_seconds = 0.0;
 };
 
+struct StepTimingEvents {
+  std::array<cudaEvent_t, 4> nep{};
+  std::array<cudaEvent_t, 6> integration{};
+  std::array<cudaEvent_t, 4> thermo{};
+  P2pTimingEvents halo;
+  TimedStepClass step_class = TimedStepClass::ordinary;
+  bool thermo_computed = false;
+  StepTrace trace;
+  CommunicationVolume communication;
+  std::uint64_t step = 0;
+};
+
 [[nodiscard]] std::uint64_t monotonic_ns()
 {
   timespec stamp{};
@@ -1620,6 +1632,7 @@ void run_domain_segment(
   const std::uint64_t growth_start = state.capacity_growth_events;
   const std::uint64_t allocation_start =
       gpumd_compat::gpu_vector_allocation_count();
+  std::uint64_t thermo_steps = 0;
   int thermo_count = 0;
   int restart_count = 0;
   for (const Measurement& measurement : measurements) {
@@ -1647,29 +1660,27 @@ void run_domain_segment(
 
   SegmentTiming segment_timing;
   std::array<cudaEvent_t, 4> setup_nep_events{nullptr, nullptr, nullptr, nullptr};
-  std::array<cudaEvent_t, 4> nep_events{nullptr, nullptr, nullptr, nullptr};
-  std::array<cudaEvent_t, 6> integration_events{
-      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
-  std::array<cudaEvent_t, 4> thermo_events{nullptr, nullptr, nullptr, nullptr};
-  P2pTimingEvents halo_events;
-  std::optional<TimedStepClass> pending_thermostat_timing;
+  std::vector<StepTimingEvents> timed_steps(state.timing_enabled ? steps : 0);
+  StepTimingEvents untimed_step;
   if (state.timing_enabled) {
     for (cudaEvent_t& event : setup_nep_events) {
       check_cuda(cudaEventCreate(&event), "create setup NEP timing event");
     }
-    for (cudaEvent_t& event : nep_events) {
-      check_cuda(cudaEventCreate(&event), "create NEP timing event");
+    for (StepTimingEvents& events : timed_steps) {
+      for (cudaEvent_t& event : events.nep) {
+        check_cuda(cudaEventCreate(&event), "create NEP timing event");
+      }
+      for (cudaEvent_t& event : events.integration) {
+        check_cuda(cudaEventCreate(&event), "create integration timing event");
+      }
+      for (cudaEvent_t& event : events.thermo) {
+        check_cuda(cudaEventCreate(&event), "create thermo timing event");
+      }
+      create_opaque_event(events.halo.pack_begin, "create halo timing event");
+      create_opaque_event(events.halo.pack_end, "create halo timing event");
+      create_opaque_event(events.halo.unpack_begin, "create halo timing event");
+      create_opaque_event(events.halo.unpack_end, "create halo timing event");
     }
-    for (cudaEvent_t& event : integration_events) {
-      check_cuda(cudaEventCreate(&event), "create integration timing event");
-    }
-    for (cudaEvent_t& event : thermo_events) {
-      check_cuda(cudaEventCreate(&event), "create thermo timing event");
-    }
-    create_opaque_event(halo_events.pack_begin, "create halo timing event");
-    create_opaque_event(halo_events.pack_end, "create halo timing event");
-    create_opaque_event(halo_events.unpack_begin, "create halo timing event");
-    create_opaque_event(halo_events.unpack_end, "create halo timing event");
     nep.domain_timing_marker = [&setup_nep_events](int marker) {
       check_cuda(cudaEventRecord(setup_nep_events.at(static_cast<std::size_t>(marker))),
                  "record setup NEP timing marker");
@@ -1688,20 +1699,31 @@ void run_domain_segment(
                            : gpumd_compat::DomainNeighborAction::must_rebuild);
   if (state.timing_enabled) {
     segment_timing.setup_host = elapsed_since(setup_started);
-    nep.domain_timing_marker = [&nep_events](int marker) {
-      check_cuda(cudaEventRecord(nep_events.at(static_cast<std::size_t>(marker))),
-                 "record NEP timing marker");
-    };
   }
   const std::uint64_t trace_segment_begin_ns =
       state.trace_enabled ? monotonic_ns() : 0;
   const auto step_loop_started = begin_detailed_timing(state.timing_enabled);
   for (int step = 0; step < steps; ++step) {
+    StepTimingEvents& events = state.timing_enabled ? timed_steps[step] : untimed_step;
+    auto& nep_events = events.nep;
+    auto& integration_events = events.integration;
+    auto& thermo_events = events.thermo;
+    auto& halo_events = events.halo;
     StepTrace trace;
     if (state.trace_enabled) trace.begin_ns = monotonic_ns();
     if (state.timing_enabled) {
-      halo_events = P2pTimingEvents{halo_events.pack_begin, halo_events.pack_end,
-                                    halo_events.unpack_begin, halo_events.unpack_end};
+      nep.domain_timing_marker = [&nep_events](int marker) {
+        check_cuda(cudaEventRecord(nep_events.at(static_cast<std::size_t>(marker))),
+                   "record NEP timing marker");
+      };
+    }
+    bool need_thermo = ensemble.kind != EnsembleKind::nve;
+    for (const Measurement& measurement : measurements) {
+      if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
+        need_thermo = need_thermo || ((step + 1) % dump->interval == 0);
+      } else if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
+        need_thermo = need_thermo || ((step + 1) % dump->interval == 0);
+      }
     }
     const auto step_started = begin_detailed_timing(state.timing_enabled);
     double accounted_host = 0.0;
@@ -1781,11 +1803,14 @@ void run_domain_segment(
         local_reasons = reasons;
       }
     }
-    const double global_max_squared =
-        mpi.allreduce_max_host(local_max_squared, communication);
     constexpr double displacement_limit_squared =
         0.25 * kNeighborSkin * kNeighborSkin;
-    if (global_max_squared > displacement_limit_squared) {
+    // inspect_domain_cache only contributes finite, non-negative squares;
+    // invalid continuity is carried separately and remains fatal after OR.
+    // Thus max_rank(m_rank) > limit iff any rank's m_rank > limit. Empty
+    // ranks contribute zero, and equality still reuses the cache. Combine
+    // this predicate with routing/invalid reasons before the sole collective.
+    if (local_max_squared > displacement_limit_squared) {
       local_reasons |= kDisplacementLimit;
     }
     const std::uint32_t global_reasons =
@@ -1862,7 +1887,9 @@ void run_domain_segment(
     if (state.timing_enabled) {
       check_cuda(cudaEventRecord(integration_events[3]),
                  "record second integration end");
-      check_cuda(cudaEventRecord(thermo_events[0]), "record thermo start");
+      if (need_thermo) {
+        check_cuda(cudaEventRecord(thermo_events[0]), "record thermo start");
+      }
     }
     // 10. Thermo: owned local sums + global Allreduce.
     const double integration_second_seconds =
@@ -1873,9 +1900,13 @@ void run_domain_segment(
       accounted_host += integration_second_seconds;
     }
     const auto thermo_started = begin_detailed_timing(state.timing_enabled);
-    const ThermoState thermo =
-        compute_domain_thermo(state, box, identity, state.device.thermo, mpi, communication,
-                              state.timing_enabled ? &thermo_events : nullptr);
+    std::optional<ThermoState> thermo;
+    if (need_thermo) {
+      thermo = compute_domain_thermo(
+          state, box, identity, state.device.thermo, mpi, communication,
+          state.timing_enabled ? &thermo_events : nullptr);
+      ++thermo_steps;
+    }
     if (state.timing_enabled) {
       const double seconds = elapsed_since(thermo_started);
       add_seconds(segment_timing, step_class, kThermoHost, seconds);
@@ -1885,13 +1916,6 @@ void run_domain_segment(
     // 11. Thermostat over the owned prefix.
     const auto thermostat_started = begin_detailed_timing(state.timing_enabled);
     if (state.timing_enabled) {
-      // The current thermo D2H is a natural readiness point for the preceding
-      // step's thermostat. Resolve it before reusing the event pair; no
-      // diagnostic-only per-step synchronization is introduced.
-      if (pending_thermostat_timing) {
-        add_seconds(segment_timing, *pending_thermostat_timing, kIntegrationDevice,
-                    event_seconds(integration_events[4], integration_events[5]));
-      }
       check_cuda(cudaEventRecord(integration_events[4]),
                  "record thermostat start");
     }
@@ -1901,7 +1925,7 @@ void run_domain_segment(
                             (ensemble.final_temperature - ensemble.initial_temperature) * fraction;
       const double coupling = 1.0 / ensemble.temperature_coupling;
       if (coupling > 1.0e-5) {
-        const double factor = std::sqrt(1.0 + coupling * (target / thermo.values[0] - 1.0));
+        const double factor = std::sqrt(1.0 + coupling * (target / thermo.value().values[0] - 1.0));
         const int owned = checked_int(state.owned_count(), "owned_count");
         if (owned != 0) {
           const int stride = checked_int(state.local_count(), "local_count");
@@ -1914,33 +1938,11 @@ void run_domain_segment(
     if (state.timing_enabled) {
       check_cuda(cudaEventRecord(integration_events[5]),
                  "record thermostat end");
-      pending_thermostat_timing = step_class;
     }
     if (state.timing_enabled) {
       const double seconds = elapsed_since(thermostat_started);
       add_seconds(segment_timing, step_class, kIntegrationHost, seconds);
       accounted_host += seconds;
-      add_seconds(segment_timing, step_class, kCellNeighborDevice,
-                  event_seconds(nep_events[0], nep_events[1]));
-      trace.nep_device_seconds = event_seconds(nep_events[2], nep_events[3]);
-      add_seconds(segment_timing, step_class, kNepDevice,
-                  trace.nep_device_seconds);
-      add_seconds(segment_timing, step_class, kIntegrationDevice,
-                  event_seconds(integration_events[0], integration_events[1]) +
-                      event_seconds(integration_events[2], integration_events[3]));
-      add_seconds(segment_timing, step_class, kThermoDevice,
-                  event_seconds(thermo_events[0], thermo_events[1]) +
-                      event_seconds(thermo_events[2], thermo_events[3]));
-      if (!rebuild) {
-        trace.pack_device_seconds = event_seconds(
-            reinterpret_cast<cudaEvent_t>(halo_events.pack_begin),
-            reinterpret_cast<cudaEvent_t>(halo_events.pack_end));
-        trace.unpack_device_seconds = event_seconds(
-            reinterpret_cast<cudaEvent_t>(halo_events.unpack_begin),
-            reinterpret_cast<cudaEvent_t>(halo_events.unpack_end));
-        add_seconds(segment_timing, step_class, kHaloPackDevice, trace.pack_device_seconds);
-        add_seconds(segment_timing, step_class, kHaloUnpackDevice, trace.unpack_device_seconds);
-      }
     }
     // 12. Outputs.
     const auto output_started = begin_detailed_timing(state.timing_enabled);
@@ -1962,13 +1964,13 @@ void run_domain_segment(
           if (mpi.is_root()) {
             FILE* file = std::fopen("thermo.out", "a");
             if (!file) throw std::runtime_error("cannot open thermo.out");
-            write_thermo_row(file, thermo, identity, box);
+            write_thermo_row(file, thermo.value(), identity, box);
             std::fclose(file);
           }
         }
       } else if (const auto* dump = std::get_if<DumpXyzCommand>(&measurement)) {
         if (mpi.is_root() && (step + 1) % dump->interval == 0) {
-          write_xyz(*dump, step, global_time, box, identity, *snapshot, thermo);
+          write_xyz(*dump, step, global_time, box, identity, *snapshot, thermo.value());
         }
       } else if (const auto* restart = std::get_if<DumpRestartCommand>(&measurement)) {
         if (mpi.is_root() && (step + 1) % restart->interval == 0) {
@@ -2008,8 +2010,17 @@ void run_domain_segment(
     }
     if (state.trace_enabled) {
       trace.end_ns = monotonic_ns();
-      log_step_trace(state, sequence, global_step, step_class, trace, halo_events,
-                     communication);
+      if (!state.timing_enabled) {
+        log_step_trace(state, sequence, global_step, step_class, trace, halo_events,
+                       communication);
+      }
+    }
+    if (state.timing_enabled) {
+      events.step_class = step_class;
+      events.thermo_computed = need_thermo;
+      events.trace = trace;
+      events.communication = communication;
+      events.step = global_step;
     }
   }
   const std::uint64_t trace_segment_end_ns =
@@ -2025,37 +2036,67 @@ void run_domain_segment(
   // device-wide synchronization or a per-step profiler barrier.
   check_cuda(cudaDeviceSynchronize(), "synchronize after timed run segment");
   if (state.timing_enabled) {
-    if (pending_thermostat_timing) {
-      add_seconds(segment_timing, *pending_thermostat_timing, kIntegrationDevice,
-                  event_seconds(integration_events[4], integration_events[5]));
+    segment_timing.step_loop_wall = elapsed_since(step_loop_started);
+    for (StepTimingEvents& events : timed_steps) {
+      const TimedStepClass step_class = events.step_class;
+      add_seconds(segment_timing, step_class, kCellNeighborDevice,
+                  event_seconds(events.nep[0], events.nep[1]));
+      events.trace.nep_device_seconds = event_seconds(events.nep[2], events.nep[3]);
+      add_seconds(segment_timing, step_class, kNepDevice, events.trace.nep_device_seconds);
+      add_seconds(segment_timing, step_class, kIntegrationDevice,
+                  event_seconds(events.integration[0], events.integration[1]) +
+                      event_seconds(events.integration[2], events.integration[3]) +
+                      event_seconds(events.integration[4], events.integration[5]));
+      if (events.thermo_computed) {
+        add_seconds(segment_timing, step_class, kThermoDevice,
+                    event_seconds(events.thermo[0], events.thermo[1]) +
+                        event_seconds(events.thermo[2], events.thermo[3]));
+      }
+      if (step_class == TimedStepClass::ordinary) {
+        events.trace.pack_device_seconds = event_seconds(
+            reinterpret_cast<cudaEvent_t>(events.halo.pack_begin),
+            reinterpret_cast<cudaEvent_t>(events.halo.pack_end));
+        events.trace.unpack_device_seconds = event_seconds(
+            reinterpret_cast<cudaEvent_t>(events.halo.unpack_begin),
+            reinterpret_cast<cudaEvent_t>(events.halo.unpack_end));
+        add_seconds(segment_timing, step_class, kHaloPackDevice, events.trace.pack_device_seconds);
+        add_seconds(segment_timing, step_class, kHaloUnpackDevice, events.trace.unpack_device_seconds);
+      }
+      if (state.trace_enabled) {
+        log_step_trace(state, sequence, events.step, step_class, events.trace,
+                       events.halo, events.communication);
+      }
     }
     segment_timing.setup_cell_neighbor_device =
         event_seconds(setup_nep_events[0], setup_nep_events[1]);
     segment_timing.setup_nep_device =
         event_seconds(setup_nep_events[2], setup_nep_events[3]);
-    segment_timing.step_loop_wall = elapsed_since(step_loop_started);
     nep.domain_timing_marker = {};
     log_segment_timing(segment_timing, sequence, mpi);
-    for (cudaEvent_t event : nep_events) {
-      check_cuda(cudaEventDestroy(event), "destroy NEP timing event");
-    }
     for (cudaEvent_t event : setup_nep_events) {
       check_cuda(cudaEventDestroy(event), "destroy setup NEP timing event");
     }
-    for (cudaEvent_t event : integration_events) {
-      check_cuda(cudaEventDestroy(event), "destroy integration timing event");
+    for (StepTimingEvents& events : timed_steps) {
+      for (cudaEvent_t event : events.nep) {
+        check_cuda(cudaEventDestroy(event), "destroy NEP timing event");
+      }
+      for (cudaEvent_t event : events.integration) {
+        check_cuda(cudaEventDestroy(event), "destroy integration timing event");
+      }
+      for (cudaEvent_t event : events.thermo) {
+        check_cuda(cudaEventDestroy(event), "destroy thermo timing event");
+      }
+      destroy_opaque_event(events.halo.pack_begin, "destroy halo timing event");
+      destroy_opaque_event(events.halo.pack_end, "destroy halo timing event");
+      destroy_opaque_event(events.halo.unpack_begin, "destroy halo timing event");
+      destroy_opaque_event(events.halo.unpack_end, "destroy halo timing event");
     }
-    for (cudaEvent_t event : thermo_events) {
-      check_cuda(cudaEventDestroy(event), "destroy thermo timing event");
-    }
-    destroy_opaque_event(halo_events.pack_begin, "destroy halo timing event");
-    destroy_opaque_event(halo_events.pack_end, "destroy halo timing event");
-    destroy_opaque_event(halo_events.unpack_begin, "destroy halo timing event");
-    destroy_opaque_event(halo_events.unpack_end, "destroy halo timing event");
   }
   std::ostringstream summary;
   summary << "DMGMD_DOMAIN_SUMMARY rank=" << state.rank
           << " sequence=" << sequence << " steps=" << steps
+          << " thermo_steps=" << thermo_steps
+          << " thermo_skipped_steps=" << (steps - thermo_steps)
           << " migration_steps=" << (state.migration_steps - migration_start)
           << " rebuild_steps=" << (state.rebuild_steps - rebuild_start)
           << " layout_uploads=" << (state.layout_uploads - layout_start)

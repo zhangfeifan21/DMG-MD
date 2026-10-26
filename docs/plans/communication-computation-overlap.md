@@ -1,11 +1,11 @@
-# 通信与计算性能优化：O6–O11
+# 通信与计算性能优化：O10–O11
 
-类别：分阶段后续计划。状态：**PROPOSED**（O1–O5 本机阶段已完成；O6–O11 尚未执行）。
-优先级：P0。更新日期：2026-10-21。
+类别：分阶段后续计划。状态：**PROPOSED**（O1–O8 本机阶段完成；O9 以 NO_ADOPTION 完成；O10–O11 尚未执行）。
+优先级：P0。更新日期：2026-10-26。
 
 目标是降低真实整步成本，并判断 overlap 是否值得采用。生产默认保持
 HostStaged/full、`DMGMD_DOMAIN_OVERLAP=off`。以下每个 O 编号对应一个可独立交给
-Codex goal 的任务；本轮更新文档并清理构建中间文件，O6–O11 的实现与实验尚未开始。
+Codex goal 的任务；O6 稳态诊断、O7 单次 OR 与 O8 按需 thermo 已完成，O9 已终止无可信候选分支。
 
 ## 已完成基础与当前判断
 
@@ -16,13 +16,17 @@ Codex goal 的任务；本轮更新文档并清理构建中间文件，O6–O11 
 | O3 halo 生命周期 | [现行合同](../standards/halo-lifecycle.md)；[生命周期与串行成本验收](../status/validation/halo-lifecycle-20261015.md) |
 | O4 实际 overlap | [wait/poll 正确性与正常路径证据](../status/validation/overlap-o4-20261016.md)；[当时窄成本检查](../status/performance/communication-computation-overlap-results-20261016.md) |
 | O5 正式实验 | [910 个有效性能 trial、历史归因、诊断和独立采用验证](../status/performance/communication-computation-overlap-o5-results-20261021.md) |
+| O6 稳态归因 | [45 个正式 trial、27 份稳态 trace 与硬件指标限制](../status/performance/overlap-o6-results-20261021.md)；carbon 主损失位于 radial，硬件原因 INCONCLUSIVE，O9 当前 NO_ADOPTION |
+| O7 缓存判定归约 | [语义证明、回归、实际调用计数与 60 个配对 trial](../status/performance/overlap-o7-results-20261023.md)；采用单次 OR，整步收益 INCONCLUSIVE |
+| O8 按需 NVE thermo | [消费者合同](../standards/thermo-demand.md)、[292 个调用计数作业、MPI/nightly 与 105 个三版本 trial](../status/performance/overlap-o8-results-20261026.md)；相对 O7 三组增量确认、一组 INCONCLUSIVE，采用 |
+| O9 执行候选复核 | [冻结门槛、真实 NCU 重试与安全/反例分析](../status/performance/overlap-o9-results-20261026.md)；计数器仍受限，无可信候选，以 NO_ADOPTION 完成；未改 NEP 执行 |
 
 O5 已回答本机冻结范围的采用问题：多数配置的分区成本大于 overlap 回收的时间；
 固定 CudaAware 的精确 water fixture/P4/P8 有独立净收益，HostStaged/full 仍更快。
 wait/poll 没有通用的稳定优劣证据。模式定义、4.60 ms 成本的证据与推测边界及优化依据见
 [O5 后续成本分析](../status/performance/overlap-o5-cost-analysis-20261021.md)。
 
-接下来先定位分区成本，同时优先验证也能惠及 full 的小范围优化。不能把增加 poll、
+O6 已定位 carbon 的主要增加位置；接下来优先验证也能惠及 full 的小范围优化。不能把增加 poll、
 CPU 核数或更复杂异步结构当作已有收益方案。旧阶段的实现草案和执行待办已移除，
 当前合同由 standards 维护，原始结果由带日期的报告维护。
 
@@ -42,87 +46,46 @@ CPU 核数或更复杂异步结构当作已有收益方案。旧阶段的实现�
 - 报告实现/正确性/性能三种结论；无收益是有效性能结论，关键实验或门槛缺失则为 PARTIAL。
   更新 status 与索引，完成后从本计划移除重复实施步骤。不提交或推送 Git。
 
-依赖顺序：O6 先行；O7、O8 分别形成可单独测量的改动；O9 取决于 O6 的证据；
-O10 是条件性候选；O11 汇总实际完成的候选并重新作采用决策。O7/O8/O9 不得合成
-一个无法归因的大补丁；可以在前一阶段验收后串行推进，但保留各自对照二进制。
+依赖顺序：O6–O9 已完成，原 full、O7 与 O7+O8 对照分别保留；O9 未增加执行候选。
+O10 是条件性候选；O11 汇总实际验收的改动并重新作采用决策。任何新候选必须保留
+独立归因和对照二进制，不合成一个无法归因的大补丁。
 
 <a id="o6"></a>
-## O6：定位拆分增加成本的具体 kernel 和原因
+## O6：已完成的稳态拆分诊断
 
-**Goal 目标：**在相同输入、绑定和工具链下，解释 carbon_200k/P2/CudaAware 的
-full→split-serial 成本来自哪里，交付可核验的 kernel 对照与下一候选选择。
-
-范围：先做这个 4.60 ms 代表配置，再用 water/P4/P8 的获益配置核对解释是否适用；
-需要时选择一个 carbon_1m 或退化配置作反例，不重跑完整 O5 矩阵。
-先冻结目标 kernel、稳定采集窗口与最小诊断集合，比较 full、serial、wait 的
-filter/descriptor/radial/partial/many-body 实际 GPU 执行；单独报告分类、额外 launch、
-同步和通信。以匹配的无诊断墙钟确认诊断没有改变主结论。
-
-采集可用的 Nsight Compute 指标，检查有效线程/warp、寄存器与 occupancy、
-访存事务/缓存、调度与同步；明确 replay/cache control 的扰动和不可用指标。
-O5 的冷启动三步 trace 只用于选候选，不能代替稳态 full/serial 对照。
-不得把 event 阶段包络当作独占 kernel 时间，也不得预设“缓存 miss”就是原因。
-
-**完成条件：**正确性和无诊断对照有效；给出成本位置、支持/不支持的原因、误差与未知项，
-并据此选择 O9 的一个候选或说明不值得继续。硬件指标不足时写 INCONCLUSIVE，
-不能声称精确分解出每项 4.60 ms。此阶段不改变生产 NEP kernel 或通信协议。
+结果与未知项见 [O6 实测](../status/performance/overlap-o6-results-20261021.md)，
+现行测量约束见[分区标准](../standards/domain-partition.md#诊断与计时)。
+carbon 新墙钟拆分成本约 4.630 ms/step，主要新增 GPU 时间位于 radial；water/P8 的
+partial 增量更大。NCU 实际受计数器权限拒绝，微架构原因 INCONCLUSIVE，不精确拆账墙钟。
+当前不值得在因果证据不足时启动 O9 kernel 改写，记录 NO_ADOPTION；生产行为与默认未改。
 
 <a id="o7"></a>
-## O7：合并缓存有效性判定的冗余全局归约
+## O7：已完成缓存判定归约合并
 
-**Goal 目标：**验证并最小实现 M2a 缓存判定由 MAX→reason OR 两次 collective
-收敛为一次 reason OR，测量相对原 full 的收益，保持重建、迁移和错误行为。
-
-当前 `domain_runtime.cu` 中 `global_max_squared` 只用于严格大于阈值的判定。
-对有限值有 `max(m_rank) > h ⇔ OR(m_rank > h)`，因此可先在各 rank 设置位移超限位，
-再与 continuity-invalid 等原因位合并 OR。实现前核实所有消费者、非有限值处理、
-阈值相等、空 rank 和各 rank collective 顺序；不能仅凭这个恒等式跳过错误语义证明。
-
-验证缓存复用、恰好阈值与两侧、周期位移、重建/迁移、空 rank、多 run 与错误退出，
-覆盖两后端及适用 rank，并跑对应 golden/MPI/long_nve 门槛。M1 行为保持原样。
-先在 full 下对照原二进制，再用 serial/wait smoke 检查共同接口影响；
-保存实际 collective 次数、科学输出与正式墙钟，不能将 host decision wall 全算作网络。
-
-**完成条件：**语义证明、回归、实际归约次数及配对性能报告完整；明确采用或撤回。
-只有实现验收后才更新缓存/MPI 标准与通信记账，当前标准仍描述 MAX/reason OR。
+已采用各 rank 的严格位移超限判定加一次 reason OR。语义证明、阈值/错误/空 rank、
+两后端 P2/P4/P8 实际归约计数、golden/MPI/nightly NVE 与 60 个配对 trial 见
+[O7 报告](../status/performance/overlap-o7-results-20261023.md)。六个性能区间均跨过 1，
+整步收益 INCONCLUSIVE；不宣称稳定加速。现行合同见[缓存标准](../standards/cache-validity.md)
+和 [MPI 标准](../standards/mpi-runtime.md)，后续对照二进制分别保留，默认仍 HostStaged/full、overlap=off。
 
 <a id="o8"></a>
-## O8：按消费者需求执行 NVE thermo
+## O8：已完成按需 NVE thermo
 
-**Goal 目标：**审计并消除没有消费者的 NVE 辅助 thermo 计算/全局归约，
-验证原请求输出及轨迹语义不变，量化相对 full 的净收益。
-
-当前 M2a 每步调用 `compute_domain_thermo`，包含 owned sums、8 double Allreduce、
-归一化及 D2H。先逐一列出消费者与需要的步号：thermo 输出、thermostat、快照、
-restart、多 run 及其他实际读者。只允许 NVE 在无消费者时跳过；NVT 的每步温度反馈保留。
-不得通过减少用户要求的输出、重建、迁移、积分或 NEP 工作制造收益。
-
-针对输出周期及段边界、多 run/restart、NVE/NVT、adaptive timestep/修速等适用路径，
-验证消费者使用的是正确步的值且不存在旧值复用。跑对应 golden、MPI 和长程门槛；
-记录实际 thermo/collective 次数、科学文件、配对墙钟与有 marker 的独立 CPU 诊断。
-保留单独的原 full 对照和 O7 对照，区分 O8 独立增量及组合效果。
-
-**完成条件：**消费者清单、最小实现、回归及实测齐全，或证明无法在现行兼容合同下安全跳过
-并交付 NO_ADOPTION 结论。`thermo_host` 包含前序 GPU 等待，不能用它预测可节省时间。
+M2a NVE 按 thermo/XYZ 消费者的段内步号并集计算，NVT 保留每步反馈；restart、
+adaptive timestep、修速和段末同步不引入隐含 thermo。所有权、数学、积分和请求输出不变。
+消费者、旧值防护、通信字节与诊断就绪合同见[thermo 标准](../standards/thermo-demand.md)。
+golden、292 个实际调用计数作业、MPI 68、nightly NVE/NVT 18 + restart 12、三版本 smoke 48、
+105 个正式 trial 和 8 个 CPU 诊断见[O8 实测](../status/performance/overlap-o8-results-20261026.md)。
+采用该实现；相对 O7 的 carbon/HostStaged 增量 INCONCLUSIVE，其余三组确认加速。
+不从 `thermo_host` 预测节省时间，不外推范围或改变 overlap 默认。
 
 <a id="o9"></a>
-## O9：依据 O6 优化一个 NEP 执行候选
+## O9：已完成执行候选复核，NO_ADOPTION
 
-**Goal 目标：**针对 O6 证实的主因，只实施一个可归因的 NEP 执行优化，
-先判断 split-serial 能否变便宜，再判断 overlap 是否产生相对 full 的净收益。
-
-若主要损失来自完整 launch 范围与掩码执行，可评估活动 block 或中心索引列表，
-保留粒子物理数组、L stride、producer/力中心唯一写入及所有浮点数学/累加顺序。
-先说明索引构建/维护、额外内存和缓存失效成本，及与当前相同 grid 合同的区别。
-若证据指向 full 也存在的 radial/descriptor 瓶颈，则改为一个适用于 full 的调度候选，
-不能同时展开多种 kernel 重写。按 AGENTS 对触及 launch 参数的修改执行 golden/long_nve。
-
-实施前给依赖/索引安全设计、反例与适用 golden 矩阵；覆盖多元素/NEP5/ZBL、
-普通/重建/迁移、小/空 interior 与 M1 fallback，保持 full/serial oracle 和原容差。
-把候选 full、serial、wait/poll 与各自原二进制比较，包含分类/列表维护和额外 launch 成本。
-
-**完成条件：**一个候选的设计、正确性和实际净收益结论完整；没有可信候选则以
-NO_ADOPTION 记录终止该分支，不为追求 overlap 改 NEP 数学、布局、精度或所有权。
+2026-10-26 按原完成条件终止无可信候选分支。两份既有二进制的环境/golden 与工具测试通过；
+实际重试原 O6 稳态窗口仍返回 ERR_NVGPUCTRPERM，没有新单因素证据选定执行候选。
+冻结方案、候选成本/安全与反例、原始证据及复算入口见 [O9 报告](../status/performance/overlap-o9-results-20261026.md)。
+生产 NEP 未改；新候选性能未测，不能解释为已证明无收益。重新开启须有新因果证据并另冻一个候选。
 
 <a id="o10"></a>
 ## O10：条件性验证小归约与 halo 的后端选择

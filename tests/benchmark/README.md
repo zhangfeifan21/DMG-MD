@@ -459,3 +459,135 @@ O5 的 `observe_o5_gpu_mapping.py` 可独立核验诊断期 PID→GPU UUID，使
 独立运行时 GPU 映射及采集前冻结的采用验证分别准入。`summarize_overlap_o5.py` 生成
 可读结果表；跨默认后端比较明确标为事后探索。`inventory_overlap_o5.py` 保留全部带
 launch 的尝试/状态，并生成原始日志、CPU ticks、trace、GPU context 证据的 SHA 清单。
+
+## O6 稳态 kernel 归因
+
+`run_overlap_o6.py` 复用已验收 O4 生产二进制，仅增加独立实验编排；不构建新的 NEP
+kernel。`freeze` 在试验前冻结 binary/input/toolchain 哈希、K=4 绑定、GPU UUID、随机
+顺序、步数和统计规则。输入从指定的 O5 产物复制，新样本只写入新的 O6 目录。
+当前冻结范围为 carbon_200k/P2 与 water_400k/P4/P8、CudaAware、full/serial/wait。
+每种配置五个新无诊断重复；Nsight Systems 另做三轮独立重复，二者不混用。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o6.py freeze --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/run_overlap_o6.py gates --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/run_overlap_o6.py profiles --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/analyze_overlap_o6.py --root dmgmd-overlap-o6-20261021 --profiles-only
+python3 tests/benchmark/run_overlap_o6.py main --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/profile_overlap_o6_ncu.py --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/run_overlap_o6_controls.py --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/analyze_overlap_o6.py --root dmgmd-overlap-o6-20261021
+python3 tests/benchmark/test_overlap_o6.py
+```
+
+所有 GPU 采集共用目录锁并串行运行，源码身份变化、半成品目录或不合格 trial 会停止
+采集；失败原样保留。重跑时沿用已冻结身份与命令，不覆盖日志。实际完成范围及
+硬件指标可用性以 O6 报告与目录内 `analysis-status.json` 为准。
+
+`analyze_overlap_o6.py` 按同一 CUPTI trace 内的实际 CUDA kernel 顺序定位最后 128
+正式步，用 cache inspection、Verlet 和 thermo kernel 校验一步边界，排除段首 setup
+与重建步；不拼接 CLOCK_MONOTONIC 和 Nsight 时间轴。完整五类 pipeline 为
+filter/descriptor/radial/partial/many-body，普通 split 步必须对应 early、late 两组。
+launch 数量、grid/block、寄存器、独立 kernel 时长与 host launch API 时长分别保存。
+以“每 trial 的逐步 rank 均值”汇总三次诊断；步和 rank 不能充当独立重复。
+host 分类/同步/MPI 区间来自程序原有 trace，只单独描述，不与 GPU 时间相加。
+
+`profile_overlap_o6_ncu.py` 从 trace 冻结 rank0 的稳态 launch skip/count，使用 kernel
+replay，对比 cache-control=none/all，clock-control=none。replay 的同步、内存恢复与
+缓存操作都会改变执行；NCU 时间不能替换无诊断墙钟。计数器权限拒绝后保留精确错误，
+同 GPU 的其他采集记 NOT_RUN，并尝试一次 LaunchStats 静态回退。缺少有效线程、
+achieved occupancy、访存/缓存或 scheduler 指标时写 INCONCLUSIVE，不能以静态寄存器
+数证明瓶颈，也不能把阶段 event 包络或短冷启动 trace 当作独占 kernel 成本。
+
+`run_overlap_o6_controls.py` 另冻三轮同输入、同预热、128 步的无诊断短控制，逐文件
+核对与 Nsight 窗口的科学结果，用于诊断扰动校准。它们不足 10 s，不是正式性能样本，
+不与五轮长正式试验混用。阶段不交错且频率未锁定，不把短控制比值当作精确因果开销。
+`inventory_overlap_o6.py` 保存源码、patch、全部原始尝试及证据 SHA-256；`--verify`
+检查原始文件与分析依赖，供产物目录的 `recompute.sh` 在离线重算前使用。
+
+## O7 缓存判定归约
+
+`run_overlap_o7.py` 使用独立产物目录，原/新二进制分别保存为 `dmg-md-before` 和
+`dmg-md-after`。实施前的 `frozen-design.json` 固定 scope、完整随机顺序、预热/正式步数、
+重复块及统计规则；`freeze` 从前阶段复制锁定输入，并冻结两二进制、工具、环境、
+K=4 CPU/NUMA 绑定与 GPU UUID。`science` 检查环境/golden/MPI/边界门槛，另跑两后端
+full/serial/wait 的实际输入字节对照；`main` 还要求 nightly long_nve 门槛已经完成。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o7.py freeze --root dmgmd-overlap-o7-20261023
+python3 tests/benchmark/run_overlap_o7.py science --root dmgmd-overlap-o7-20261023
+python3 tests/benchmark/run_overlap_o7.py main --root dmgmd-overlap-o7-20261023
+python3 tests/benchmark/run_overlap_o7.py analyze --root dmgmd-overlap-o7-20261023
+```
+
+实际 collective witness 用独立 PMPI probe，对原/新程序同时计数。该 probe 从不进入正式墙钟：
+
+```bash
+python3 tests/mpi/run_cache_decision.py \
+  --before dmgmd-overlap-o7-20261023/dmg-md-before \
+  --after dmgmd-overlap-o7-20261023/dmg-md-after \
+  --probe build/tests/libdmgmd_cache_decision_probe.so \
+  --devices 0,1,2,3,4,5,6,7 --ranks 2,4,8 --work-root /tmp/o7-cache-new
+```
+
+该测试覆盖严格阈值两侧/等号、非 root 贡献者、PBC、多 run、空 rank、非有限平方及
+multi-box fatal，逐字节比较科学文件；P8 使用满足 M2a eligibility 的加长盒。
+每步通信账本仍由 `tests/mpi/run_mpi_domain.py` 独立按 owned/layout/migration 记录核算。
+实测范围、冻结设计与原始目录见 [O7 报告](../../docs/status/performance/overlap-o7-results-20261023.md)。
+
+## O8 按需 NVE thermo
+
+`run_overlap_o8.py` 使用独立目录，保留 `dmg-md-original`（原 full）、`dmg-md-o7`
+和 `dmg-md-o8`，三版本按同一配对块比较。先复制已验收的两个对照二进制，再在修改
+生产代码前运行 `design` 冻结范围、步数、顺序与统计规则。O8 二进制先通过统一环境、
+golden、实际调用计数 differential、MPI、nightly 子矩阵及实际输入科学门槛。
+`freeze` 另冻结输入、二进制、采集器、MPI/CUDA/UCX 库、环境与 K=4 核绑定身份。
+
+```text
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o8.py design --root dmgmd-overlap-o8-20261023
+python3 tests/benchmark/run_overlap_o8.py freeze --root dmgmd-overlap-o8-20261023
+python3 tests/benchmark/run_overlap_o8.py science --root dmgmd-overlap-o8-20261023
+python3 tests/benchmark/run_overlap_o8.py main --root dmgmd-overlap-o8-20261023
+python3 tests/benchmark/run_overlap_o8.py diagnostics --root dmgmd-overlap-o8-20261023
+python3 tests/benchmark/run_overlap_o8.py analyze --root dmgmd-overlap-o8-20261023
+```
+
+正式段关闭 trace/verify/详细计时，CPU 为 null。独立 trace/proc 诊断通过 monotonic
+marker 提取正式段 CPU，不把整个进程 CPU 误报为正式段。PMPI probe 仅进入
+`tests/mpi/run_thermo_demand.py`，不进入正式性能或 CPU 诊断。
+CPU 诊断使用 `o5_rank_output.py` 保存独立 rank stdout/stderr 与拼接 provenance，
+避免 MPI 合并输出交错破坏 PID/clock marker；有 error 或缺失 CPU status 时拒绝该诊断。
+`main`/`analyze` 校验保存的门槛和科学文件；无效样本保留，不按速度删样本。
+消费者与 event 就绪边界见[thermo 合同](../../docs/standards/thermo-demand.md)。
+冻结设计、追加规则、实际结果及采集器修正见[O8 报告](../../docs/status/performance/overlap-o8-results-20261026.md)。
+
+## O9 执行候选证据门槛
+
+`run_overlap_o9.py` 复核 O6 的因果证据是否足以选定执行候选。默认从已有 O6/O8
+独立目录复制已验收二进制和原输入，保留起始 dirty、patch 与 reference 状态；
+这些本机证据目录须已存在，新采集须使用新 `--root`。`--previous`/`--accepted`
+可指定 O6/O8 证据位置，固定 GPU UUID、K=4 映射与原窗口仍须一致。
+工具不实现或自动采用 NEP kernel 改动，也不生成新的正式性能样本。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o9.py freeze --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py gates --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py probe --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py analyze --root dmgmd-overlap-o9-new
+python3 tests/benchmark/test_overlap_o9.py
+python3 tests/benchmark/run_overlap_o9.py seal --root dmgmd-overlap-o9-new
+```
+
+`freeze` 必须在采集前完成；两份对照都先通过八 rank 环境和 committed golden。
+`probe` 在原 O6 `carbon_200k/P2/full` 的 rank0 第 264 步重试一次 NCU；
+只有实际 ERR_NVGPUCTRPERM、无超时且绑定有效时才完成无候选 NO_ADOPTION 分支。
+指标可用时返回 CANDIDATE_REVIEW_REQUIRED/PARTIAL，须先冻结单因素候选设计再实施；
+其他失败或缺实验保持 PARTIAL。NCU 时长不能作为主性能，旧 O6/O8 样本也不变成 O9 样本。
+
+`seal` 保存最终源码和原始证据哈希；此后 `analyze` 先校验清单，支持无 GPU 离线复算。
+本轮实际窗口、筛选方向、索引安全/成本与反例见
+[O9 记录](../../docs/status/performance/overlap-o9-results-20261026.md)。

@@ -1,6 +1,6 @@
 # M2a 缓存有效性与统一重建
 
-类别：现行标准及充分条件证明。核对日期：2026-10-16。
+类别：现行标准及充分条件证明。核对日期：2026-10-23。
 
 实现入口：`src/domain_runtime.cu` 的 `DomainState`、`inspect_domain_cache` 与
 `run_domain_segment`。Neighbor 接受已决议的 reuse/rebuild action。每步协议/计时见
@@ -59,8 +59,13 @@ rebuild 用参考位置建立左右 send members，eligibility 要求 slab_width
 
 ## 全 rank 决议与提交
 
-VV1/wrap 后检查 owned 位移与 reason，经全局 MAX 和 reason OR 得到一致 action。
-未决议禁止 halo/NEP，Neighbor 不再做第二次位移检查。
+VV1/wrap 后检查 owned 位移与 reason。各 rank 对有限非负的局部最大位移平方做
+`m_rank > 0.25*skin*skin` 的严格比较，将超限位与 routing/continuity-invalid 位合并，
+只经一次 uint32 reason OR 得到一致 action；不再对缓存位移做 double MAX。
+空 owned rank 贡献零，仍参加 OR；等号复用。非有限平方不进入局部最大值，只置
+invalid 位，OR 后优先 fatal，再判断 rebuild。未决议禁止 halo/NEP，Neighbor 不再做
+第二次位移检查。有限值的 `max(m_rank)>h ⇔ OR(m_rank>h)` 证明与错误/阈值/空 rank
+及实际调用次数验收见 [O7](../status/performance/overlap-o7-results-20261023.md)。
 
 - reuse：manager/layout/membership/map/Verlet 固定，只刷新 ghost position。
 - rebuild：下载 dynamics，direct Alltoall count/Alltoallv 路由至最终 geometric owner；

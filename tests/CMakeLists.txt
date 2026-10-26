@@ -50,6 +50,14 @@ add_test(NAME dmgmd.cpu_binding
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_cpu_binding.py)
 add_test(NAME dmgmd.overlap_o5_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o5.py)
+add_test(NAME dmgmd.overlap_o6_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o6.py)
+add_test(NAME dmgmd.overlap_o7_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o7.py)
+add_test(NAME dmgmd.overlap_o8_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o8.py)
+add_test(NAME dmgmd.overlap_o9_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o9.py)
 
 add_test(
   NAME dmgmd.lammps_reference
@@ -70,3 +78,10 @@ target_link_libraries(dmgmd_overlap_schedule_tests PRIVATE dmgmd_runtime)
 target_link_options(dmgmd_overlap_schedule_tests PRIVATE
   -Wl,--wrap=MPI_Isend -Wl,--wrap=MPI_Irecv -Wl,--wrap=MPI_Waitall
   -Wl,--wrap=cudaEventCreate -Wl,--wrap=cudaEventRecord)
+
+# Actual collective witnesses for O7; launched after the GPU environment gate.
+add_library(dmgmd_cache_decision_probe SHARED cache_decision_wrappers.cpp)
+target_link_libraries(dmgmd_cache_decision_probe PRIVATE MPI::MPI_CXX)
+
+add_library(dmgmd_thermo_demand_probe SHARED thermo_demand_wrappers.cpp)
+target_link_libraries(dmgmd_thermo_demand_probe PRIVATE MPI::MPI_CXX)

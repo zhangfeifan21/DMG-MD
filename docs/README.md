@@ -1,9 +1,13 @@
 # DMG-MD 文档
 
-类别：文档索引。更新日期：2026-10-21。
+类别：文档索引。更新日期：2026-10-26。
 
 先看[当前状态](status/current.md)。代码已完成默认关闭的 O4 普通步实际重叠与本轮验收；
 默认仍立即 finish。O5 本机正式实验已完成，采用范围与限制见[O5 记录](status/performance/communication-computation-overlap-o5-results-20261021.md)。
+O6 已完成[稳态成本定位](status/performance/overlap-o6-results-20261021.md)：carbon 主损失位于 radial，硬件原因 INCONCLUSIVE，未采用新的 NEP 执行改动。
+O7 的实现、语义证明与配对验收见[O7 记录](status/performance/overlap-o7-results-20261023.md)。
+O8 已采用[按需 NVE thermo](status/performance/overlap-o8-results-20261026.md)，原 full/O7/O8 三版本实测与 CPU 诊断已完成。
+O9 已完成[执行候选证据复核](status/performance/overlap-o9-results-20261026.md)，真实 NCU 重试仍受权限限制，以 NO_ADOPTION 结束，未改 NEP 执行。
 
 | 目录 | 内容 | 维护边界 |
 | --- | --- | --- |
@@ -20,6 +24,7 @@
 - 产品：[架构决策](standards/architecture-decisions.md)、[输入/输出兼容矩阵](standards/compatibility-matrix.md)。
 - Runtime：[MPI 双路径与通信记账](standards/mpi-runtime.md)、[数据布局](standards/data-layout.md)、[缓存有效性证明](standards/cache-validity.md)。
 - O2–O4：[NEP 分区与实验重叠](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
+- O8：[M2a thermo 消费者、按需执行与诊断就绪](standards/thermo-demand.md)。
 - 验证：[Golden Test 原则](standards/golden-test-standard.md)、[三引擎对照](standards/cross-engine-reference.md)、[CPU 采样](standards/cpu-sampling.md)。
 - 启动：[单节点 CPU/NUMA 绑定与独立核验](standards/cpu-binding.md)。
 - 参考证据：[GPUMD runtime 审计](reference/gpumd-runtime-audit.md)、[NEP kernel 与依赖](reference/kernel-inventory.md)。
@@ -44,6 +49,11 @@
 
 ## 性能与成本记录
 
+- [2026-10-26：O9 执行候选证据复核、NCU 实际重试与 NO_ADOPTION](status/performance/overlap-o9-results-20261026.md)。
+- [2026-10-26：O8 按需 NVE thermo、消费者与三版本实测](status/performance/overlap-o8-results-20261026.md)。
+- [2026-10-23：O7 单次缓存 OR、数值验收与独立配对实测](status/performance/overlap-o7-results-20261023.md)。
+
+- [2026-10-21：O6 稳态 kernel 对照、无诊断复验与硬件指标限制](status/performance/overlap-o6-results-20261021.md)。
 - [2026-10-21：O5 正式性能、成本归因与采用验证（10-16 开始）](status/performance/communication-computation-overlap-o5-results-20261021.md)。
 - [2026-10-21：O5 后续分析——4.60 ms 拆分成本、模式解释与优化切口](status/performance/overlap-o5-cost-analysis-20261021.md)。
 - [2026-10-16：O4 固定资源检查](status/performance/communication-computation-overlap-results-20261016.md)。
@@ -59,7 +69,7 @@ O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 
 | --- | --- | --- |
 | P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | IN PROGRESS；DMG-MD 入口已验收，跨引擎/调度器仍待验收 |
 | P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
-| P0 | [通信与计算性能优化 O6–O11](plans/communication-computation-overlap.md) | PROPOSED；O1–O5 本机阶段完成，后续按独立 goal 诊断、优化 full/拆分、复验采用 |
+| P0 | [通信与计算性能优化 O10–O11](plans/communication-computation-overlap.md) | PROPOSED；O1–O9 本机阶段完成，O9 以 NO_ADOPTION 结束，后续条件性后端评估与采用复验 |
 | 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，O5 窄 C2 已测，完整 C2/C3 待执行 |
 | 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；M2b、release 等未完成 |
 | 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |

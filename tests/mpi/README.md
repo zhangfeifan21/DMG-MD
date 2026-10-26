@@ -75,3 +75,17 @@ rank 配置不一致。所有错误必须整作业非零退出，超时失败。
 `DMGMD_OVERLAP_TRACE=1` 默认关闭，记录 host 单调时钟观察和 CUDA event elapsed，
 没有校准时不合并两个时间源。完整证据及重算方法见
 [O4 报告](../../docs/status/validation/overlap-o4-20261016.md)。
+# O8 thermo 消费与实际调用次数
+
+在统一环境预检通过后运行独立 differential；`--work-root` 必须是新目录。
+probe 只用于诊断，正式墙钟不得 preload。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/mpi/run_thermo_demand.py \
+  --before /path/to/dmg-md-o7 --after ./build/dmg-md \
+  --probe ./build/tests/libdmgmd_thermo_demand_probe.so \
+  --devices 0,1,2,3,4,5,6,7 --work-root /path/to/new-work-directory
+```
+
+消费者、步号、所有权与诊断合同见[thermo 标准](../../docs/standards/thermo-demand.md)。
