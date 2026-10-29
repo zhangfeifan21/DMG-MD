@@ -52,5 +52,57 @@ class EvidenceGate(unittest.TestCase):
                 verify_evidence(root)
 
 
+class ConfirmationGate(unittest.TestCase):
+    def rows(self):
+        return [dict(case=c,ranks=p,backend=b,contrast=k,ratio=dict(n=5,ci_family=[1.01,1.03]))
+                for c,p in [('carbon_200k',2),('water_400k',8)]
+                for b in ['HostStaged','CudaAware'] for k in ['same_backend_net','default_net']]
+
+    def test_new_confirmation_needs_actual_experiments(self):
+        from overlap_o9_confirmation import completion
+        for flag in range(4):
+            args=[True,True,True,self.rows(),True]
+            args[[0,1,2,4][flag]]=False
+            self.assertEqual(completion(*args),'PARTIAL')
+        self.assertEqual(completion(True,True,True,[],True),'PARTIAL')
+
+    def test_new_confirmation_cannot_use_old_permission_result(self):
+        from overlap_o9_confirmation import completion
+        self.assertEqual(completion(True,False,False,[],False),'PARTIAL')
+
+    def test_confirmed_and_negative_are_distinct(self):
+        from overlap_o9_confirmation import completion
+        rows=self.rows()
+        self.assertEqual(completion(True,True,True,rows,True),'CONFIRMED_SCOPED_CANDIDATE')
+        for r in rows: r['ratio']['ci_family']=[.98,1.02]
+        self.assertEqual(completion(True,True,True,rows,True),'NO_ADOPTION')
+        rows[0]['ratio']['n']=0
+        self.assertEqual(completion(True,True,True,rows,True),'PARTIAL')
+
+    def test_duplicate_scopes_cannot_satisfy_confirmation(self):
+        from overlap_o9_confirmation import completion
+        rows=self.rows()
+        rows[-1]=rows[0]
+        self.assertEqual(completion(True,True,True,rows,True),'PARTIAL')
+
+    def test_different_rank_windows_are_not_compared_as_same_science(self):
+        from overlap_o9_confirmation import science_check
+        rows=[dict(case='water_400k',ranks=p,backend='HostStaged',repeat=0,
+                   scientific_outputs={'thermo.out':str(p)}) for p in (4,8)]
+        science_check(rows)
+        rows.append(dict(rows[0],scientific_outputs={'thermo.out':'changed'}))
+        with self.assertRaisesRegex(ValueError,'scientific outputs differ'):
+            science_check(rows)
+
+    def test_jobs_keep_controls_and_independent_blocks(self):
+        from overlap_o9_confirmation import jobs,CORE,EXTRA,DEGRADED
+        steps={f'{c}-p{p}':1000 for c,p in CORE+EXTRA+DEGRADED}
+        rows=jobs('main',steps,5)
+        self.assertEqual(len(rows),300)
+        self.assertEqual(len({r['id'] for r in rows}),len(rows))
+        self.assertEqual({r['repeat'] for r in rows},set(range(5)))
+        self.assertEqual(rows,jobs('main',steps,5))
+
+
 if __name__ == '__main__':
     unittest.main()

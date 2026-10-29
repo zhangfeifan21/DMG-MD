@@ -1288,6 +1288,10 @@ void run_replicated(
 
   const auto partition_mode = gpumd_compat::domain_partition_mode();
   mpi.assert_same_fingerprint(static_cast<int>(partition_mode), "domain partition mode");
+  const auto schedule = gpumd_compat::domain_schedule();
+  mpi.assert_same_fingerprint(static_cast<int>(schedule), "domain force schedule");
+  if (mpi.is_root()) std::cout << "DMGMD_SCHEDULE_CONFIG schedule="
+    << gpumd_compat::schedule_name(schedule) << " stream=default\n";
   const auto overlap_mode = gpumd_compat::domain_overlap_mode();
   mpi.assert_same_fingerprint(static_cast<int>(overlap_mode), "domain overlap mode");
   if (overlap_mode != gpumd_compat::DomainOverlapMode::off && partition_mode == gpumd_compat::DomainPartitionMode::off)

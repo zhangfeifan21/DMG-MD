@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1/M2a + O1–O4/O7/O8；后续补 O6.5/O8.5 并重新执行 O9
+## 当前代码基线：M1/M2a + O1–O4/O7/O8；O6.5/O8.5/O8.6/O9 已完成，后续 O11
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -67,11 +67,30 @@ INCONCLUSIVE，见 `docs/status/performance/overlap-o7-results-20261023.md`。O8
 相对 O7 三组增量确认、一组 INCONCLUSIVE，见 `docs/status/performance/overlap-o8-results-20261026.md`。
 O9 于 2026-10-26 完成证据门槛复核；真实 NCU 稳态重试仍受权限拒绝，
 无可信执行候选，按原完成条件以 NO_ADOPTION 结束，未改 NEP 执行；见
-`docs/status/performance/overlap-o9-results-20261026.md`。2026-10-26 补充计划按
-O6.5 → O8.5 → O9 重新执行 → 条件性 O10 → O11 推进：先做单因素原因验证，
-再实测仅 filter/descriptor 拆分、力计算完整执行的候选，依据新证据重新筛选与确认。
-NCU 权限失败不能单独使新一轮研究完成；首轮结果保留。新增任务与 O10–O11 均为
-PROPOSED，尚未实施，生产默认仍 HostStaged/full、overlap=off。
+`docs/status/performance/overlap-o9-results-20261026.md`。O6.5 于 2026-10-27 完成真实
+图/mask 与同快照 A–D 对照：30 个正式 trial、18 份 trace、50 个独立重放进程及完整
+nightly 42 配置通过。carbon radial / water angular partial 紧凑映射相对 C 的目标耗时
+分别下降约 29.71%/12.32%，支持独立整步试验；D 仍慢于 A，微架构原因仍 INCONCLUSIVE，
+未采用、未测候选整步净收益，见 `docs/status/performance/overlap-o65-results-20261027.md`。
+O8.5 于 2026-10-28 完成只拆 filter/descriptor、力计算完整执行的显式 producer 候选：
+GPU CTest 18、producer MPI 313 次执行、受控调度 27、完整 nightly 42 + restart 12、
+120 个六组合正式 trial、24 份 trace 与 8 个 CPU 诊断通过。基础 launch 从 10 降为 7，
+四组拆分成本下降；相对同后端候选 full，water/HostStaged、carbon/CudaAware、
+water/CudaAware 的探索区间确认收益，carbon/HostStaged 仍慢。相对 HostStaged/full
+只有本轮 water/P8/HostStaged 确认约 1.0193×，须交 O9 用新样本独立确认；见
+`docs/status/performance/overlap-o85-results-20261027.md`。未采用，生产默认仍
+HostStaged/full、overlap=off、schedule=split。
+O8.6 于 2026-10-28 完成同 E/H 紧凑索引 B 和几何内缩 C；两路线分别通过完整 MPI、
+调度 27、nightly 42 + restart 12，240 个正式 trial、48 份 trace、24 个 CPU 诊断及离线复算通过。
+B/A 的四组 serial/wait 增量获探索区间支持，C/B wait 增量均未确认；相对候选 HostStaged/full，
+carbon 双后端及 water/HostStaged 的 B/C 有本轮净收益，water/CudaAware 仍慢。未采用，见
+`docs/status/performance/overlap-o86-results-20261028.md`。
+O9 于 2026-10-29 完成独立确认：300 个正式 trial、12 个 CPU 诊断及新科学/MPI/调度门槛通过，
+相同二进制的完整 nightly/GPU 验收经原始清单校验后复用。B 在 carbon_200k/P2 双后端及
+water_400k/P8/HostStaged 的校正净收益区间通过，water/P8/CudaAware 仍慢于默认路径；
+water/P4 有探索支持，carbon_1m/高重建/空 early 限制外推。见
+`docs/status/performance/overlap-o9-results-20261029.md`。结论为 CONFIRMED_SCOPED_CANDIDATE，
+剩余按条件性 O10 → O11 推进，均为 PROPOSED；默认不变，首轮历史保留。
 跨引擎绑定与 LAMMPS 对照仍由
 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md` 独立管理。
 LAMMPS 输入、静态物理量对照与三引擎 benchmark smoke 已实施；正式效率矩阵仍待

@@ -310,6 +310,7 @@ struct DomainState {
   bool timing_enabled = false;
   bool trace_enabled = false;
   gpumd_compat::DomainPartitionMode partition_mode = gpumd_compat::DomainPartitionMode::off;
+  gpumd_compat::DomainSchedule schedule = gpumd_compat::DomainSchedule::split;
   std::uint64_t halo_ready_step = 0;
   gpumd_compat::DomainOverlapMode overlap_mode = gpumd_compat::DomainOverlapMode::off;
   bool overlap_trace = false;
@@ -1265,6 +1266,10 @@ void launch_domain_force(
   // descriptor phase on such ranks is safe and avoids wasted ghost work.
   nep.ND2 = owned > 0 ? owned + dep : 0;
   gpumd_compat::DomainForceContext context{state.partition_mode, ordinary, step, state.halo_ready_step};
+  context.schedule = state.schedule;
+  context.slab_axis = state.layout.axis;
+  context.slab_lo = state.layout.slab_lo; context.slab_hi = state.layout.slab_hi;
+  context.axis_length = state.layout.axis_length;
   HaloTrace halo_trace;
   std::array<cudaEvent_t, 4> events{};
   const auto epoch = state.epoch;
@@ -2119,7 +2124,15 @@ void run_domain_segment(
     std::cout << "DMGMD_PARTITION_SUMMARY rank=" << state.rank << " sequence=" << sequence
               << " cumulative_split_calls=" << nep.partition_split_calls
               << " cumulative_full_calls=" << nep.partition_full_calls
-              << " cumulative_classifications=" << nep.partition_classifications << '\n';
+              << " cumulative_classifications=" << nep.partition_classifications
+              << " schedule=" << gpumd_compat::schedule_name(state.schedule)
+              << " cumulative_producer_calls=" << nep.partition_producer_calls
+              << " cumulative_compact_calls=" << nep.partition_compact_calls
+              << " cumulative_classify_seconds=" << nep.partition_classify_seconds;
+    static const char* names[] = {"filter", "descriptor", "radial", "partial", "many_body", "zbl"};
+    for (int k = 0; k < 6; ++k)
+      std::cout << " cumulative_" << names[k] << "_launches=" << nep.partition_launches[k];
+    std::cout << '\n';
   }
   std::cout.flush();
 }
@@ -2156,6 +2169,7 @@ void run_local_domain(
   state.timing_enabled = detail::domain_timing_enabled();
   state.trace_enabled = detail::domain_trace_enabled();
   state.partition_mode = gpumd_compat::domain_partition_mode();
+  state.schedule = gpumd_compat::domain_schedule();
   state.overlap_mode = gpumd_compat::domain_overlap_mode();
   state.overlap_trace = std::getenv("DMGMD_OVERLAP_TRACE") && std::string(std::getenv("DMGMD_OVERLAP_TRACE")) == "1";
   if (state.partition_mode != gpumd_compat::DomainPartitionMode::off &&

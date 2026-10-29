@@ -506,6 +506,66 @@ achieved occupancy、访存/缓存或 scheduler 指标时写 INCONCLUSIVE，不�
 `inventory_overlap_o6.py` 保存源码、patch、全部原始尝试及证据 SHA-256；`--verify`
 检查原始文件与分析依赖，供产物目录的 `recompute.sh` 在离线重算前使用。
 
+## O6.5 mask 与紧凑执行因果实验
+
+本阶段使用当前已验收 O7+O8 二进制作为独立基线，范围为
+carbon_200k/P2、water_400k/P8、CudaAware。`run_overlap_o65.py` 冻结资源/输入/
+二进制/顺序，先跑门槛与 pilot，再冻结五个配对块的正式步数；另采三轮 full/serial/wait
+稳态 Nsight。`analyze_overlap_o65.py` 用 cache inspection 和本步 VV2 匹配 O8 稀疏
+thermo 日程，排除 setup/rebuild，按新 trace 冻结快照 step/call/generation 和 NCU 窗口。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o65.py freeze --root dmgmd-overlap-o65-20261026
+python3 tests/benchmark/run_overlap_o65.py gates --root dmgmd-overlap-o65-20261026
+python3 tests/benchmark/run_overlap_o65.py pilot --root dmgmd-overlap-o65-20261026
+python3 tests/benchmark/run_overlap_o65.py profiles --root dmgmd-overlap-o65-20261026
+python3 tests/benchmark/run_overlap_o65.py main --root dmgmd-overlap-o65-20261026
+cmake -S . -B build-o65 -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=89 -DDMGMD_ENABLE_O65_DIAGNOSTICS=ON
+cmake --build build-o65 -j 6
+python3 tests/benchmark/run_overlap_o65_replays.py all --root dmgmd-overlap-o65-20261026
+```
+
+冻结入口要求该独立目录先保存 `dmg-md-baseline`，并且本机保留 O8 的已验收输入产物。
+每个阶段共用目录锁，GPU 作业串行执行。已有原始目录不覆盖；调度锁冲突、失败与不合格
+尝试保留。CI 宽度触发的唯一一次追加先冻结 `extension-plan.json`，再使用 `extend` 采集。
+额度或进程中断导致配对块不完整时，保留该块全部尝试，另行冻结 `main-recovery-plan.json`
+后完整替换该块；不按耗时选择个别样本。采集器元数据修正须用 `collector-amendment.json`
+绑定原冻结 plan、原/新源码哈希，保留原源码；不能借此变更数值源码或二进制。
+本地结果目录和二进制不随仓库分发。
+
+诊断开关仅在独立 `DMGMD_ENABLE_O65_DIAGNOSTICS=ON` 构建内存在，生产默认 OFF。
+指定普通步完成 halo 和完整 producer/force 后，在真实 Verlet/gid/key 上独立生成等价 mask，
+保存所有 rank 的 mask、gid/slot、
+O/D/L、三类 generation、坐标、实际 filtered rows、Fp/sums 与 partial。独立 CPU 图分析
+重新证明 I/E 集合，并按 32-lane warp、64-thread block 统计互补两相的有效 lane 直方图、
+非空/全空/混合覆盖和邻居边数；这不提供 achieved occupancy 或内存事务指标。
+
+`dmgmd-o65-replay NEP SNAPSHOT OUTPUT radial|partial SEED WARMUP ITERATIONS`
+在一张可见 GPU 上重放 A 原完整执行、B 全选 mask/完整 grid、C 真实互补 mask/两次完整
+grid、D 同一互补中心的紧凑升序索引。每次计时前恢复输出，event 只包围目标 kernel；
+D 的 `selection=null`，选择由索引列表表达，C/D 差值属于该执行映射组合的效果。
+保持原槽位、stride、邻居和每中心表达式/累加顺序，并逐 bit 验证目标、有效 partial、
+最终 force/九个 virial、PE 及 Fp/sums 只读。额外 CPU 索引构建/上传、失效检查和逻辑/
+物理内存另记。五个独立进程配对块先聚合 rank，不能把 100 次重放当成独立重复。
+两份独立短 CUPTI trace 核对实际 compact grid；它们与短 event 重放都不进入正式墙钟。
+模板实例从 CUPTI `mangledName` 的 bool 参数辨认，`shortName` 会省略模板参数。
+
+本轮完整产物封存后，一键复算不需要 GPU：
+
+```bash
+python3 tests/benchmark/recompute_overlap_o65.py --root dmgmd-overlap-o65-20261026
+# 使用产物内冻结的分析依赖复算
+bash dmgmd-overlap-o65-20261026/recompute.sh
+```
+
+它先验证全部原始证据文件的 SHA-256，再重算稳态 kernel、正式墙钟、图/mask 分布和
+A–D 配对区间，生成 `candidate-evidence.json`。首次 `--seal` 只在全部采集及三个 reference
+前后状态核对完成后执行；后续拒绝修改原始清单。replay 的缓存、输出恢复与 producer
+上下文不同于真实流水线，C−D 不能精确解释原墙钟或代替 O9 的整步净收益。
+本轮范围、数值门槛、恢复记录与候选证据见 [O6.5 实测](../../docs/status/performance/overlap-o65-results-20261027.md)。
+
 ## O7 缓存判定归约
 
 `run_overlap_o7.py` 使用独立产物目录，原/新二进制分别保存为 `dmg-md-before` 和
@@ -564,30 +624,129 @@ CPU 诊断使用 `o5_rank_output.py` 保存独立 rank stdout/stderr 与拼接 p
 消费者与 event 就绪边界见[thermo 合同](../../docs/standards/thermo-demand.md)。
 冻结设计、追加规则、实际结果及采集器修正见[O8 报告](../../docs/status/performance/overlap-o8-results-20261026.md)。
 
-## O9 执行候选证据门槛
+## O9 独立候选确认
 
-`run_overlap_o9.py` 复核 O6 的因果证据是否足以选定执行候选。默认从已有 O6/O8
-独立目录复制已验收二进制和原输入，保留起始 dirty、patch 与 reference 状态；
-这些本机证据目录须已存在，新采集须使用新 `--root`。`--previous`/`--accepted`
-可指定 O6/O8 证据位置，固定 GPU UUID、K=4 映射与原窗口仍须一致。
-工具不实现或自动采用 NEP kernel 改动，也不生成新的正式性能样本。
+`run_overlap_o9.py` 默认运行 schema 2 的独立确认，实现在
+`overlap_o9_confirmation.py`。冻结时校验 O6.5/O8.5/O8.6 原始封存清单，保存报告、
+patch、二进制、源码、输入、GPU UUID、K=4 绑定和选择规则。预先选定 B（同 E/H
+紧凑 producer）；新数据不用于重新选择候选。核心保留 full、完整 split、A/B/C
+serial/wait 和已验收 O8/full；增加 water/P4、carbon_1m/P2、薄 slab、漂移重建场景。
 
 ```bash
 source ../env/md-mpi.sh
 python3 tests/benchmark/run_overlap_o9.py freeze --root dmgmd-overlap-o9-new
 python3 tests/benchmark/run_overlap_o9.py gates --root dmgmd-overlap-o9-new
-python3 tests/benchmark/run_overlap_o9.py probe --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py pilot --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py main --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py cpu --root dmgmd-overlap-o9-new
 python3 tests/benchmark/run_overlap_o9.py analyze --root dmgmd-overlap-o9-new
-python3 tests/benchmark/test_overlap_o9.py
+# 仅在冻结的宽区间规则触发时执行 extension，再 analyze。
 python3 tests/benchmark/run_overlap_o9.py seal --root dmgmd-overlap-o9-new
+python3 tests/benchmark/run_overlap_o9.py verify --root dmgmd-overlap-o9-new
+python3 tests/benchmark/test_overlap_o9.py
 ```
 
-`freeze` 必须在采集前完成；两份对照都先通过八 rank 环境和 committed golden。
-`probe` 在原 O6 `carbon_200k/P2/full` 的 rank0 第 264 步重试一次 NCU；
-只有实际 ERR_NVGPUCTRPERM、无超时且绑定有效时才完成无候选 NO_ADOPTION 分支。
-指标可用时返回 CANDIDATE_REVIEW_REQUIRED/PARTIAL，须先冻结单因素候选设计再实施；
-其他失败或缺实验保持 PARTIAL。NCU 时长不能作为主性能，旧 O6/O8 样本也不变成 O9 样本。
+每项五个新配对块；pilot 决定共同步数，目标 25 s、下限 10 s。八项核心净收益
+使用配对 bootstrap 99.375% 区间控制多重比较；其他比较保留探索性 95% 区间。
+采用范围要求同后端/full 和 HostStaged/full 的下界均大于 1，交 O11 复验，默认不变。
+缺候选实验、正确性门槛或 CPU 诊断必须 PARTIAL；NCU 拒绝不参与本轮完成判定。
+原始失败尝试不覆盖，不自动删除或重跑；无详细诊断主样本的正式 CPU 始终为 null。
 
-`seal` 保存最终源码和原始证据哈希；此后 `analyze` 先校验清单，支持无 GPU 离线复算。
-本轮实际窗口、筛选方向、索引安全/成本与反例见
-[O9 记录](../../docs/status/performance/overlap-o9-results-20261026.md)。
+封存后可运行 `python3 tests/benchmark/recompute_overlap_o9.py --root <目录>`，
+先核验完整原始清单，再使用保存的源码离线重算；不依赖当前 checkout 的分析实现或 GPU。
+
+`--legacy-probe` 仅回放 2026-10-26 的历史权限探测协议，不能用来完成新一轮 O9。
+历史结果见 [首次 O9 报告](../../docs/status/performance/overlap-o9-results-20261026.md)。
+
+## O8.5 producer 拆分实验
+
+`run_overlap_o85.py` 使用独立目录的 `dmg-md-baseline` 与 `dmg-md-candidate`，以
+O7+O8 为基线，保留原 full/serial/wait 与候选 full/producer-serial/producer-wait。
+候选选择 `DMGMD_DOMAIN_SCHEDULE=producer`，默认仍是原 split；partition=off 仍为 full。
+数值、唯一写入和生命周期合同见[分区标准](../../docs/standards/domain-partition.md#o85-producer-调度)。
+
+先冻结 `implementation-plan.json`，保存起始 dirty 源码、reference 状态、独立二进制与
+输入；`freeze` 固定哈希、K=4 绑定、UUID、随机种子、五个独立块和统计/追加规则。
+原始 O8 输入从已验收目录复制并核对，不能换小体系。完成两个二进制的环境/golden、
+候选 GPU CTest、producer MPI/受控调度与完整 nightly 门槛后执行：
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o85.py freeze --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/run_overlap_o85.py gates --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/run_overlap_o85.py pilot --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/run_overlap_o85.py main --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/analyze_overlap_o85.py walls --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/run_overlap_o85.py extend --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/run_overlap_o85.py profiles --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/run_overlap_o85.py cpu --root dmgmd-overlap-o85-20261027
+python3 tests/benchmark/analyze_overlap_o85.py all --root dmgmd-overlap-o85-20261027
+```
+
+pilot 后按同 scope 最快配置冻结共同正式步数，目标 25 秒且至少 10 秒；初始 120 个
+正式 trial。诊断独立：24 份 128-step Nsight trace、8 个带正式 marker 的 CPU 作业。
+为满足既有 80% CPU 采样覆盖，CPU 诊断另用 carbon 700 / water 1800 步；此修订在采样前
+保存在 `diagnostic-amendment.json`。主样本关闭 profiler/trace/verify，正式段 CPU 为 null。
+
+原始调用计数排除 oracle；trace 通过 cache inspection→本步 VV2 匹配，并分别验证
+full 五次、原 split 十次、producer 七次基础 launch、完整 force grid 和单 stream。
+候选全 fallback、缺配对块、科学输出不同或短于门槛均不能完成实验；中断保留原尝试，
+重新采集前冻结整块替换，不能删除慢样本。区间宽度超过预先规则时追加完整块。
+
+封存最终源码、patch 与全部原始证据后，一键无 GPU 复算：
+
+```bash
+python3 tests/benchmark/recompute_overlap_o85.py --seal --root dmgmd-overlap-o85-20261027
+bash dmgmd-overlap-o85-20261027/recompute.sh
+```
+
+`--seal` 只能执行一次。复算先校验原始 SHA-256，再重建配对墙钟、CUDA activity、CPU 与
+遥测表；`candidate-evidence.json` 给 O9 交接，不能把拆分成本下降直接当作生产采用证据。
+本轮 `recompute.sh` 使用封存的 `analysis-source/`，无需 GPU 或未来工作树源码，并生成
+报告聚合 `report-metrics.json`。已完成的范围、正负结果和证据身份见
+[O8.5 实测](../../docs/status/performance/overlap-o85-results-20261027.md)。
+
+
+## O8.6 producer 紧凑索引与几何内缩
+
+`run_overlap_o86.py` 使用独立目录冻结 O8.5 A 对照和新候选；新二进制保留 A，并增加
+`producer-compact`（同 E/H 的 B）和 `producer-geometry`（参考 q 几何分类的 C）。
+完整 split/full 仍保留，生产默认不变。实现合同见
+[分区标准](../../docs/standards/domain-partition.md#o86-producer-紧凑与几何调度)。
+
+冻结 `implementation-plan.json` 后，把两份独立二进制放在新产物目录的
+`dmg-md-baseline`、`dmg-md-candidate`。下列命令都从仓库根执行，每个 GPU shell 先加载
+`source ../env/md-mpi.sh`。`freeze` 固定输入、源码/二进制、四核绑定、GPU UUID、顺序/种子、
+对照与诊断；`gates` 拒绝缺环境/golden/GPU CTest、两条新路径 MPI/受控调度及完整
+nightly（42 配置和跨 rank restart）的结果，然后执行 12 组真实大输入短程输出对照。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o86.py freeze --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/run_overlap_o86.py gates --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/run_overlap_o86.py pilot --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/run_overlap_o86.py main --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/analyze_overlap_o86.py walls --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/run_overlap_o86.py extend --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/run_overlap_o86.py profiles --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/run_overlap_o86.py cpu --root dmgmd-overlap-o86-20261028
+python3 tests/benchmark/analyze_overlap_o86.py all --root dmgmd-overlap-o86-20261028
+```
+
+主矩阵为 carbon_200k/P2、water_400k/P8 × 双后端 × 12 组 × 五个新配对块，共
+240 个初始 trial。pilot 决定目标 25 秒的正式步数，每个主 trial 至少 10 秒。全部记录保留，
+无效作业不能覆盖，替换须事前冻结整个配对块。区间为中位数之比的 20,000 次配对块
+bootstrap；宽度/估计值超过 10% 时按冻结规则追加五个完整块一次。区间属于探索、逐项区间，
+O9 须用新数据确认，不自动采用。
+
+分析区分 B/A 同集合映射与 C/B 规则改动，以及 serial-full、serial-wait、相对同后端 full
+和默认 HostStaged/full 的净收益。独立 48 份 Nsight trace 验证 specialization、实际紧凑 grid、
+单 stream、完整 consumer、每 rank 的 E/D、H/D、E/O 和 early GPU 时间；分类主机包络、
+GPU 分类/扫描、临时/容量 bytes 和正式段摊销分别保存。24 个独立 CPU 诊断要求正式段
+marker 和至少 80% 覆盖，主墙钟 `formal_cpu=null`。不将 GPU 设备全局 memory.used 当作
+本进程分配，不从原子比例推算隐藏时间。
+
+`test_overlap_o86.py` 覆盖配对矩阵、独立对照身份、消费者顺序、缺步骤、全回退、实际调度
+不匹配和不完整块替换。`recompute_overlap_o86.py --seal` 冻结原始 SHA-256 清单；封存
+目录的 `recompute.sh` 使用自己的 `analysis-source` 离线重算，不启动 GPU/MPI，也不读取
+未来工作树代码。缺数值门槛、正式配对或独立诊断须报告 PARTIAL。

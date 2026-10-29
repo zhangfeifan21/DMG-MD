@@ -73,11 +73,36 @@ inline void verify_partition_graph(const DomainPartition& p, const Neighbor& nei
       throw std::runtime_error("partition invalid count");
     for (int e = 0; e < nn[c]; ++e) rows[c].push_back(nl[static_cast<std::size_t>(e)*k.local+c]);
   }
-  auto expected = partition_graph(rows, k.owned, k.dependency, k.local);
-  if (partition_download(p.safe) != expected.safe ||
-      partition_download(p.interior) != expected.interior ||
-      partition_download(p.early) != expected.early)
-    throw std::runtime_error("partition coverage/intersection/closure mismatch");
+  const auto early = partition_download(p.early);
+  if (k.rule == DomainSchedule::producer_geometry) {
+    const auto q = partition_download(neighbor.domain_reference(k.slab_axis));
+    if (p.safe.size() || p.interior.size() || p.interior_count)
+      throw std::runtime_error("geometry constructed unused force partition");
+    for (int c = 0; c < k.local; ++c) {
+      const bool selected = c < k.owned && geometric_early(q[c], k.slab_lo, k.slab_hi, k.inset);
+      if (early[c] != int(selected)) throw std::runtime_error("geometric reference oracle mismatch");
+      if (selected) for (int j : rows[c]) if (j >= k.owned)
+        throw std::runtime_error("geometric early Verlet reads a ghost");
+    }
+  } else {
+    auto expected = partition_graph(rows, k.owned, k.dependency, k.local);
+    if (partition_download(p.safe) != expected.safe ||
+        partition_download(p.interior) != expected.interior || early != expected.early)
+      throw std::runtime_error("partition coverage/intersection/closure mismatch");
+  }
+  if (compact_schedule(k.rule)) {
+    const auto e = partition_download(p.early_idx), h = partition_download(p.late_idx);
+    int ec = 0, hc = 0;
+    for (int c = 0; c < k.dependency; ++c) {
+      if (early[c]) {
+        if (ec >= p.early_count || e[ec++] != c)
+          throw std::runtime_error("compact early coverage/order mismatch");
+      } else if (hc >= k.dependency-p.early_count || h[hc++] != c)
+        throw std::runtime_error("compact late coverage/order mismatch");
+    }
+    if (ec != p.early_count || hc != k.dependency-p.early_count)
+      throw std::runtime_error("compact count/uniqueness mismatch");
+  }
   // Final-force neighbors must have dependency rows and the reverse edge.
   // This check precedes the unpartitioned oracle's binary search as well.
   for (int c = 0; c < k.owned; ++c) for (int j : rows[c]) {
@@ -109,6 +134,56 @@ struct PartitionSnapshot {
     d.f12x.copy_from_host(px.data()); d.f12y.copy_from_host(py.data()); d.f12z.copy_from_host(pz.data());
   }
 };
+
+// O8.5 early produces rows/PE/Fp/sums only. Compare against a full descriptor
+// snapshot taken BEFORE force/ZBL (ZBL also adds PE). All other outputs must
+// retain their cleared/poisoned values, including E\I and ghost slots.
+inline void verify_partition_producers(const PartitionSnapshot& want, const NEP_Data& d,
+  const GPU_Vector<double>& pe, const GPU_Vector<double>& force, const GPU_Vector<double>& virial,
+  int L, int D, int O, const std::vector<int>& early)
+{
+  PartitionSnapshot got(d, pe, force, virial);
+  for (int c = 0; c < L; ++c) {
+    if (early[c]) {
+      if (c >= O || c >= D) throw std::runtime_error("producer early center is not owned");
+      partition_equal(want.pe[c], got.pe[c], "early descriptor energy");
+      partition_equal(want.nr[c], got.nr[c], "early NN radial");
+      partition_equal(want.na[c], got.na[c], "early NN angular");
+      for (int e = 0; e < want.nr[c]; ++e) {
+        const auto q = static_cast<std::size_t>(e)*L+c;
+        partition_equal(want.lr[q], got.lr[q], "early NL radial/order");
+        if (got.lr[q] < 0 || got.lr[q] >= O)
+          throw std::runtime_error("early descriptor consumed ghost radial coordinate");
+      }
+      for (int e = 0; e < want.na[c]; ++e) {
+        const auto q = static_cast<std::size_t>(e)*L+c;
+        partition_equal(want.la[q], got.la[q], "early NL angular/order");
+        if (got.la[q] < 0 || got.la[q] >= O)
+          throw std::runtime_error("early descriptor consumed ghost angular coordinate");
+      }
+    } else {
+      partition_equal(0.0, got.pe[c], "early wrote unselected energy");
+      if (got.nr[c] != -1 || got.na[c] != -1)
+        throw std::runtime_error("early wrote unselected filtered row");
+    }
+    for (int a = 0; a < 3; ++a)
+      partition_equal(0.0, got.force[a*L+c], "early wrote final force");
+    for (int a = 0; a < 9; ++a)
+      partition_equal(0.0, got.virial[a*L+c], "early wrote final virial");
+  }
+  auto producer_field = [&](const std::vector<float>& expected, const std::vector<float>& actual,
+                            const char* name) {
+    for (std::size_t q = 0; q < actual.size(); ++q) {
+      if (early[q % L]) partition_equal(expected[q], actual[q], name);
+      else if (!std::isnan(actual[q])) throw std::runtime_error("early wrote unselected producer");
+    }
+  };
+  producer_field(want.fp, got.fp, "early Fp");
+  producer_field(want.sums, got.sums, "early angular sums");
+  for (const auto* field : {&got.px, &got.py, &got.pz})
+    for (float value : *field) if (!std::isnan(value))
+      throw std::runtime_error("early wrote angular partial");
+}
 
 inline void verify_partition_products(const PartitionSnapshot& want, const NEP_Data& d,
   const GPU_Vector<double>& pe, const GPU_Vector<double>& force, const GPU_Vector<double>& virial,

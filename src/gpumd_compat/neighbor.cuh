@@ -241,6 +241,12 @@ public:
   // NEP workspace reallocation).
   void invalidate_rebuild_reference();
   std::uint64_t domain_generation() const { return domain_generation_; }
+  // Immutable q of the actual full Verlet generation; never current positions.
+  const GPU_Vector<double>& domain_reference(int axis) const {
+    if (axis < 0 || axis > 2) throw std::invalid_argument("invalid reference axis");
+    return axis == 0 ? x0 : axis == 1 ? y0 : z0;
+  }
+  double domain_build_radius(double rc) const { return rc + skin; }
   int domain_row_capacity() const { return static_cast<int>(row_capacity_); }
 
 private:

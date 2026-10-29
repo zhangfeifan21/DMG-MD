@@ -54,6 +54,19 @@ int main() {
     ++other.dependency; require(!(k == other)); other = k;
     ++other.local; require(!(k == other)); other = k;
     other.box[18] = 1; require(!(k == other));
+    other=k; other.rule=DomainSchedule::producer_compact; require(!(k==other));
+    other=k; other.slab_axis=1; require(!(k==other));
+    other=k; other.slab_lo=1; require(!(k==other));
+    other=k; other.slab_hi=32; require(!(k==other));
+    other=k; other.inset=8; require(!(k==other));
+    const double inset=producer_inset(8,64);
+    require(inset>8 && inset<8.001);
+    require(!geometric_early(inset,0,32,inset));
+    require(geometric_early(std::nextafter(inset,32.0),0,32,inset));
+    require(!geometric_early(32-inset,0,32,inset));
+    require(!geometric_early(-1,0,32,inset));
+    require(!geometric_early(33,0,32,inset));
+    require(!geometric_early(16,0,32,17));
     DomainForceTicket ticket{1, 7};
     rejected = false;
     try { ticket.late(); } catch (const std::logic_error&) { rejected = true; }

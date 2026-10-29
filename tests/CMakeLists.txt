@@ -52,10 +52,16 @@ add_test(NAME dmgmd.overlap_o5_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o5.py)
 add_test(NAME dmgmd.overlap_o6_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o6.py)
+add_test(NAME dmgmd.overlap_o65_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o65.py)
 add_test(NAME dmgmd.overlap_o7_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o7.py)
 add_test(NAME dmgmd.overlap_o8_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o8.py)
+add_test(NAME dmgmd.overlap_o85_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o85.py)
+add_test(NAME dmgmd.overlap_o86_analysis
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o86.py)
 add_test(NAME dmgmd.overlap_o9_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_overlap_o9.py)
 

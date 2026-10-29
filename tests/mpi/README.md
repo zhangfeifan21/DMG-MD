@@ -89,3 +89,12 @@ python3 tests/mpi/run_thermo_demand.py \
 ```
 
 消费者、步号、所有权与诊断合同见[thermo 标准](../../docs/standards/thermo-demand.md)。
+
+
+O8.6 的两条显式调度使用 `--schedule producer-compact`（原 E/H 紧凑）或
+`--schedule producer-geometry`（实际 Verlet 参考 q 几何内缩）。两者继续支持
+`off,serial,verify,verify-wait,verify-poll`；compact 的空 late 正确跳过两次 producer launch。
+几何规则不要求原 I 非空，窄 slab 可完全走 `empty-early` full fallback，不能作 overlap 证据。
+受控 `run_overlap_schedule.py` 对几何路线另用 128 Å/16 原子 fixture，验证 P2/P4 的实际 early；
+原窄 slab 仍由 domain matrix 验证数值与回退。实际 compact grid、列表覆盖和 poison/oracle
+要求见[分区合同](../../docs/standards/domain-partition.md#o86-producer-紧凑与几何调度)。

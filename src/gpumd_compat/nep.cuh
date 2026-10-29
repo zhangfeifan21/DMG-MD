@@ -188,6 +188,12 @@ public:
   // enough; the potential parameters themselves are never re-parsed.
   void allocate_workspace(const int num_atoms);
 
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  // Offline experiment only. Never present in the default production build.
+  void replay_o65(const std::string& snapshot, const std::string& output,
+                  const std::string& target, unsigned seed, int warmup, int iterations);
+#endif
+
   // Read-only views for the M2a eligibility/radius computation
   // (include/dmgmd/domain_layout.hpp).
   const ParaMB& params() const { return paramb; }
@@ -209,6 +215,9 @@ public:
   // Cumulative per-instance counters; no allocations/events on the off path.
   std::uint64_t partition_split_calls = 0, partition_full_calls = 0;
   std::uint64_t partition_classifications = 0;
+  std::uint64_t partition_producer_calls = 0, partition_compact_calls = 0;
+  double partition_classify_seconds = 0;
+  std::array<std::uint64_t, 6> partition_launches{};
 
   const GPU_Vector<int>& get_NN_radial_ptr() override;
 
@@ -223,6 +232,13 @@ private:
   DomainPartition partition_;
   std::uint64_t workspace_generation_ = 0;
   bool domain_force_active_ = false;
+
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  void capture_o65(Box&, int, const GPU_Vector<int>&, const GPU_Vector<double>&,
+                   const GPU_Vector<double>&, const GPU_Vector<double>&,
+                   const GPU_Vector<double>&, const GPU_Vector<unsigned long long>&,
+                   std::uint64_t, const DomainForceContext&, int);
+#endif
 
   void update_potential(float* parameters, ANN& ann);
 

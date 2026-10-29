@@ -1,6 +1,6 @@
 # DMG-MD 文档
 
-类别：文档索引。更新日期：2026-10-26。
+类别：文档索引。更新日期：2026-10-29。
 
 先看[当前状态](status/current.md)。代码已完成默认关闭的 O4 普通步实际重叠与本轮验收；
 默认仍立即 finish。O5 本机正式实验已完成，采用范围与限制见[O5 记录](status/performance/communication-computation-overlap-o5-results-20261021.md)。
@@ -8,8 +8,12 @@ O6 已完成[稳态成本定位](status/performance/overlap-o6-results-20261021.
 O7 的实现、语义证明与配对验收见[O7 记录](status/performance/overlap-o7-results-20261023.md)。
 O8 已采用[按需 NVE thermo](status/performance/overlap-o8-results-20261026.md)，原 full/O7/O8 三版本实测与 CPU 诊断已完成。
 O9 已完成[执行候选证据复核](status/performance/overlap-o9-results-20261026.md)，真实 NCU 重试仍受权限限制，以 NO_ADOPTION 结束，未改 NEP 执行。
-后续先按[O6.5/O8.5 计划](plans/communication-computation-overlap.md)补齐单因素原因验证和
-仅 producer 拆分实验，再依据新证据重新执行 O9；这些任务尚未实施。
+O6.5 已完成[真实 mask 与 A–D 因果对照](status/performance/overlap-o65-results-20261027.md)，两目标的紧凑映射支持进入独立整步实验，未采用。
+O8.5 已完成 [producer 候选、完整科学门槛与 120 个六组合实测](status/performance/overlap-o85-results-20261027.md)；
+拆分成本下降，相对 HostStaged/full 仅本轮 water/P8/HostStaged 显示净收益，尚未采用。
+O8.6 已完成[紧凑索引/几何内缩、完整门槛与 240 个正式 trial](status/performance/overlap-o86-results-20261028.md)：
+B/A 四组确认，C/B wait 增量未确认；water/CudaAware 仍未胜默认路径，未采用。
+[O9 独立确认](status/performance/overlap-o9-results-20261029.md)已完成：300 个正式 trial、12 个 CPU 诊断，预选 B 在三个核心 scope 确认净收益，交 O11；默认不变。条件性 O10 与 O11 为 PROPOSED。
 
 | 目录 | 内容 | 维护边界 |
 | --- | --- | --- |
@@ -25,7 +29,7 @@ O9 已完成[执行候选证据复核](status/performance/overlap-o9-results-202
 
 - 产品：[架构决策](standards/architecture-decisions.md)、[输入/输出兼容矩阵](standards/compatibility-matrix.md)。
 - Runtime：[MPI 双路径与通信记账](standards/mpi-runtime.md)、[数据布局](standards/data-layout.md)、[缓存有效性证明](standards/cache-validity.md)。
-- O2–O4：[NEP 分区与实验重叠](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
+- O2–O4/O8.5/O8.6：[NEP 分区与实验重叠](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
 - O8：[M2a thermo 消费者、按需执行与诊断就绪](standards/thermo-demand.md)。
 - 验证：[Golden Test 原则](standards/golden-test-standard.md)、[三引擎对照](standards/cross-engine-reference.md)、[CPU 采样](standards/cpu-sampling.md)。
 - 启动：[单节点 CPU/NUMA 绑定与独立核验](standards/cpu-binding.md)。
@@ -51,6 +55,11 @@ O9 已完成[执行候选证据复核](status/performance/overlap-o9-results-202
 
 ## 性能与成本记录
 
+- [2026-10-28：O8.6 紧凑索引/几何内缩、240 个正式 trial 与独立 trace/CPU（COMPLETE）](status/performance/overlap-o86-results-20261028.md)。
+- [2026-10-28：O8.5 producer 调度、完整 consumer 与独立六组合实测（COMPLETE）](status/performance/overlap-o85-results-20261027.md)。
+- [2026-10-27：O6.5 真实图/mask、同快照 A–D 对照与候选交接](status/performance/overlap-o65-results-20261027.md)。
+
+- [2026-10-29：O9 执行候选独立确认、300 个 trial 与限定范围收益](status/performance/overlap-o9-results-20261029.md)。
 - [2026-10-26：O9 执行候选证据复核、NCU 实际重试与 NO_ADOPTION](status/performance/overlap-o9-results-20261026.md)。
 - [2026-10-26：O8 按需 NVE thermo、消费者与三版本实测](status/performance/overlap-o8-results-20261026.md)。
 - [2026-10-23：O7 单次缓存 OR、数值验收与独立配对实测](status/performance/overlap-o7-results-20261023.md)。
@@ -71,7 +80,7 @@ O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 
 | --- | --- | --- |
 | P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | IN PROGRESS；DMG-MD 入口已验收，跨引擎/调度器仍待验收 |
 | P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
-| P0 | [通信与计算性能优化 O6.5/O8.5、O9–O11](plans/communication-computation-overlap.md) | PROPOSED；先补原因验证与 producer 拆分实验，再重新执行 O9；首轮 O9 的 NO_ADOPTION 保留 |
+| P0 | [通信与计算性能优化 O10–O11](plans/communication-computation-overlap.md) | PROPOSED；O9 独立确认已完成，B 的限定收益交 O11；默认不变，首轮历史保留 |
 | 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，O5 窄 C2 已测，完整 C2/C3 待执行 |
 | 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；M2b、release 等未完成 |
 | 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |

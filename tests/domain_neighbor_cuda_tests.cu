@@ -200,9 +200,62 @@ void check_partition_graphs()
   require(p.interior_count == 0 && p.early_count == 0, "empty rank no padding reads");
 }
 
-void check_partition_force_preconditions()
+// Cover zero/one/tail/multiple-block list lengths, key identity, closure
+// rejection before publishing, and reuse of immutable q after current motion.
+void check_compact_lists()
+{
+  using namespace gpumd_compat;
+  constexpr int L = 257;
+  GPU_Vector<int> nn(L,0), nl(L,-1);
+  GPU_Vector<unsigned long long> gid(L);
+  GPU_Vector<double> q(L);
+  std::vector<unsigned long long> ids(L);
+  std::vector<double> coords(L, 1.0);
+  for (int c=0;c<L;++c) ids[c]=L-c;
+  gid.copy_from_host(ids.data());
+  DomainPartition p;
+  DomainPartitionKey k; k.owned=L-2; k.dependency=L-1; k.local=L;
+  k.rule=DomainSchedule::producer_geometry; k.slab_axis=0;
+  k.slab_lo=0; k.slab_hi=32; k.inset=8;
+  for (int selected : {0,1,63,64,65,129,255}) {
+    std::fill(coords.begin(),coords.end(),1.0);
+    for (int c=0;c<selected;++c) coords[c]=16;
+    q.copy_from_host(coords.data()); ++k.neighbor;
+    require(p.classify(k,1,nn.data(),nl.data(),gid.data(),q.data()),"new reference generation");
+    require(p.early_count==selected && p.interior.size()==0 && p.safe.size()==0,"direct geometry counts");
+    auto e=partition_download(p.early_idx), h=partition_download(p.late_idx);
+    for (int c=0;c<selected;++c) require(e[c]==c,"stable early slot order");
+    for (int c=selected;c<k.dependency;++c) require(h[c-selected]==c,"stable late complement");
+    require(!p.classify(k,1,nn.data(),nl.data(),gid.data(),q.data()),"ordinary list cache reuse");
+  }
+  // V contains an owned-to-ghost edge although its center is geometrically
+  // selected: fail closed rather than silently publishing an unsafe list.
+  std::vector<int> counts(L,0), rows(L,-1); counts[0]=1; rows[0]=L-1;
+  nn.copy_from_host(counts.data()); nl.copy_from_host(rows.data()); ++k.neighbor;
+  bool rejected=false;
+  try { p.classify(k,1,nn.data(),nl.data(),gid.data(),q.data()); }
+  catch (const std::runtime_error&) { rejected=true; }
+  require(rejected && !p.valid,"actual V closure guard");
+  nn.fill(0); ++k.neighbor;
+  require(p.classify(k,1,nn.data(),nl.data(),gid.data(),q.data()),"closure recovery");
+  auto changed=k; ++changed.layout;
+  require(p.classify(changed,1,nn.data(),nl.data(),gid.data(),q.data()),"same shape new gid/mapping");
+  ++changed.storage;
+  require(p.classify(changed,1,nn.data(),nl.data(),gid.data(),q.data()),"workspace list invalidation");
+  changed.inset=17;
+  require(p.classify(changed,1,nn.data(),nl.data(),gid.data(),q.data()) && !p.early_count,"inset in key, empty early");
+  changed.rule=DomainSchedule::producer_compact;
+  require(p.classify(changed,1,nn.data(),nl.data(),gid.data()) && p.early_count==k.owned,"rule in key");
+}
+
+void check_partition_force_preconditions(gpumd_compat::DomainSchedule schedule)
 {
   constexpr int L = 4;
+  auto context = [schedule](gpumd_compat::DomainPartitionMode mode, std::uint64_t step, std::uint64_t ready) {
+    gpumd_compat::DomainForceContext result{mode, true, step, ready};
+    result.schedule = schedule; result.slab_axis = 0;
+    result.slab_lo = 0; result.slab_hi = 32; result.axis_length = 64; return result;
+  };
   gpumd_compat::NEP nep(DMGMD_SOURCE_DIR "/tests/baseline/inputs/potentials/nep_C.txt", L);
   nep.N1 = nep.ND1 = 0; nep.N2 = 3; nep.ND2 = 4;
   nep.neighbor_record_sink = [](int, int, int) {};
@@ -219,15 +272,17 @@ void check_partition_force_preconditions()
   try {
     nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
       gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
-      {gpumd_compat::DomainPartitionMode::serial, true, 1, 0});
+      context(gpumd_compat::DomainPartitionMode::serial, 1, 0));
   } catch (const std::logic_error&) { rejected = true; }
   require(rejected, "layout epoch alone cannot prove this step's halo readiness");
   pe.fill(0); force.fill(0); virial.fill(0);
   nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
     gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
-    {gpumd_compat::DomainPartitionMode::verify, true, 1, 1});
+    context(gpumd_compat::DomainPartitionMode::verify, 1, 1));
   require(nep.partition_split_calls == 1, "force precondition test must actually split");
   gpumd_compat::DomainForceContext overlap{gpumd_compat::DomainPartitionMode::serial, true, 2, 0};
+  overlap.schedule = schedule; overlap.slab_axis = 0;
+  overlap.slab_lo = 0; overlap.slab_hi = 32; overlap.axis_length = 64;
   overlap.overlap = gpumd_compat::DomainOverlapMode::wait;
   overlap.mapping_epoch = 7;
   int clears = 0, finishes = 0;
@@ -260,7 +315,7 @@ void check_partition_force_preconditions()
   try {
     nep.compute_domain(box, L, type, pos, pe, force, virial, gid,
       gpumd_compat::DomainNeighborAction::confirmed_reuse, 7,
-      {gpumd_compat::DomainPartitionMode::serial, true, 2, 2});
+      context(gpumd_compat::DomainPartitionMode::serial, 2, 2));
   } catch (const std::logic_error&) { rejected = true; }
   require(rejected, "box change cannot reuse a mask or unrebuilt Verlet cache");
   const int angular_counts[]{1,0,0,0};
@@ -288,7 +343,11 @@ int main()
   }
   try {
     check_partition_graphs();
-    check_partition_force_preconditions();
+    check_compact_lists();
+    check_partition_force_preconditions(gpumd_compat::DomainSchedule::split);
+    check_partition_force_preconditions(gpumd_compat::DomainSchedule::producer);
+    check_partition_force_preconditions(gpumd_compat::DomainSchedule::producer_compact);
+    check_partition_force_preconditions(gpumd_compat::DomainSchedule::producer_geometry);
     check_gpu_vector_capacity_reuse();
     check_nonzero_center_begin();
     std::cout << "domain_neighbor_cuda_tests: all checks passed\n";

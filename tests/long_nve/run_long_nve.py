@@ -69,6 +69,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--devices", required=False, help="comma-separated CUDA IDs/UUIDs")
     parser.add_argument("--partition-mode", choices=("off", "serial", "verify"), default="off",
                         help="explicit O2 mode for candidates, recorded in stage checkpoints")
+    parser.add_argument("--schedule", choices=("split", "producer", "producer-compact", "producer-geometry"), default="split")
+    parser.add_argument("--overlap-mode", choices=("off", "wait", "poll"), default="off")
     parser.add_argument("--profile", choices=("smoke", "nightly", "release"), default="smoke")
     parser.add_argument("--cases", type=comma_list)
     parser.add_argument("--seeds", type=integer_list)
@@ -305,9 +307,12 @@ def candidate_environment(
     domain_timing: bool = False,
     performance: bool = False,
     partition_mode: str = "off",
+    schedule: str = "split",
+    overlap_mode: str = "off",
 ) -> Dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("DMGMD_")}
-    env["DMGMD_DOMAIN_OVERLAP"] = "off"
+    env["DMGMD_DOMAIN_OVERLAP"] = overlap_mode
+    env["DMGMD_DOMAIN_SCHEDULE"] = schedule
     env["DMGMD_OVERLAP_TRACE"] = "0"
     env["DMGMD_DOMAIN_PARTITION"] = partition_mode
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -436,6 +441,12 @@ def run_candidate_stage(
                if line.startswith("DMGMD_OVERLAP_CONFIG ")]
     if len(configs) != 1 or configs[0].get("mode") != stage_env.get("DMGMD_DOMAIN_OVERLAP", "off"):
         raise baseline.BaselineError(f"{result}: actual overlap configuration mismatch")
+    schedule_configs = [mpi_differential.key_values(line) for line in (result / "execution.stdout").read_text().splitlines()
+                        if line.startswith("DMGMD_SCHEDULE_CONFIG ")]
+    expected_schedule = stage_env.get("DMGMD_DOMAIN_SCHEDULE", "split")
+    if (schedule_configs or expected_schedule != "split") and (
+            len(schedule_configs) != 1 or schedule_configs[0].get("schedule") != expected_schedule):
+        raise baseline.BaselineError(f"{result}: actual force schedule mismatch")
     return result
 
 
@@ -537,6 +548,9 @@ def restart_transition(
     retries: int,
     domain_timing: bool,
     performance: bool,
+    partition_mode: str = "off",
+    schedule: str = "split",
+    overlap_mode: str = "off",
 ) -> Dict[str, Any]:
     half_steps = int(profile["steps"]) // 2
     thermo_interval = int(profile["thermo_interval"])
@@ -570,7 +584,7 @@ def restart_transition(
     source_env = candidate_environment(
         devices, source_ranks, backend, int(profile["communication_log_interval"]),
         domain_timing,
-        performance,
+        performance, partition_mode, schedule, overlap_mode,
     )
     source_mode = expected_domain_mode(case, source_ranks)
     destination_mode = expected_domain_mode(case, destination_ranks)
@@ -588,7 +602,7 @@ def restart_transition(
     destination_env = candidate_environment(
         devices, destination_ranks, backend, int(profile["communication_log_interval"]),
         domain_timing,
-        performance,
+        performance, partition_mode, schedule, overlap_mode,
     )
     actual_static = run_candidate_stage(
         candidate, mpiexec, destination_ranks, backend, destination_mode, actual_restart_model,
@@ -693,6 +707,9 @@ def main() -> int:
         "devices": devices,
         "stage_retries": args.retries,
         "domain_timing": args.domain_timing,
+        "partition_mode": args.partition_mode,
+        "schedule": args.schedule,
+        "overlap_mode": args.overlap_mode,
         "performance": args.performance,
     }
     work_root, resumed = initialize_work_root(args, run_contract)
@@ -792,6 +809,9 @@ def main() -> int:
         "domain_timing": args.domain_timing,
         "performance": args.performance,
         "results": {},
+        "partition_mode": args.partition_mode,
+        "schedule": args.schedule,
+        "overlap_mode": args.overlap_mode,
     }
     reference_env = reference_environment(devices[0])
     collector = baseline.DiffCollector(baseline.load_manifest()["tolerances"], enforce=True)
@@ -914,7 +934,7 @@ def main() -> int:
                         devices, rank_count, backend,
                         int(profile["communication_log_interval"]),
                         args.domain_timing,
-                        args.performance, args.partition_mode,
+                        args.performance, args.partition_mode, args.schedule, args.overlap_mode,
                     )
                     actual_static = run_candidate_stage(
                         candidate, mpiexec, rank_count, backend, expected_mode, model,
@@ -1143,6 +1163,7 @@ def main() -> int:
                             resume_stages, args.adopt_existing, args.retries,
                             args.domain_timing,
                             args.performance,
+                            args.partition_mode, args.schedule, args.overlap_mode,
                         )
                         result["backend"] = backend
                         result["seed"] = restart_seed

@@ -255,3 +255,11 @@ restart 不保存 global time 且使用文本量化，本测试不要求它与�
 修改 compat 后仍按原 manifest 执行 smoke/nightly/release 对应验收，不能更改容差；
 smoke 通过只代表 smoke。分区专用 P2/4 逐原子/中间量/poison 矩阵入口见
 [串行分区标准](../../docs/standards/domain-partition.md)。
+
+
+O8.6 在完整 nightly 的主矩阵、回放和跨 rank restart 中分别显式使用
+`--schedule producer-compact`、`--schedule producer-geometry`，配合
+`--partition-mode serial --overlap-mode wait`。每条路线使用独立 work/report 目录，不能依赖父
+shell 的环境开关。几何路线使用固定 Verlet 参考坐标，薄 slab 的 full fallback 是合法结果；
+非空候选与空列表/失效/poison 的专门检查由 MPI/GPU 门槛负责，见
+[分区合同](../../docs/standards/domain-partition.md#o86-producer-紧凑与几何调度)。

@@ -36,6 +36,7 @@ Verified per run:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import shutil
@@ -411,12 +412,14 @@ def execute(
     domain_diagnostics: bool = True,
     domain_timing: bool = False,
     partition_mode: str = "off",
+    schedule: str = "split",
 ) -> Dict[str, Any]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("DMGMD_")}
     requested_mode = partition_mode
     overlap = "off"
     if partition_mode in ("overlap-wait", "overlap-poll", "verify-wait", "verify-poll"):
         partition_mode, overlap = ("verify" if partition_mode.startswith("verify") else "serial"), partition_mode.split("-")[1]
+    env["DMGMD_DOMAIN_SCHEDULE"] = schedule
     env["DMGMD_DOMAIN_PARTITION"] = partition_mode
     env["DMGMD_DOMAIN_OVERLAP"] = overlap
     env["DMGMD_OVERLAP_TRACE"] = "0"
@@ -449,6 +452,11 @@ def execute(
         raise baseline.BaselineError(f"{requested_mode}: actual overlap configuration mismatch")
     (stage_dir / "execution.stdout").write_text(completed.stdout, encoding="utf-8")
     (stage_dir / "execution.stderr").write_text(completed.stderr, encoding="utf-8")
+    schedule_configs = [key_values(line) for line in completed.stdout.splitlines()
+                        if line.startswith("DMGMD_SCHEDULE_CONFIG ")]
+    if completed.returncode == 0 and (schedule_configs or schedule != "split") and (
+            len(schedule_configs) != 1 or schedule_configs[0].get("schedule") != schedule):
+        raise baseline.BaselineError(f"{requested_mode}: actual force schedule mismatch")
     return {
         "returncode": completed.returncode,
         "stdout": completed.stdout,
@@ -1116,11 +1124,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-root", type=Path, help="retain raw inputs, launch environment and outputs here (must be new)")
     parser.add_argument("--partition-modes", type=comma_list, default=["off"],
                         help="explicit off,serial,verify,overlap-wait,overlap-poll,verify-wait,verify-poll matrix; verify uses same-snapshot full oracle and ghost poison")
+    parser.add_argument("--schedule", choices=("split", "producer", "producer-compact", "producer-geometry"), default="split")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    execute_stage = functools.partial(execute, schedule=args.schedule)
     if set(args.partition_modes) - {"off", "serial", "verify", "overlap-wait", "overlap-poll", "verify-wait", "verify-poll"}:
         raise baseline.BaselineError("partition modes must be off,serial,verify")
     executable = args.candidate.resolve()
@@ -1317,7 +1327,7 @@ def main() -> int:
                 *variant_cases):
             reference_root = work_root / case.name / "reference-1r"
             stage_case(case, reference_root, potential)
-            execution = execute(
+            execution = execute_stage(
                 executable, mpiexec, reference_root, 1, "HostStaged", devices, args.timeout,
                 case.communication_interval,
             )
@@ -1336,7 +1346,7 @@ def main() -> int:
             if mode == "off": continue
             stage_dir = work_root / "partition-p1-fallback" / mode
             stage_case(aux, stage_dir, potential)
-            execution = execute(executable, mpiexec, stage_dir, 1, "HostStaged", devices,
+            execution = execute_stage(executable, mpiexec, stage_dir, 1, "HostStaged", devices,
                                 args.timeout, partition_mode=mode)
             if execution["returncode"] or "DMGMD_PARTITION mode=full reason=m1-fallback" not in execution["stdout"]:
                 raise baseline.BaselineError("P1 partition fallback not observed")
@@ -1353,7 +1363,7 @@ def main() -> int:
                 for mode in args.partition_modes:
                     directory = work_root / small.name / f"{backend}-{ranks}-{mode}"
                     stage_case(small, directory, potential)
-                    execution = execute(executable, mpiexec, directory, ranks, backend, devices,
+                    execution = execute_stage(executable, mpiexec, directory, ranks, backend, devices,
                                         args.timeout, partition_mode=mode)
                     if execution["returncode"] or "mode=m1-fallback" not in execution["stdout"]:
                         raise baseline.BaselineError("small-box partition fallback missing")
@@ -1372,7 +1382,7 @@ def main() -> int:
         quiet_ranks = min(args.ranks)
         quiet_dir = work_root / "default-quiet" / f"ranks-{quiet_ranks}"
         stage_case(chain, quiet_dir, potential)
-        quiet = execute(
+        quiet = execute_stage(
             executable, mpiexec, quiet_dir, quiet_ranks, "HostStaged", devices,
             args.timeout, communication_interval=None, domain_diagnostics=False,
         )
@@ -1412,7 +1422,7 @@ def main() -> int:
         )
         resume_reference = work_root / "resume" / "reference-1r"
         stage_case(resume, resume_reference, potential)
-        execution = execute(
+        execution = execute_stage(
             executable, mpiexec, resume_reference, 1, "HostStaged", devices, args.timeout,
             resume.communication_interval,
         )
@@ -1434,7 +1444,7 @@ def main() -> int:
                     for mode in args.partition_modes:
                         stage_dir = work_root / case.name / f"{backend}-{ranks}-{mode}"
                         stage_case(case, stage_dir, potential)
-                        execution = execute(
+                        execution = execute_stage(
                             executable, mpiexec, stage_dir, ranks, backend, devices, args.timeout,
                             case.communication_interval, partition_mode=mode,
                         )
@@ -1476,7 +1486,23 @@ def main() -> int:
                             if not records:
                                 raise baseline.BaselineError("requested partition mode not observed")
                             split = [r for r in records if r["mode"] == "split"]
-                            if case in (aux, nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, skin, rebuild_only, migrate, nvt) and not split:
+                            if args.schedule.startswith("producer"):
+                                for row in split:
+                                    compact = args.schedule in ("producer-compact", "producer-geometry")
+                                    producers = 1 + int(int(row["early"]) < int(row["dependency"])) if compact else 2
+                                    if row.get("schedule") != args.schedule or [int(row.get(k, -1)) for k in (
+                                        "filter_launches", "descriptor_launches", "radial_launches",
+                                        "partial_launches", "many_body_launches")] != [producers, producers, 1, 1, 1]:
+                                        raise baseline.BaselineError("producer launch execution not observed")
+                                    if compact and (int(row["early_grid"]) != (int(row["early"])+63)//64 or
+                                                    int(row["late_grid"]) != (int(row["dependency"])-int(row["early"])+63)//64):
+                                        raise baseline.BaselineError("compact grid counts differ")
+                            # Geometry may legitimately select no centers on the
+                            # sparse boundary/skin fixture; poison+closure checks
+                            # still apply on every eligible nonempty selection.
+                            required_split = (aux, nep5, water, zbl, typewise, flexible_zbl, typewise_zbl, rebuild_only, migrate, nvt)
+                            expect_split = (case is aux and ranks == 2) if args.schedule == "producer-geometry" else case in (*required_split, skin)
+                            if expect_split and not split:
                                 raise baseline.BaselineError(f"{case.name}: no real split ordinary step")
                             if mode.startswith("verify") and any(r.get("oracle") != "bitwise" or r.get("poison") != "passed" for r in split):
                                 raise baseline.BaselineError("split oracle/poison not exercised")
@@ -1489,7 +1515,7 @@ def main() -> int:
                                     raise baseline.BaselineError("no actual early during halo")
                                 if schedule == "poll" and not any(int(r["cumulative_polls"]) for r in summaries):
                                     raise baseline.BaselineError("progress not exercised")
-                            if case is aux and not any(int(r["owned"]) > int(r["interior"]) and int(r["early"]) > int(r["interior"]) for r in split):
+                            if args.schedule != "producer-geometry" and case is aux and not any(int(r["owned"]) > int(r["interior"]) and int(r["early"]) > int(r["interior"]) for r in split):
                                 raise baseline.BaselineError("missing boundary auxiliary E\\I witness")
                             if case is skin:
                                 rank = 0 if ranks == 2 else 1
@@ -1498,13 +1524,14 @@ def main() -> int:
                             if case is rebuild_only:
                                 if not index.rebuild_steps() or index.migration_steps():
                                     raise baseline.BaselineError("nonmigration rebuild witness missing")
-                                generations = {r.get("neighbor_generation") for r in split}
-                                if len(generations) < 2 or not all(r.get("classified") == "1" for r in split if r["step"] in ("1","4")):
+                                classified_rows = [r for r in records if r["mode"] == "split" or r.get("reason") == "empty-early"]
+                                generations = {r.get("neighbor_generation") for r in classified_rows}
+                                if len(generations) < 2 or not all(r.get("classified") == "1" for r in classified_rows if r["step"] in ("1","4")):
                                     raise baseline.BaselineError("post-rebuild partition invalidation not observed")
                             if case is migrate:
                                 if not index.migration_steps():
                                     raise baseline.BaselineError("migration invalidation witness missing")
-                                if not any(r.get("reason") == "rebuild" for r in records) or not any(r.get("step") == "4" and r.get("classified") == "1" for r in split):
+                                if not any(r.get("reason") == "rebuild" for r in records) or not any(r.get("step") == "4" and r.get("classified") == "1" for r in records):
                                     raise baseline.BaselineError("post-migration mask was not regenerated")
                         mode_dirs[mode] = stage_dir
                     if "off" in mode_dirs:
@@ -1528,7 +1555,7 @@ def main() -> int:
         timing_on_dir = work_root / continuous.name / "on"
         for stage_dir, enabled in ((timing_off_dir, False), (timing_on_dir, True)):
             stage_case(continuous, stage_dir, potential)
-            execution = execute(
+            execution = execute_stage(
                 executable, mpiexec, stage_dir, timing_ranks, "HostStaged", devices,
                 args.timeout, continuous.communication_interval, domain_timing=enabled,
             )
@@ -1555,7 +1582,7 @@ def main() -> int:
         # mutually exclusive and both non-empty in the acceptance suite.
         rebuild_timing_dir = work_root / "crossings-timing"
         stage_case(crossings, rebuild_timing_dir, potential)
-        rebuild_timing = execute(
+        rebuild_timing = execute_stage(
             executable, mpiexec, rebuild_timing_dir, timing_ranks, "HostStaged", devices,
             args.timeout, crossings.communication_interval, domain_timing=True,
         )
@@ -1574,7 +1601,7 @@ def main() -> int:
         )
         unroutable_dir = work_root / unroutable.name
         stage_case(unroutable, unroutable_dir, potential)
-        failed = execute(
+        failed = execute_stage(
             executable, mpiexec, unroutable_dir, timing_ranks, "HostStaged", devices,
             args.timeout, communication_interval=None, domain_diagnostics=False,
         )

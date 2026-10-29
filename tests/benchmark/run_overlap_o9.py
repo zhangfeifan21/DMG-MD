@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Recheck the O9 evidence gate without changing or adopting a NEP kernel.
+"""Run O9 independent confirmation (default); --legacy-probe replays historical O9.
+
+Historical probe only:
 
 Reuse the accepted O6 binary/window for a counter-availability probe. A missing
 or failed experiment is PARTIAL; only an actual counter-permission rejection
@@ -281,6 +283,10 @@ def analyze(root):
 
 
 def main():
+    if "--legacy-probe" not in sys.argv:
+        from overlap_o9_confirmation import main as confirm
+        return confirm()
+    sys.argv.remove("--legacy-probe")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('phase', choices=('freeze', 'gates', 'probe', 'analyze', 'seal'))
     parser.add_argument('--root', type=Path, required=True)

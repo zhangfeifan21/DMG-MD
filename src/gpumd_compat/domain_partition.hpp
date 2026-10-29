@@ -1,6 +1,9 @@
 // DMG-MD O2: selection metadata only; no particle layout or NEP arithmetic.
 #pragma once
 #include <array>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <cstdlib>
 #include <cstdint>
 #include <stdexcept>
@@ -11,6 +14,45 @@
 namespace gpumd_compat {
 enum class DomainPartitionMode { off, serial, verify };
 enum class DomainOverlapMode { off, wait, poll };
+enum class DomainSchedule { split, producer, producer_compact, producer_geometry };
+inline bool producer_schedule(DomainSchedule mode) { return mode != DomainSchedule::split; }
+inline bool compact_schedule(DomainSchedule mode) {
+  return mode == DomainSchedule::producer_compact || mode == DomainSchedule::producer_geometry;
+}
+// Complete Verlet radius plus a conservative bound for double subtraction,
+// float conversion/MIC, squared-distance rounding and float box conversion.
+// Actual V(E) closure is checked on the GPU before any list is published.
+inline double producer_inset(double build_radius, double axis_length) {
+  if (!(build_radius > 0) || !(axis_length > 0) ||
+      !std::isfinite(build_radius) || !std::isfinite(axis_length))
+    throw std::invalid_argument("invalid geometric producer radius/box");
+  const double e = 32.0 * std::numeric_limits<float>::epsilon();
+  return std::nextafter(build_radius * (1.0 + e) + e * axis_length,
+                        std::numeric_limits<double>::infinity());
+}
+inline bool geometric_early(double q, double lo, double hi, double inset) {
+  return q > lo && q < hi && std::min(q-lo, hi-q) > inset;
+}
+inline DomainSchedule domain_schedule()
+{
+  const char* value = std::getenv("DMGMD_DOMAIN_SCHEDULE");
+  const std::string mode = value ? value : "split";
+  if (mode == "split") return DomainSchedule::split;
+  if (mode == "producer") return DomainSchedule::producer;
+  if (mode == "producer-compact") return DomainSchedule::producer_compact;
+  if (mode == "producer-geometry") return DomainSchedule::producer_geometry;
+  throw std::invalid_argument("DMGMD_DOMAIN_SCHEDULE must be split or producer or producer-compact or producer-geometry");
+}
+inline const char* schedule_name(DomainSchedule mode)
+{
+  switch (mode) {
+    case DomainSchedule::split: return "split";
+    case DomainSchedule::producer: return "producer";
+    case DomainSchedule::producer_compact: return "producer-compact";
+    case DomainSchedule::producer_geometry: return "producer-geometry";
+  }
+  throw std::logic_error("invalid domain schedule");
+}
 inline DomainOverlapMode domain_overlap_mode()
 {
   const char* value = std::getenv("DMGMD_DOMAIN_OVERLAP");
@@ -44,16 +86,24 @@ struct DomainForceContext {
   std::function<bool(std::uint64_t)> finish_halo;
   std::function<void()> clear_outputs;
   std::function<void(const char*, int, const DomainPartitionKey&, std::uint64_t)> observe;
+  DomainSchedule schedule = DomainSchedule::split;
+  int slab_axis = -1;
+  double slab_lo = 0, slab_hi = 0, axis_length = 0;
 };
 
 struct DomainPartitionKey {
   std::uint64_t layout = 0, neighbor = 0, storage = 0;
   int owned = 0, dependency = 0, local = 0;
+  DomainSchedule rule = DomainSchedule::split;
+  int slab_axis = -1;
+  double slab_lo = 0, slab_hi = 0, inset = 0;
   // Both box representations matter: the filter uses float MIC.
   std::array<double, 39> box{};
   bool operator==(const DomainPartitionKey& b) const {
     return layout == b.layout && neighbor == b.neighbor && storage == b.storage &&
-      owned == b.owned && dependency == b.dependency && local == b.local && box == b.box;
+      owned == b.owned && dependency == b.dependency && local == b.local && box == b.box &&
+      rule == b.rule && slab_axis == b.slab_axis && slab_lo == b.slab_lo &&
+      slab_hi == b.slab_hi && inset == b.inset;
   }
 };
 

@@ -21,19 +21,27 @@ def main():
     p.add_argument('--test-executable', type=Path, default=domain.PROJECT_ROOT / 'build/tests/dmgmd_overlap_schedule_tests')
     p.add_argument('--devices', default='0,1,2,3')
     p.add_argument('--work-root', type=Path, required=True)
+    p.add_argument('--schedule', choices=('split', 'producer', 'producer-compact', 'producer-geometry'), default='split')
     args = p.parse_args()
     devices = args.devices.split(',')
     launcher = check_environment.validate_environment(args.candidate.resolve(), 'mpiexec', devices, 4, 60)
     root = args.work_root.resolve(); root.mkdir(parents=True, exist_ok=False)
     atoms = [f'C {x} {y} 12 0 0 0' for y, xs in ((12, (17,23,29,35)), (2, (49,55,61,3))) for x in xs]
     model = '8\n' + domain.CHAIN_MODEL.splitlines()[1] + '\n' + '\n'.join(atoms) + '\n'
-    case = domain.DomainCase('aux', model, domain.VARIANT_RUN, ['static.xyz'], ['thermo.out','static.xyz','neighbor.out'], 8)
+    if args.schedule == 'producer-geometry':
+        # At P4 a 64-A box has width 16 == 2*(rc+skin): geometry
+        # intentionally has no early centers. Use a separately identified
+        # 128-A controlled-delay fixture to witness real early on all ranks.
+        atoms=[f'C {(32*r+x)%128} 12 12 0 0 0' for r in range(4) for x in (17,23,29,35)]
+        model=str(len(atoms))+'\n'+domain.CHAIN_MODEL.splitlines()[1].replace('64 0 0','128 0 0')+'\n'+'\n'.join(atoms)+'\n'
+    case = domain.DomainCase('aux', model, domain.VARIANT_RUN, ['static.xyz'], ['thermo.out','static.xyz','neighbor.out'], len(atoms))
     potential = domain.BASELINE_DIR / 'inputs/potentials/nep_C.txt'
     records = []
     def run(name, ranks, backend, mode, binary, extra=None, expected=None, mixed=None):
         work = root / name; domain.stage_case(case, work, potential)
         env = {k:v for k,v in os.environ.items() if not k.startswith(('DMGMD_', 'O4_TEST_'))}
         env.update(CUDA_DEVICE_ORDER='PCI_BUS_ID', CUDA_VISIBLE_DEVICES=','.join(devices[:ranks]),
+                   DMGMD_DOMAIN_SCHEDULE=args.schedule,
                    DMGMD_COMM_BACKEND=backend, DMGMD_DOMAIN_PARTITION='serial',
                    DMGMD_DOMAIN_OVERLAP=mode, DMGMD_OVERLAP_TRACE='1' if mode != 'off' else '0', DMGMD_DOMAIN_DIAGNOSTICS='1')
         env.update(extra or {})
@@ -73,6 +81,9 @@ def main():
                     {'O4_TEST_FAIL':'1'}, 'finish halo MPI_Waitall')
     for name,extra,expected,mixed in (
         ('illegal-mode',{'DMGMD_DOMAIN_OVERLAP':'bad'},'must be off, wait or poll',None),
+        ('illegal-schedule',{'DMGMD_DOMAIN_SCHEDULE':'bad'},'must be split or producer',None),
+        ('schedule-mismatch',{},'domain force schedule',
+         ['DMGMD_DOMAIN_SCHEDULE='+('split' if args.schedule == 'producer' else 'producer')]),
         ('incompatible',{'DMGMD_DOMAIN_PARTITION':'off'},'requires DMGMD_DOMAIN_PARTITION',None),
         ('illegal-trace',{'DMGMD_OVERLAP_TRACE':'bad'},'must be 0 or 1',None),
         ('rank-mismatch',{},'domain overlap mode',['DMGMD_DOMAIN_OVERLAP=poll']),

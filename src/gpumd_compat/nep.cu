@@ -71,6 +71,11 @@ compute_*_box orchestrations are unchanged.
 #include <cstddef>
 #include <string>
 #include <vector>
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+#include <filesystem>
+#include <random>
+#include <iomanip>
+#endif
 
 namespace gpumd_compat {
 
@@ -497,6 +502,7 @@ void NEP::update_potential(float* parameters, ANN& ann)
 // (one thread per center in [N1,N2)); cutoffs are type-pair averages
 // (reference nep.cu:436).
 
+template<bool Compact = false>
 static __global__ void find_neighbor_list_large_box(
   NEP::ParaMB paramb,
   const int N,
@@ -514,9 +520,14 @@ static __global__ void find_neighbor_list_large_box(
   int* g_NN_angular,
   int* g_NL_angular,
   const int* selection = nullptr,
-  const bool complement = false)
+  const bool complement = false,
+  const int* center_idx = nullptr, const int center_count = 0)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if constexpr (Compact) {
+    if (n1 >= center_count) return;
+    n1 = center_idx[n1];
+  }
   if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 >= N2) {
     return;
@@ -557,6 +568,7 @@ static __global__ void find_neighbor_list_large_box(
 // the site energy and Fp (descriptor derivatives); writes Fp and sum_fxyz
 // for the force kernels (reference nep.cu:488).
 
+template<bool Compact = false>
 static __global__ void find_descriptor(
   NEP::ParaMB paramb,
   NEP::ANN annmb,
@@ -581,9 +593,14 @@ static __global__ void find_descriptor(
   double* B_projection,
   int B_projection_size,
   const int* selection = nullptr,
-  const bool complement = false)
+  const bool complement = false,
+  const int* center_idx = nullptr, const int center_count = 0)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+  if constexpr (Compact) {
+    if (n1 >= center_count) return;
+    n1 = center_idx[n1];
+  }
   if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
     int t1 = g_type[n1];
@@ -736,6 +753,9 @@ static __global__ void find_descriptor(
 // Radial contribution to per-atom force/virial; reads Fp of both the
 // center and each neighbor (reference nep.cu:661).
 
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+template<bool Compact = false>
+#endif
 static __global__ void find_force_radial(
   NEP::ParaMB paramb,
   NEP::ANN annmb,
@@ -756,9 +776,20 @@ static __global__ void find_force_radial(
   double* g_fz,
   double* g_virial,
   const int* selection = nullptr,
-  const bool complement = false)
+  const bool complement = false
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  , const int* centers = nullptr, const int center_count = 0
+#endif
+  )
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  if constexpr (Compact) {
+    const int index = n1 - N1;
+    if (index >= center_count) return;
+    n1 = centers[index];
+  }
+#endif
   if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
     int t1 = g_type[n1];
@@ -856,6 +887,9 @@ static __global__ void find_force_radial(
 // edge of centers in [N1,N2) using Fp and sum_fxyz of the center; consumed
 // by the many-body gather (reference nep.cu:774).
 
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+template<bool Compact = false>
+#endif
 static __global__ void find_partial_force_angular(
   NEP::ParaMB paramb,
   NEP::ANN annmb,
@@ -875,9 +909,20 @@ static __global__ void find_partial_force_angular(
   float* g_f12y,
   float* g_f12z,
   const int* selection = nullptr,
-  const bool complement = false)
+  const bool complement = false
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  , const int* centers = nullptr, const int center_count = 0
+#endif
+  )
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  if constexpr (Compact) {
+    const int index = n1 - N1;
+    if (index >= center_count) return;
+    n1 = centers[index];
+  }
+#endif
   if (n1 < N2 && selection && ((selection[n1] != 0) == complement)) return;
   if (n1 < N2) {
 
@@ -1249,6 +1294,10 @@ void NEP::compute_large_box(
 // Rows are sorted by global ID and the many-body reverse-edge search uses
 // the same key. Empty center ranges are short-circuited before launch.
 
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+#include "nep_o65.inc"
+#endif
+
 void NEP::compute_domain(
   Box& box,
   const int num_atoms,
@@ -1337,10 +1386,20 @@ void NEP::compute_domain(
     (N2 > N1) ? (N2 - N1 - 1) / BLOCK_SIZE + 1 : 0;
 
   const GPU_Vector<double>* phase_positions = &position_per_atom;
+  // Host launch witnesses count the actual dispatches, excluding oracle replay.
+  std::array<std::uint64_t, 6> launches{};
+  bool replay = false;
   auto filter = [&](const int* dep_selection, bool complement) {
     const auto& phase_position = *phase_positions;
-    if (grid_dep > 0) {
-      find_neighbor_list_large_box<<<grid_dep, BLOCK_SIZE>>>(
+    const bool compact = dep_selection && compact_schedule(context.schedule);
+    const int count = compact ? (complement ? ND2-partition_.early_count : partition_.early_count) : ND2-ND1;
+    const int grid = compact ? (count+BLOCK_SIZE-1)/BLOCK_SIZE : grid_dep;
+    const int* indices = complement ? partition_.late_idx.data() : partition_.early_idx.data();
+    auto dispatch = [&](auto tag) {
+    constexpr bool Compact = decltype(tag)::value;
+    if (grid > 0) {
+      if (!replay) ++launches[0];
+      find_neighbor_list_large_box<Compact><<<grid, BLOCK_SIZE>>>(
         paramb,
         N,
         ND1,
@@ -1355,9 +1414,11 @@ void NEP::compute_domain(
         nep_data.NN_radial.data(),
         nep_data.NL_radial.data(),
         nep_data.NN_angular.data(),
-        nep_data.NL_angular.data(), dep_selection, complement);
+        nep_data.NL_angular.data(), Compact ? nullptr : dep_selection, complement, indices, count);
       GPU_CHECK_KERNEL
     }
+    };
+    if (compact) dispatch(std::true_type{}); else dispatch(std::false_type{});
   };
   auto record = [&]() {
     // Sample only after this call's Verlet rows and typewise lists are ready.
@@ -1393,15 +1454,18 @@ void NEP::compute_domain(
       }
     }
   };
-  auto products = [&](const int* dep_selection, const int* force_selection, bool complement) {
+  auto descriptor = [&](const int* dep_selection, bool complement) {
     const auto& phase_position = *phase_positions;
-    if (context.mode == DomainPartitionMode::verify && !overlap) {
-      verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
-                                dep_selection, force_selection, complement);
-    }
     bool is_polarizability = paramb.model_type == 2;
-    if (grid_dep > 0) {
-      find_descriptor<<<grid_dep, BLOCK_SIZE>>>(
+    const bool compact = dep_selection && compact_schedule(context.schedule);
+    const int count = compact ? (complement ? ND2-partition_.early_count : partition_.early_count) : ND2-ND1;
+    const int grid = compact ? (count+BLOCK_SIZE-1)/BLOCK_SIZE : grid_dep;
+    const int* indices = complement ? partition_.late_idx.data() : partition_.early_idx.data();
+    auto dispatch = [&](auto tag) {
+    constexpr bool Compact = decltype(tag)::value;
+    if (grid > 0) {
+      if (!replay) ++launches[1];
+      find_descriptor<Compact><<<grid, BLOCK_SIZE>>>(
         paramb,
         annmb,
         N,
@@ -1423,12 +1487,17 @@ void NEP::compute_domain(
         nep_data.sum_fxyz.data(),
         need_B_projection,
         B_projection,
-        B_projection_size, dep_selection, complement);
+        B_projection_size, Compact ? nullptr : dep_selection, complement, indices, count);
       GPU_CHECK_KERNEL
     }
-
+    };
+    if (compact) dispatch(std::true_type{}); else dispatch(std::false_type{});
+  };
+  auto consumers = [&](const int* dep_selection, const int* force_selection, bool complement) {
+    const auto& phase_position = *phase_positions;
     bool is_dipole = paramb.model_type == 1;
     if (grid_owned > 0) {
+      if (!replay) ++launches[2];
       find_force_radial<<<grid_owned, BLOCK_SIZE>>>(
         paramb,
         annmb,
@@ -1452,6 +1521,7 @@ void NEP::compute_domain(
     }
 
     if (grid_dep > 0) {
+      if (!replay) ++launches[3];
       find_partial_force_angular<<<grid_dep, BLOCK_SIZE>>>(
         paramb,
         annmb,
@@ -1473,6 +1543,7 @@ void NEP::compute_domain(
       GPU_CHECK_KERNEL
     }
 
+    if (grid_owned > 0 && !replay) ++launches[4];
     find_properties_many_body_domain(
       box,
       nep_data.NN_angular.data(),
@@ -1489,6 +1560,7 @@ void NEP::compute_domain(
     GPU_CHECK_KERNEL
 
     if (zbl.enabled && grid_owned > 0) {
+      if (!replay) ++launches[5];
       find_force_ZBL<<<grid_owned, BLOCK_SIZE>>>(
         paramb,
         N,
@@ -1510,6 +1582,15 @@ void NEP::compute_domain(
       GPU_CHECK_KERNEL
     }
   };
+  // Keep the original full and complete-split orchestration as independent
+  // controls. Only the explicit producer schedule separates these operations.
+  auto products = [&](const int* dep_selection, const int* force_selection, bool complement) {
+    if (context.mode == DomainPartitionMode::verify && !overlap)
+      verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
+                                dep_selection, force_selection, complement);
+    descriptor(dep_selection, complement);
+    consumers(dep_selection, force_selection, complement);
+  };
 
   const bool requested = context.mode != DomainPartitionMode::off;
   const char* reason = !context.ordinary ? (context.step ? "rebuild" : "setup") :
@@ -1525,6 +1606,17 @@ void NEP::compute_domain(
     DomainPartitionKey key;
     key.layout = layout_epoch; key.neighbor = neighbor.domain_generation();
     key.storage = workspace_generation_; key.owned = N2; key.dependency = ND2; key.local = N;
+    key.rule = context.schedule;
+    if (context.schedule == DomainSchedule::producer_geometry) {
+      if (!box.is_orthogonal || !box.pbc_x || !box.pbc_y || !box.pbc_z ||
+          context.slab_axis < 0 || context.slab_axis > 2 ||
+          context.axis_length != box.cpu_h[4*context.slab_axis] ||
+          !(context.slab_lo >= 0) || !(context.slab_hi <= context.axis_length) ||
+          neighbor.domain_reference(context.slab_axis).size() != static_cast<std::size_t>(N))
+        throw std::logic_error("geometric producer requires orthogonal slab/reference");
+      key.slab_axis = context.slab_axis; key.slab_lo = context.slab_lo; key.slab_hi = context.slab_hi;
+      key.inset = producer_inset(neighbor.domain_build_radius(rc), context.axis_length);
+    }
     for (int q = 0; q < 18; ++q) {
       key.box[q] = box.cpu_h[q]; key.box[18+q] = box.float_h[q];
     }
@@ -1536,11 +1628,14 @@ void NEP::compute_domain(
     }
     const auto began = std::chrono::steady_clock::now();
     classified = partition_.classify(key, neighbor.domain_row_capacity(),
-      neighbor.NN.data(), neighbor.NL.data(), global_id.data());
+      neighbor.NN.data(), neighbor.NL.data(), global_id.data(),
+      key.rule == DomainSchedule::producer_geometry ? neighbor.domain_reference(key.slab_axis).data() : nullptr);
     classify_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-began).count();
     if (classified) ++partition_classifications;
     if (context.mode == DomainPartitionMode::verify) verify_partition_graph(partition_, neighbor, global_id);
-    if (!partition_.interior_count) { split = false; reason = "empty-interior"; }
+    if (!(compact_schedule(context.schedule) ? partition_.early_count : partition_.interior_count)) {
+      split = false; reason = context.schedule == DomainSchedule::producer_geometry ? "empty-early" : "empty-interior";
+    }
   } else if (requested) {
     // No old mask survives a rebuild or an unproved model/configuration.
     partition_.valid = false;
@@ -1550,16 +1645,16 @@ void NEP::compute_domain(
   // precede begin. The same default stream owns every CUDA operation.
   DomainForceTicket ticket{context.step, call_index};
   ticket.key = partition_.key;
-  auto views = [&]() { return std::array<const void*, 19>{type.data(), position_per_atom.data(), global_id.data(),
+  auto views = [&]() { return std::array<const void*, 21>{type.data(), position_per_atom.data(), global_id.data(),
     potential_per_atom.data(), force_per_atom.data(), virial_per_atom.data(), neighbor.NN.data(), neighbor.NL.data(),
     nep_data.NN_radial.data(), nep_data.NL_radial.data(), nep_data.NN_angular.data(), nep_data.NL_angular.data(),
     nep_data.Fp.data(), nep_data.sum_fxyz.data(), nep_data.f12x.data(), nep_data.f12y.data(), nep_data.f12z.data(),
-    partition_.early.data(), partition_.interior.data()}; };
-  auto sizes = [&]() { return std::array<std::size_t, 19>{type.size(), position_per_atom.size(), global_id.size(),
+    partition_.early.data(), partition_.interior.data(), partition_.early_idx.data(), partition_.late_idx.data()}; };
+  auto sizes = [&]() { return std::array<std::size_t, 21>{type.size(), position_per_atom.size(), global_id.size(),
     potential_per_atom.size(), force_per_atom.size(), virial_per_atom.size(), neighbor.NN.size(), neighbor.NL.size(),
     nep_data.NN_radial.size(), nep_data.NL_radial.size(), nep_data.NN_angular.size(), nep_data.NL_angular.size(),
     nep_data.Fp.size(), nep_data.sum_fxyz.size(), nep_data.f12x.size(), nep_data.f12y.size(), nep_data.f12z.size(),
-    partition_.early.size(), partition_.interior.size()}; };
+    partition_.early.size(), partition_.interior.size(), partition_.early_idx.size(), partition_.late_idx.size()}; };
   const auto frozen_views = views();
   const auto frozen_sizes = sizes();
   auto validate = [&]() {
@@ -1595,7 +1690,8 @@ void NEP::compute_domain(
     if (domain_timing_marker) domain_timing_marker(3);
   } else {
     const bool verify = context.mode == DomainPartitionMode::verify;
-    std::unique_ptr<PartitionSnapshot> oracle;
+    const bool producer = producer_schedule(context.schedule);
+    std::unique_ptr<PartitionSnapshot> oracle, producer_oracle;
     std::vector<double> initial_pe, initial_force, initial_virial;
     GPU_Vector<double> poisoned_position;
     if (verify) {
@@ -1605,7 +1701,14 @@ void NEP::compute_domain(
         initial_virial = partition_download(virial_per_atom);
         // Original, unselected M2a kernels, same coordinates/V/stride. No
         // extra force-call counter, neighbor rebuild, record or MPI operation.
-        filter(nullptr, false); products(nullptr, nullptr, false);
+        replay = true;
+        filter(nullptr, false);
+        verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
+                                  nullptr, nullptr, false);
+        descriptor(nullptr, false);
+        if (producer) producer_oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
+        consumers(nullptr, nullptr, false);
+        replay = false;
         oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
         potential_per_atom.copy_from_host(initial_pe.data());
         force_per_atom.copy_from_host(initial_force.data());
@@ -1640,7 +1743,10 @@ void NEP::compute_domain(
       validate(); observe("early-begin");
     }
     filter(partition_.early.data(), false);
-    products(partition_.early.data(), partition_.interior.data(), false);
+    // E and its complete Verlet neighbors are owned. Descriptor consumes only
+    // this center's rows; forces wait for every D producer after physical halo.
+    if (producer) descriptor(partition_.early.data(), false);
+    else products(partition_.early.data(), partition_.interior.data(), false);
     ticket.early();
     if (overlap) {
       observe("early-enqueued");
@@ -1655,25 +1761,35 @@ void NEP::compute_domain(
       PartitionSnapshot early_state(nep_data, potential_per_atom, force_per_atom, virial_per_atom);
       phase_positions = &position_per_atom;
       potential_per_atom.fill(0.0); force_per_atom.fill(0.0); virial_per_atom.fill(0.0);
+      replay = true;
       filter(nullptr, false);
       verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial, paramb.MN_angular,
                                 nullptr, nullptr, false);
-      products(nullptr, nullptr, false);
+      descriptor(nullptr, false);
+      if (producer) producer_oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
+      consumers(nullptr, nullptr, false);
+      replay = false;
       oracle.reset(new PartitionSnapshot(nep_data, potential_per_atom, force_per_atom, virial_per_atom));
       early_state.restore(nep_data, potential_per_atom, force_per_atom, virial_per_atom);
     }
     if (verify) {
       auto early = partition_download(partition_.early), interior = partition_download(partition_.interior);
-      verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom, virial_per_atom,
+      if (producer) verify_partition_producers(*producer_oracle, nep_data, potential_per_atom,
+        force_per_atom, virial_per_atom, N, ND2, N2, early);
+      else verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom, virial_per_atom,
         N, ND2, N2, &early, &interior);
       phase_positions = &position_per_atom;
     }
     if (overlap) observe("late-begin");
     filter(partition_.early.data(), true);
-    if (verify && overlap) verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial,
-        paramb.MN_angular, partition_.early.data(), partition_.interior.data(), true);
+    if (verify && (overlap || producer)) verify_partition_filtered(nep_data, N, ND2, N2, paramb.MN_radial,
+        paramb.MN_angular, producer ? nullptr : partition_.early.data(),
+        producer ? nullptr : partition_.interior.data(), true);
     record(); // all D rows ready, every rank enters the same two MAX calls
-    products(partition_.early.data(), partition_.interior.data(), true);
+    if (producer) {
+      descriptor(partition_.early.data(), true);
+      consumers(nullptr, nullptr, false);
+    } else products(partition_.early.data(), partition_.interior.data(), true);
     ticket.late();
     ticket.finalize();
     if (overlap) observe("force-enqueued");
@@ -1681,18 +1797,38 @@ void NEP::compute_domain(
     if (verify) verify_partition_products(*oracle, nep_data, potential_per_atom, force_per_atom,
       virial_per_atom, N, ND2, N2);
   }
+#ifdef DMGMD_ENABLE_O65_DIAGNOSTICS
+  const char* snapshot_call = std::getenv("DMGMD_O65_CAPTURE_CALL");
+  if (snapshot_call && context.ordinary && call_index == std::stoi(snapshot_call))
+    capture_o65(box, N, type, position_per_atom, potential_per_atom, force_per_atom,
+                virial_per_atom, global_id, layout_epoch, context, call_index);
+#endif
   if (requested) {
     if (split) ++partition_split_calls;
     else ++partition_full_calls;
+    if (split && producer_schedule(context.schedule)) ++partition_producer_calls;
+    if (split && compact_schedule(context.schedule)) ++partition_compact_calls;
+    if (classified) partition_classify_seconds += classify_seconds;
+    for (int k = 0; k < 6; ++k) partition_launches[k] += launches[k];
   }
   if (requested && domain_partition_sink) {
     std::ostringstream line;
     line << "step=" << context.step << " call=" << call_index
       << " mode=" << (split ? "split" : "full") << " reason=" << reason
+      << " schedule=" << (split ? schedule_name(context.schedule) : "full")
+      << " filter_launches=" << launches[0] << " descriptor_launches=" << launches[1]
+      << " radial_launches=" << launches[2] << " partial_launches=" << launches[3]
+      << " many_body_launches=" << launches[4] << " zbl_launches=" << launches[5]
       << " epoch=" << layout_epoch << " neighbor_generation=" << neighbor.domain_generation()
       << " storage_generation=" << workspace_generation_
       << " classified=" << classified << " interior=" << (partition_.valid ? partition_.interior_count : 0)
       << " early=" << (partition_.valid ? partition_.early_count : 0)
+      << " late=" << (partition_.valid ? ND2-partition_.early_count : 0)
+      << " early_grid=" << (split ? (compact_schedule(context.schedule) ? (partition_.early_count+63)/64 : grid_dep) : 0)
+      << " late_grid=" << (split ? (compact_schedule(context.schedule) ? (ND2-partition_.early_count+63)/64 : grid_dep) : 0)
+      << " inset=" << (partition_.valid ? partition_.key.inset : 0)
+      << " partition_bytes=" << partition_.logical_bytes() << " partition_capacity_bytes=" << partition_.capacity_bytes()
+      << " list_temp_bytes=" << partition_.scan_temp.size()
       << " owned=" << N2 << " dependency=" << ND2 << " local=" << N
       << " classify_host_seconds=" << classify_seconds
       << " oracle=" << (split && context.mode == DomainPartitionMode::verify ? "bitwise" : "off")
