@@ -2,6 +2,10 @@
 
 类别：实现状态索引。核对日期：2026-10-28；O8.6 起始 HEAD：`33c7b7f`（保留已有 O6.5/O8.5 未提交修改）。各历史阶段身份见对应报告。
 
+2026-10-30 新增独立产品化计划：[DMG-MDv1.0开发流程](../plans/dmg-md-v1.0-development-workflow.md)（PROPOSED）。
+已完成报告与关键源码的静态可行性审计，待 G0 决策和分阶段实施；不属于 O 系列优化，
+不改变下述已实现能力与验证结论。
+
 当前已实现 M1/M2a、统一缓存重建、CPU 采样、三引擎 benchmark 编排及 O1–O4/O7/O8。
 O4 默认关闭的普通步实际重叠已实现并通过本轮验收；默认仍同步 full。
 O4 身份见 [O4 报告](validation/overlap-o4-20261016.md)。
@@ -123,13 +127,22 @@ water/P4 有探索支持，carbon_1m/高重建/空 early 不支持外推。C/B w
 结论为 CONFIRMED_SCOPED_CANDIDATE，交 O11 全局复验；默认不变。
 完整证据与限制见 [O9 报告](performance/overlap-o9-results-20261029.md)。
 
+## O11 限定采用复验（2026-10-30）
+
+800 个正式 trial、80 个短程科学对照与 48 个 CPU 诊断完成；因首轮区间较宽按
+冻结规则追加一次五块，全部慢样本保留。31,293 项封存文件及离线复算通过。
+仅建议 carbon_200k/P2 的 HostStaged/CudaAware 手动 B-wait，相对默认 full 为
+1.0210×/1.0199×。water/P8/HostStaged 区间跨 1，当前不建议采用；CudaAware 未胜
+默认路径。water/P4 仅探索支持，百万原子/高重建/空 early 不支持外推。
+状态为 COMPLETE_SCOPED / SCOPED_MANUAL_USE，不声称完成原始全矩阵。
+默认仍 HostStaged/full、overlap=off、schedule=split；O10 条件性分支暂缓。
+见 [O11 报告](performance/overlap-o11-results-20261030.md)。
+
 ## 剩余工作
 
-- P0：[O10–O11 分步性能优化](../plans/communication-computation-overlap.md)：
-  O6.5/O8.5/O8.6 已交付执行原因、producer 粒度、紧凑映射与几何规则的完整对照；
-  [O9](../plans/communication-computation-overlap.md#o9)已完成独立确认，限定范围的 B 候选交 O11。
-  首轮 O9 的 NO_ADOPTION 历史保留。剩余任务、条件性 O10 及 O11 采用复验均为 PROPOSED，
-  尚未实施，生产默认不变。
+- 条件性：[小归约/halo 后端选择 O10](../plans/communication-computation-overlap.md#o10)
+  为 PROPOSED、暂缓；O11 限定范围复验已完成，扩大未测范围须另行独立验证。
+  首轮 O9 的 NO_ADOPTION 及后续 O9 独立确认历史均保留，生产默认不变。
 - 独立 P0：[跨引擎/调度器绑定剩余验收](../plans/mpi-cpu-binding.md)、
   [三引擎动力学与正式性能矩阵](../plans/lammps-multigpu-benchmark.md)。
   DMG-MD 本机统一启动与独立核验已完成，不再列为未实现。

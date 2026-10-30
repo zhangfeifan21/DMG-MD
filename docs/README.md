@@ -1,6 +1,6 @@
 # DMG-MD 文档
 
-类别：文档索引。更新日期：2026-10-29。
+类别：文档索引。更新日期：2026-10-30。
 
 先看[当前状态](status/current.md)。代码已完成默认关闭的 O4 普通步实际重叠与本轮验收；
 默认仍立即 finish。O5 本机正式实验已完成，采用范围与限制见[O5 记录](status/performance/communication-computation-overlap-o5-results-20261021.md)。
@@ -13,7 +13,7 @@ O8.5 已完成 [producer 候选、完整科学门槛与 120 个六组合实测](
 拆分成本下降，相对 HostStaged/full 仅本轮 water/P8/HostStaged 显示净收益，尚未采用。
 O8.6 已完成[紧凑索引/几何内缩、完整门槛与 240 个正式 trial](status/performance/overlap-o86-results-20261028.md)：
 B/A 四组确认，C/B wait 增量未确认；water/CudaAware 仍未胜默认路径，未采用。
-[O9 独立确认](status/performance/overlap-o9-results-20261029.md)已完成：300 个正式 trial、12 个 CPU 诊断，预选 B 在三个核心 scope 确认净收益，交 O11；默认不变。条件性 O10 与 O11 为 PROPOSED。
+[O9 独立确认](status/performance/overlap-o9-results-20261029.md)已完成：300 个正式 trial、12 个 CPU 诊断，预选 B 在三个核心 scope 确认净收益，交 O11；默认不变。O11 后续已完成，见[800 个 trial 的限定采用复验](status/performance/overlap-o11-results-20261030.md)；仅建议 carbon/P2 两后端手动 B-wait，water/P8 本轮未通过采用门槛。O10 暂缓。
 
 | 目录 | 内容 | 维护边界 |
 | --- | --- | --- |
@@ -59,6 +59,7 @@ B/A 四组确认，C/B wait 增量未确认；water/CudaAware 仍未胜默认路
 - [2026-10-28：O8.5 producer 调度、完整 consumer 与独立六组合实测（COMPLETE）](status/performance/overlap-o85-results-20261027.md)。
 - [2026-10-27：O6.5 真实图/mask、同快照 A–D 对照与候选交接](status/performance/overlap-o65-results-20261027.md)。
 
+- [2026-10-30：O11 的 800 个正式 trial、限定采用建议及离线复算](status/performance/overlap-o11-results-20261030.md)。
 - [2026-10-29：O9 执行候选独立确认、300 个 trial 与限定范围收益](status/performance/overlap-o9-results-20261029.md)。
 - [2026-10-26：O9 执行候选证据复核、NCU 实际重试与 NO_ADOPTION](status/performance/overlap-o9-results-20261026.md)。
 - [2026-10-26：O8 按需 NVE thermo、消费者与三版本实测](status/performance/overlap-o8-results-20261026.md)。
@@ -76,11 +77,15 @@ O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 
 
 ## 剩余计划
 
+正式版产品化独立于 O 系列并行性能优化，由 [DMG-MDv1.0开发流程](plans/dmg-md-v1.0-development-workflow.md) 管理。
+该计划已完成静态可行性审计，状态为 PROPOSED；不代表新系综、NPT 或非 NEP 势已支持。
+
 | 优先级 | 计划 | 状态 |
 | --- | --- | --- |
+| P0（正式版） | [DMG-MDv1.0开发流程](plans/dmg-md-v1.0-development-workflow.md) | PROPOSED；恒温器、控压器、势函数与发布交付；审计及待决策项见 §0.5/§5 |
 | P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | IN PROGRESS；DMG-MD 入口已验收，跨引擎/调度器仍待验收 |
 | P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
-| P0 | [通信与计算性能优化 O10–O11](plans/communication-computation-overlap.md) | PROPOSED；O9 独立确认已完成，B 的限定收益交 O11；默认不变，首轮历史保留 |
+| 条件性 | [通信与计算性能优化 O10](plans/communication-computation-overlap.md) | O10 暂缓、PROPOSED；O11 限定复验已完成，仅 carbon/P2 两后端手动 B-wait，默认不变 |
 | 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，O5 窄 C2 已测，完整 C2/C3 待执行 |
 | 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；M2b、release 等未完成 |
 | 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |

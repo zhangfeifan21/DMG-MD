@@ -16,8 +16,9 @@ O6 已完成[稳态拆分成本定位](docs/status/performance/overlap-o6-result
 O7 已采用[单次缓存判定归约](docs/status/performance/overlap-o7-results-20261023.md)，整步收益 INCONCLUSIVE。
 O8 已采用[按需 NVE thermo](docs/status/performance/overlap-o8-results-20261026.md)，本机三个配置相对 O7 的增量确认，一组 INCONCLUSIVE。
 O9 已完成[执行候选证据复核](docs/status/performance/overlap-o9-results-20261026.md)，以 NO_ADOPTION 结束，未改 NEP 执行。
-下一步按 [O10–O11](docs/plans/communication-computation-overlap.md)
-评估条件性后端选择并复验采用条件。跨引擎/调度器[绑定验收](docs/plans/mpi-cpu-binding.md)
+[O11 限定采用复验](docs/status/performance/overlap-o11-results-20261030.md)已完成：800 个正式 trial、48 个 CPU
+诊断及离线复算通过，仅建议 carbon/P2 两后端手动 B-wait；water/P8 本轮未通过
+采用门槛，默认保持 off。条件性 [O10](docs/plans/communication-computation-overlap.md#o10) 暂缓。跨引擎/调度器[绑定验收](docs/plans/mpi-cpu-binding.md)
 及 [LAMMPS 动力学与正式三引擎矩阵](docs/plans/lammps-multigpu-benchmark.md)独立推进，
 目前仅完成 LAMMPS 静态/smoke。CPU 采样负责观测，绑定由启动入口执行。
 

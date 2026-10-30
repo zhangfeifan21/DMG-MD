@@ -1,7 +1,7 @@
-# 通信与计算性能优化：O10–O11
+# 通信与计算性能优化：条件性 O10；O11 限定复验已完成
 
 类别：分阶段后续计划。状态：**PROPOSED**（O1–O8、O6.5/O8.5/O8.6 本机阶段完成；首轮 O9 以 NO_ADOPTION 完成；
-O9 独立确认已完成；条件性 O10 与 O11 尚未执行）。
+O9 独立确认及 O11 限定范围复验已完成；条件性 O10 暂缓）。
 优先级：P0。更新日期：2026-10-29。
 
 目标是通过可验证的算法/执行结构改进降低真实整步成本，并判断 overlap 是否值得采用。
@@ -9,7 +9,7 @@ O9 独立确认已完成；条件性 O10 与 O11 尚未执行）。
 HostStaged/full、`DMGMD_DOMAIN_OVERLAP=off`。以下每个 O 编号对应一个可独立交给
 Codex goal 的任务；O6/O6.5 诊断、O7 单次 OR 与 O8 按需 thermo 已完成。
 O8.5 producer 拆分与 O8.6 紧凑索引/几何内缩实验均已完成，
-O9 已用独立新配对块确认 B 的限定收益，交 O11 复验。
+O11 已完成 800 个新 trial 的限定复验，仅建议 carbon_200k/P2 两后端手动 B-wait；默认不变。
 
 ## 已完成基础与当前判断
 
@@ -28,6 +28,7 @@ O9 已用独立新配对块确认 B 的限定收益，交 O11 复验。
 | O8.6 紧凑/几何候选 | [当前合同](../standards/domain-partition.md#o86-producer-紧凑与几何调度)、[完整门槛、240 个正式 trial、48 份 trace、24 个 CPU 诊断与离线复算](../status/performance/overlap-o86-results-20261028.md)；B/A 四组确认，C/B wait 增量均未确认，未采用 |
 | 首轮 O9 执行候选复核 | [冻结门槛、真实 NCU 重试与安全/反例分析](../status/performance/overlap-o9-results-20261026.md)；以 NO_ADOPTION 完成，未测执行候选；历史结论保留，新一轮另见下行 |
 | O9 独立确认 | [300 个正式 trial、12 个 CPU 诊断与限定范围确认](../status/performance/overlap-o9-results-20261029.md)；预选 B 三个核心 scope 确认，交 O11，默认不变 |
+| O11 限定采用复验 | [800 个正式 trial、48 个 CPU 诊断与离线复算](../status/performance/overlap-o11-results-20261030.md)；仅 carbon/P2 双后端手动 B-wait，默认不变 |
 
 O5 已回答本机冻结范围的采用问题：多数配置的分区成本大于 overlap 回收的时间；
 固定 CudaAware 的精确 water fixture/P4/P8 有独立净收益，HostStaged/full 仍更快。
@@ -35,7 +36,7 @@ wait/poll 没有通用的稳定优劣证据。模式定义、4.60 ms 成本的�
 [O5 后续成本分析](../status/performance/overlap-o5-cost-analysis-20261021.md)。
 
 O6.5 已完成两体系的单因素执行验证，O8.5/O8.6 已完成拆分粒度、紧凑映射和几何规则的整步实验。
-O9 已完成独立筛选和确认；下一步按限定范围交 O11 复验，同时保留能惠及 full 的执行优化方向。不能把增加 poll、CPU 核数或更复杂异步结构当作已有收益方案。
+O9/O11 已完成独立确认与限定范围采用复验；后续保留能惠及 full 的执行优化方向。不能把增加 poll、CPU 核数或更复杂异步结构当作已有收益方案。
 当前合同由 standards 维护，原始结果由带日期的报告维护；producer 调度仅显式实验启用。
 
 ## 每个 goal 的共同交付与边界
@@ -58,7 +59,7 @@ O9 已完成独立筛选和确认；下一步按限定范围交 O11 复验，同
   O6.5/O8.5/O8.6 或新一轮 O9 的完成理由；必须继续可执行的单因素对照。真正无法运行的必要实验
   记 NOT_RUN/PARTIAL 并说明缺项，不得把未测候选写成无收益。
 
-剩余执行顺序：**条件性 O10 → O11**；O9 独立确认已完成。O6.5/O8.5/O8.6 已完成；O7/O8 不重做其实现。
+剩余为**条件性 O10（暂缓，PROPOSED）**；O11 限定复验已完成。原始全矩阵未测范围不作采用建议；扩大范围须另行冻结独立实验。O7/O8 不重做其实现。
 新实验统一以当前已验收的 O7+O8 为基线，保留其 full 和原 O4 完整拆分路径；旧 O6 二进制
 只作单独标识的历史桥接，不混入当前基线的增量统计。O6.5 的硬件细分原因即使仍有未知，
 只要必要执行对照与依赖证明齐全，也不阻止候选独立验证。任何新候选必须保留独立归因和
@@ -144,7 +145,7 @@ water/CudaAware 仍慢。C 减少相对 B 的辅助空间和分类维护成本�
 最终合同见[分区标准](../standards/domain-partition.md#o86-producer-紧凑与几何调度)，全部
 区间、负结果、真实网格/stream/早期 GPU 时间、维护/CPU/内存、独立 patch/binary 与复算入口见
 [O8.6 实测](../status/performance/overlap-o86-results-20261028.md)。生产默认仍为
-HostStaged/full、overlap=off、schedule=split；该阶段未采用；后续 O9 独立确认另见下文，O10/O11 尚未执行。
+HostStaged/full、overlap=off、schedule=split；该阶段未采用；后续 O9 独立确认另见下文，该阶段未执行 O10/O11；后续 O11 结果见下文。
 
 <a id="o9"></a>
 ## O9：已完成候选筛选与独立确认
@@ -163,7 +164,7 @@ water/P4 有探索支持；carbon_1m、高重建和空 early 的结果限制外�
 [O9 独立确认](../status/performance/overlap-o9-results-20261029.md)；工具合同见
 [分区标准](../standards/domain-partition.md#o9-独立确认工具合同)。
 结论为 **CONFIRMED_SCOPED_CANDIDATE**，交 O11 全局采用复验；生产默认仍为
-HostStaged/full、overlap=off、schedule=split。未执行 O10/O11，未自动采用。
+HostStaged/full、overlap=off、schedule=split。该 O9 阶段未执行 O10/O11；后续 O11 结果见下文，未自动采用。
 
 <a id="o10"></a>
 ## O10：条件性验证小归约与 halo 的后端选择
@@ -181,21 +182,22 @@ O5 已表明 CudaAware 不保证端到端更快。先量化剩余调用次数、
 或新通信协议；它不是完成 O11 的强制前提。
 
 <a id="o11"></a>
-## O11：相对优化后的 full 复验与采用决策
+## O11：限定范围采用复验已完成
 
-**Goal 目标：**对实际验收的候选重做受控对照，判断是否应在明确范围手动使用 overlap，
-交付新的采用建议，生产默认保持 off。
+状态：**COMPLETE_SCOPED（2026-10-30）**。按采样前冻结的范围收缩规则完成
+800 个正式 trial（初始五块及一次追加五块）、80 个真实输入科学对照与 48 个 CPU
+诊断。31,293 项封存文件及离线复算通过；原始慢样本全部保留。
 
-保留各单独改动和组合的 full 对照，比较相同资源上的 HostStaged/full、CudaAware/full、
-serial、wait、poll；不能拿优化前 O5 full 代表新的默认竞争路径。
-先冻结范围与统计规则：主矩阵原则上沿用 O5 三体系 × P1/2/4/8 × 两后端 × 四模式，
-每配置至少五次独立重复；候选适用范围若需缩小，须预先写出理由和不能外推的缺项。
-保留空/小 interior、薄 slab 和高重建场景，fallback 不算独立 overlap 证据。
-任何从探索数据得到的阈值或新条件必须使用独立数据验证；保留全部配置与慢样本。
+仅建议 carbon_200k/P2 两后端手动 B-wait，相对当前 HostStaged/full 为
+1.0210×/1.0199×；water/P8/HostStaged 区间仍跨 1，不建议采用；CudaAware 未胜
+默认路径。water/P4 仍为探索支持，carbon_1m、高重建与空 early 不支持扩大范围。
+未覆盖的 P1 及其他体系/rank/硬件组合不作性能采用建议，不声称完成原始全矩阵。
 
-**完成条件：**分区成本、overlap 增量、相对新 full 的净收益、CPU 与退化场景、
-不确定性和独立确认齐全。缺矩阵或关键归因标 PARTIAL，不因脚本可运行称完成。
-只建议明确硬件/输入/后端/绑定条件及失败回退规则；默认变更、自动阈值生产落地另行确认。
+完整对照、CPU/维护代价、剩余不确定性及回退条件见
+[O11 实测](../status/performance/overlap-o11-results-20261030.md)；已生效工具合同见
+[分区标准](../standards/domain-partition.md#o11-限定范围采用复验工具合同)。
+生产默认保持 HostStaged/full、overlap=off、schedule=split。默认变更、自动阈值
+或范围外推广均不在本轮结论内。O10 暂缓，不作为本轮完成的前提。
 
 ## 保留的证据缺口与不推进的方向
 

@@ -17,7 +17,7 @@
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1/M2a + O1–O4/O7/O8；O6.5/O8.5/O8.6/O9 已完成，后续 O11
+## 当前代码基线：M1/M2a + O1–O4/O7/O8；O6.5/O8.5/O8.6/O9/O11 限定复验已完成
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -90,7 +90,13 @@ O9 于 2026-10-29 完成独立确认：300 个正式 trial、12 个 CPU 诊断�
 water_400k/P8/HostStaged 的校正净收益区间通过，water/P8/CudaAware 仍慢于默认路径；
 water/P4 有探索支持，carbon_1m/高重建/空 early 限制外推。见
 `docs/status/performance/overlap-o9-results-20261029.md`。结论为 CONFIRMED_SCOPED_CANDIDATE，
-剩余按条件性 O10 → O11 推进，均为 PROPOSED；默认不变，首轮历史保留。
+后续 O11 于 2026-10-30 完成限定范围复验：800 个正式 trial（一次预定追加）、
+80 个短程科学对照、48 个 CPU 诊断及 31,293 项封存文件离线复算通过。
+仅建议 carbon_200k/P2 两后端手动 B-wait，相对 HostStaged/full 为 1.0210×/1.0199×；
+water/P8/HostStaged 区间仍跨 1，本轮不建议采用；CudaAware 未胜默认路径。
+water/P4 仍为探索支持，未覆盖的完整矩阵不作外推。见
+`docs/status/performance/overlap-o11-results-20261030.md`。O10 为条件性 PROPOSED、暂缓；
+默认不变，首轮 O9 及后续独立确认历史保留。
 跨引擎绑定与 LAMMPS 对照仍由
 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md` 独立管理。
 LAMMPS 输入、静态物理量对照与三引擎 benchmark smoke 已实施；正式效率矩阵仍待

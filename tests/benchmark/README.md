@@ -750,3 +750,30 @@ marker 和至少 80% 覆盖，主墙钟 `formal_cpu=null`。不将 GPU 设备全
 不匹配和不完整块替换。`recompute_overlap_o86.py --seal` 冻结原始 SHA-256 清单；封存
 目录的 `recompute.sh` 使用自己的 `analysis-source` 离线重算，不启动 GPU/MPI，也不读取
 未来工作树代码。缺数值门槛、正式配对或独立诊断须报告 PARTIAL。
+
+## O11 限定范围采用复验
+
+`run_overlap_o11.py` 复用 O9 已验收二进制，以新配对块验证预选 B-wait。
+范围、缺项与统计规则在采样前冻结；400 个正式 trial、80 个短程科学对照、
+48 个 full/serial/wait/poll CPU 诊断。核心为 carbon_200k/P2 与 water_400k/P8
+双后端；water/P4、carbon_1m/P2、高重建及空 early 为探索/退化对照。
+不声称覆盖完整三体系 × P1/2/4/8 矩阵，不改变默认或自动阈值。
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/benchmark/run_overlap_o11.py freeze --root dmgmd-overlap-o11-20261029
+python3 tests/benchmark/run_overlap_o11.py gates --root dmgmd-overlap-o11-20261029
+python3 tests/benchmark/run_overlap_o11.py pilot --root dmgmd-overlap-o11-20261029
+python3 tests/benchmark/run_overlap_o11.py main --root dmgmd-overlap-o11-20261029
+python3 tests/benchmark/run_overlap_o11.py cpu --root dmgmd-overlap-o11-20261029
+python3 tests/benchmark/run_overlap_o11.py analyze --root dmgmd-overlap-o11-20261029
+# 仅 analysis.json 的 extension_required 为 true 时运行 extension，再 analyze。
+python3 tests/benchmark/run_overlap_o11.py seal --root dmgmd-overlap-o11-20261029
+python3 tests/benchmark/recompute_overlap_o11.py --root dmgmd-overlap-o11-20261029
+```
+
+八项核心净收益使用 Bonferroni 99.375% 区间；只有同后端 full 和默认
+HostStaged/full 的下界均大于 1，且独立 O8/full 对照的 95% 下界大于 1，
+才推荐该精确范围内的手动 B-wait 使用。poll 不参与本轮赢家选择。
+缺实验或诊断为 PARTIAL，完整但无通过范围为 NO_ADOPTION。
+主计时不含详细诊断；CPU 单次诊断不用于显著性结论。
