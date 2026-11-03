@@ -4,8 +4,8 @@
 early 提交放在 begin 与 finish 之间，沿用同一默认 stream。
 方向于 2026-10-15 获维护者确认；本页保存已落地的闭包与缓存合同，
 剩余优化见[分阶段性能计划](../plans/communication-computation-overlap.md)。
-O2 证据见 [O2 状态](../status/validation/overlap-partition-20261015.md)，O4 范围与验收见
-[O4 状态](../status/validation/overlap-o4-20261016.md)。
+O2 证据见 [O2 状态](../status/validation/communication-computation-overlap.md#overlap-partition-20261015)，O4 范围与验收见
+[O4 状态](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)。
 
 ## 选择与生命周期
 

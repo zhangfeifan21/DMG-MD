@@ -12,6 +12,11 @@ python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0
 GPU 门槛通过后才启动数值矩阵；沙箱隔离按 AGENTS.md 处理，不回退 system MPI/UCX。
 已有 replicated/migration/domain runner 各自的 `--help` 是选项事实源。
 
+v1.0 的 NHC/BDP 双路径、双后端、root 链/RNG 协议与新作业 restart 矩阵另由
+[`tests/thermostats/`](../thermostats/README.md)执行。下文 O 系列矩阵仍用于原有路径回归；
+NHC/BDP 当前只接受默认分区/重叠选项，不能直接套用 O 系列实验开关。
+支持组合见[系综标准](../../docs/standards/ensembles.md)。
+
 ## O3 halo 生命周期
 
 ```bash
@@ -43,7 +48,7 @@ GNU 链接 wrapper 只存在于独立测试程序，生产没有测试开关。
 数值 runner 继续比较 P1 oracle、full/serial/verify 的逐原子 energy/force/virial、
 轨迹/输出/restart，验证实际 split、回退、空 rank、多段 run、skin/rebuild/迁移与精确字节。
 O3 验收另将结果与锁定 O2 产物逐字节核对；本轮具体命令、哈希、结果见
-[O3 状态](../../docs/status/validation/halo-lifecycle-20261015.md)，接口见
+[O3 状态](../../docs/status/validation/communication-computation-overlap.md#halo-lifecycle-20261015)，接口见
 [halo 生命周期标准](../../docs/standards/halo-lifecycle.md)。
 
 ## O4 默认关闭的实际重叠
@@ -74,7 +79,7 @@ rank 配置不一致。所有错误必须整作业非零退出，超时失败。
 
 `DMGMD_OVERLAP_TRACE=1` 默认关闭，记录 host 单调时钟观察和 CUDA event elapsed，
 没有校准时不合并两个时间源。完整证据及重算方法见
-[O4 报告](../../docs/status/validation/overlap-o4-20261016.md)。
+[O4 报告](../../docs/status/validation/communication-computation-overlap.md#overlap-o4-20261016)。
 # O8 thermo 消费与实际调用次数
 
 在统一环境预检通过后运行独立 differential；`--work-root` 必须是新目录。

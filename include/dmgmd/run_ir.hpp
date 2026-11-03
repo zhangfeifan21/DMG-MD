@@ -26,6 +26,11 @@ struct TimeStepCommand {
 enum class EnsembleKind {
   nve,
   nvt_ber,
+  nvt_nhc,
+  nvt_bdp,
+  // Reserved for later NPT support; the parser still rejects these ensembles.
+  npt_ber,
+  npt_scr,
 };
 
 struct EnsembleCommand {
@@ -98,5 +103,9 @@ struct RunProgram {
 };
 
 RunProgram parse_run_file(const std::string& filename);
+
+// Host-only preflight of the entire program before either runtime starts.
+// Parsing an ensemble does not imply that its dynamics are implemented.
+void validate_runtime_ensembles(const RunProgram& program);
 
 }  // namespace dmgmd

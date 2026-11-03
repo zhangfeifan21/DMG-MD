@@ -17,6 +17,7 @@
 //   * local-owned-prefix gathers carrying global IDs, root-side global-order
 //     reconstruction, and the shared GPUMD-compatible formatters.
 #include "runtime_internal.hpp"
+#include "dmgmd/ensemble_control.hpp"
 
 #include <cuda_runtime.h>
 
@@ -1630,6 +1631,21 @@ void run_domain_segment(
     DomainState& state,
     MpiRuntime& mpi)
 {
+  const EnsembleController controller(
+      ensemble, checked_int(identity.counts.global_count, "global_count"),
+      base_time_step, mpi.is_root(),
+      ensemble.kind == EnsembleKind::nvt_bdp
+          ? parse_ensemble_seed(std::getenv("DMGMD_ENSEMBLE_SEED"))
+          : kDefaultEnsembleSeed);
+  const auto scale_velocity = [&](double factor) {
+    const int owned = checked_int(state.owned_count(), "owned_count");
+    if (owned != 0) {
+      const int stride = checked_int(state.local_count(), "local_count");
+      scale_owned_velocity_range<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+          owned, stride, factor, state.device.velocity.data());
+    }
+    check_cuda(cudaGetLastError(), "ensemble velocity scaling");
+  };
   const std::uint64_t migration_start = state.migration_steps;
   const std::uint64_t rebuild_start = state.rebuild_steps;
   const std::uint64_t layout_start = state.layout_uploads;
@@ -1722,7 +1738,7 @@ void run_domain_segment(
                    "record NEP timing marker");
       };
     }
-    bool need_thermo = ensemble.kind != EnsembleKind::nve;
+    bool need_thermo = controller.needs_post_force_thermo();
     for (const Measurement& measurement : measurements) {
       if (const auto* dump = std::get_if<DumpThermoCommand>(&measurement)) {
         need_thermo = need_thermo || ((step + 1) % dump->interval == 0);
@@ -1761,6 +1777,21 @@ void run_domain_segment(
     if (state.timing_enabled) {
       check_cuda(cudaEventRecord(integration_events[0]),
                  "record first integration start");
+    }
+    if (controller.needs_pre_force_kinetic_energy()) {
+      find_owned_thermo_sums_range<<<1, kThermoThreads>>>(
+          checked_int(state.owned_count(), "owned_count"),
+          checked_int(state.local_count(), "local_count"), state.device.mass.data(),
+          state.device.potential.data(), state.device.velocity.data(),
+          state.device.virial.data(), state.device.thermo.data());
+      check_cuda(cudaGetLastError(), "launch owned pre-force kinetic reduction");
+      mpi.allreduce_sum_device(state.device.thermo.data(), 1, communication);
+      double ek2 = 0.0;
+      state.device.thermo.copy_to_host(&ek2, 1);
+      const auto factor = ensemble_velocity_factor(controller, mpi, communication, [&] {
+        return controller.before_force(time_step, ek2 * 0.5, step, steps);
+      });
+      scale_velocity(*factor);
     }
     launch_domain_verlet(state, true, time_step);
     // 4. Wrap the owned prefix into the global box.
@@ -1924,21 +1955,10 @@ void run_domain_segment(
       check_cuda(cudaEventRecord(integration_events[4]),
                  "record thermostat start");
     }
-    if (ensemble.kind == EnsembleKind::nvt_ber) {
-      const double fraction = static_cast<double>(step) / static_cast<double>(steps);
-      const double target = ensemble.initial_temperature +
-                            (ensemble.final_temperature - ensemble.initial_temperature) * fraction;
-      const double coupling = 1.0 / ensemble.temperature_coupling;
-      if (coupling > 1.0e-5) {
-        const double factor = std::sqrt(1.0 + coupling * (target / thermo.value().values[0] - 1.0));
-        const int owned = checked_int(state.owned_count(), "owned_count");
-        if (owned != 0) {
-          const int stride = checked_int(state.local_count(), "local_count");
-          scale_owned_velocity_range<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
-              owned, stride, factor, state.device.velocity.data());
-        }
-        check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
-      }
+    if (const auto factor = ensemble_velocity_factor(controller, mpi, communication, [&] {
+          return controller.after_force(thermo ? &thermo->values : nullptr, step, steps);
+        })) {
+      scale_velocity(*factor);
     }
     if (state.timing_enabled) {
       check_cuda(cudaEventRecord(integration_events[5]),
@@ -2149,6 +2169,8 @@ void run_local_domain(
     MpiRuntime& mpi)
 {
   using gpumd_compat::NEP;
+  validate_runtime_ensembles(program);
+  detail::validate_ensemble_environment(program, mpi);
   const auto total_started = std::chrono::steady_clock::now();
   HostAtoms& identity = model.atoms;  // full replicated host model (static
                                       // metadata plus the root's output identity)

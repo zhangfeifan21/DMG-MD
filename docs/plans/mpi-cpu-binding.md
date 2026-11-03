@@ -6,7 +6,7 @@ O5 授权范围内已补充 DMG-MD 常规启动入口、共用 core/numa/rankfil
 接线及独立于 C1 的实际 task affinity 核验。当前接口、资源约束、错误行为与数据格式已
 迁入[绑定合同](../standards/cpu-binding.md)，不在计划重复维护草案。
 实际日期、源码/二进制、CPU 单测、core/numa/rankfile 启动与固定绑定 GPU smoke 的证据
-见 [O5 记录](../status/performance/communication-computation-overlap-o5-results-20261021.md)。
+见 [O5 记录](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)。
 
 ## 尚未完成
 

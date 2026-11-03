@@ -204,10 +204,12 @@ CommandData parse_command(
       require_size(tokens, 2, source, "ensemble nve should have 0 parameters");
       return EnsembleCommand{EnsembleKind::nve, 0.0, 0.0, 0.0};
     }
-    if (tokens[1] == "nvt_ber") {
-      require_size(tokens, 5, source, "ensemble nvt_ber should have 3 parameters");
+    if (tokens[1] == "nvt_ber" || tokens[1] == "nvt_nhc" || tokens[1] == "nvt_bdp") {
+      require_size(tokens, 5, source, "ensemble " + tokens[1] + " should have 3 parameters");
       EnsembleCommand command;
-      command.kind = EnsembleKind::nvt_ber;
+      command.kind = tokens[1] == "nvt_ber" ? EnsembleKind::nvt_ber
+                     : tokens[1] == "nvt_nhc" ? EnsembleKind::nvt_nhc
+                                             : EnsembleKind::nvt_bdp;
       command.initial_temperature = parse_real(tokens[2], source, "initial temperature");
       command.final_temperature = parse_real(tokens[3], source, "final temperature");
       command.temperature_coupling =
@@ -220,7 +222,7 @@ CommandData parse_command(
       }
       return command;
     }
-    unsupported(source, "ensemble " + tokens[1]);
+    fail(source, "unsupported command 'ensemble " + tokens[1] + "' in the current version");
   }
   if (keyword == "correct_velocity") {
     if (tokens.size() != 2 && tokens.size() != 3) {
@@ -308,6 +310,52 @@ RunProgram parse_run_file(const std::string& filename)
     program.commands.push_back(Command{source, parse_command(tokens, source)});
   }
   return program;
+}
+
+void validate_runtime_ensembles(const RunProgram& program)
+{
+  // Scan even commands after an earlier run, or selections overwritten before
+  // a run, so an unsupported program cannot produce a partial trajectory.
+  EnsembleKind selected = EnsembleKind::nve;
+  bool adaptive = false;
+  bool correction = false;
+  double base_time_step = 1.0;
+  for (const Command& command : program.commands) {
+    if (const auto* dt = std::get_if<TimeStepCommand>(&command.data)) {
+      adaptive = dt->maximum_distance_angstrom.has_value();
+      base_time_step = dt->femtoseconds;
+    }
+    if (std::holds_alternative<CorrectVelocityCommand>(command.data)) correction = true;
+    if (std::holds_alternative<RunCommand>(command.data)) {
+      if (selected == EnsembleKind::nvt_nhc || selected == EnsembleKind::nvt_bdp) {
+        const std::string name = selected == EnsembleKind::nvt_nhc ? "nvt_nhc" : "nvt_bdp";
+        if (correction) fail(command.source, "ensemble " + name + " does not support correct_velocity");
+        if (adaptive) fail(command.source, "ensemble " + name + " does not support adaptive time_step");
+        if (!std::isfinite(base_time_step) || base_time_step <= 0.0) {
+          fail(command.source, "ensemble " + name + " requires a finite positive time_step");
+        }
+      }
+      // Both runtimes clear these optional settings at each run boundary.
+      correction = false;
+      adaptive = false;
+    }
+    const auto* ensemble = std::get_if<EnsembleCommand>(&command.data);
+    if (!ensemble) continue;
+    selected = ensemble->kind;
+    switch (ensemble->kind) {
+      case EnsembleKind::nve:
+      case EnsembleKind::nvt_ber:
+      case EnsembleKind::nvt_nhc:
+      case EnsembleKind::nvt_bdp:
+        break;
+      case EnsembleKind::npt_ber:
+        fail(command.source, "unsupported command 'ensemble npt_ber' in the current version");
+      case EnsembleKind::npt_scr:
+        fail(command.source, "unsupported command 'ensemble npt_scr' in the current version");
+      default:
+        fail(command.source, "unsupported ensemble kind in the current version");
+    }
+  }
 }
 
 }  // namespace dmgmd

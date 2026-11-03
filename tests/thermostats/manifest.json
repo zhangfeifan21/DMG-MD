@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "registered_at": "2026-11-02 (Asia/Shanghai), before formal sampling",
+  "source_revision": "f06284408f12b6d89ed5a19434c44c958307af7b + frozen dirty workspace and A3-A6 changes",
+  "potential": {
+    "path": "tests/baseline/inputs/potentials/nep_C.txt",
+    "sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623"
+  },
+  "geometries": {
+    "fallback": {
+      "cells": [
+        7,
+        6,
+        6
+      ],
+      "box_A": [
+        24.99,
+        21.42,
+        21.42
+      ]
+    },
+    "domain": {
+      "cells": [
+        18,
+        6,
+        6
+      ],
+      "box_A": [
+        64.26,
+        21.42,
+        21.42
+      ]
+    },
+    "cluster_fallback": {
+      "cells": [
+        6,
+        3,
+        3
+      ],
+      "box_A": [
+        30,
+        24,
+        24
+      ]
+    },
+    "cluster_domain": {
+      "cells": [
+        6,
+        3,
+        3
+      ],
+      "box_A": [
+        64,
+        24,
+        24
+      ]
+    }
+  },
+  "short": {
+    "steps": 200,
+    "dt_fs": 0.1,
+    "damping_steps": 100,
+    "thermo_interval": 1,
+    "trajectory_interval": 20,
+    "communication_interval": 1
+  },
+  "statistics": {
+    "steps": 20000,
+    "discard_steps": 2000,
+    "dt_fs": 0.25,
+    "damping_steps": 40,
+    "thermo_interval": 1,
+    "communication_interval": 20000,
+    "statistics": true,
+    "seeds": [
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108
+    ],
+    "maximum_steps": 80000,
+    "analysis_looks": [
+      20000,
+      40000,
+      80000
+    ],
+    "discard_rule": "first 10% at each preregistered look; same initial seeds, rerun complete longer prefix if inconclusive; never replace a seed",
+    "acceptance": {
+      "mean_relative_bound": 0.02,
+      "variance_relative_bound": 0.15,
+      "confidence_z": 2.394,
+      "block_length": 500,
+      "minimum_effective_samples": 1000,
+      "minimum_blocks": 32
+    },
+    "confidence": "three planned looks with Bonferroni two-sided z=2.394 (family 95% for each moment); no post-hoc widening",
+    "degrees_of_freedom": "3N; explicit independent Gaussian initial velocities, no constraints or COM correction; global scaling alone does not establish full phase-space ergodicity",
+    "variance_oracle": "K ~ Gamma(3N/2,kB*T), expected mean 3N*kB*T/2 and variance 3N*(kB*T)^2/2; interacting NEP fixture and independent harmonic oracle both required",
+    "half_dt": "P1 HostStaged; double Tdamp and steps to preserve physical damping and duration"
+  },
+  "harmonic": {
+    "natoms": 8,
+    "steps": 200000,
+    "discard_steps": 20000,
+    "dt_internal": 0.01,
+    "damping_steps": 100,
+    "temperature_K": 300,
+    "seeds": [
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108
+    ],
+    "acceptance": {
+      "mean_relative_bound": 0.02,
+      "variance_relative_bound": 0.15,
+      "confidence_z": 1.96,
+      "block_length": 2000,
+      "minimum_effective_samples": 1000,
+      "minimum_blocks": 32
+    },
+    "oracle": "3N independent unconstrained harmonic modes, mass=1, omega=0.15+0.01*mode; exact canonical K moments and axis <m*v^2>=kB*T",
+    "half_dt": "dt 0.005, damping 200, steps 400000, burn 40000, block length 4000"
+  },
+  "input_sha256": {
+    "fallback": {
+      "1": "a217073475aac12dbbfdbc9509095972d804663e2b1548d98c3cf4f92d9f6ac8",
+      "101": "19d5851c06ed66aaa2e03dfac28dd7fd46054953d3fa6c42038ce4c55b8ed876",
+      "102": "c84495f7cb3ecb5d861f6c7a01e20ecb539f5e1e935eb068021a57c1dbdad1ee",
+      "103": "3961269ae2b57d25be3fac294bab45acdd431dee0cd79dfac7292220c3434e93",
+      "104": "7f59610216a8791f40c8dbcc4a6e7bd92e70f6b549414a7daffdebef9dfd6232",
+      "105": "b0f5b4cb2f138c16f0748db7c6e28c25cb85e5e15b907fe0f8354d10ea3d7fe6",
+      "106": "28d3c3d876d1fd9e919ee07140ef5433564f9b1c4890fa672f104738fca94edd",
+      "107": "273d0f8ba60755902196e539a2b2c7f25fce3bc7e7b5d19fcd7a51f98813e659",
+      "108": "56f89b5f9e7569a8d482ebb879ab0c9922cd8f67be1e57fadb815a03962d0759"
+    },
+    "domain": {
+      "1": "91426d748111bbf153b8dffdfadbbbfa512e21cffaf8c17614576ce5a4e7bde7",
+      "101": "09fea7014025db1251ecc032c0349ab5cb3112aa3184214d477f345a477eb8e9",
+      "102": "d8ec113b921caf007f5be7ade67ef42e5c1038d1fe5c2744ba916b647899dae7",
+      "103": "9d277ecd6590c7a8061b9302224196987f62f7381e03cc6d3fba170b3c8165a6",
+      "104": "36674a43812abfcf4abf3d0876da69bd19d6d9f16bef0a520c66503f77bdf87e",
+      "105": "a07b7f2b56d57aa236fae35a1b9acb0e2fb05d16071e530740ebaf87b21bdc5e",
+      "106": "e22eb666fdcb1055eefbd47632fe12d9cd35f35ea94b6954d87dc2f5b532441a",
+      "107": "0c29eb67eef9ff8b5c85822683f41965967f913e12401f1f1c583cbc78b6838d",
+      "108": "60751ac4cc6c7a7aeee8cdd26502b8d9c2d3afabdfed394193537dceec9b9a3c"
+    },
+    "cluster_fallback": {
+      "1": "7fa7b42a8713399cc9a2a65967940533f5bbc903a5bc637095b126040e717631",
+      "101": "dbb297705218a5de129f3dd364a9fb828d0ffd566e8b9b2db5b438dd9a926a9e",
+      "102": "04c2bbef567e7a221df5b5b7b4e19e8de699149d123e0cc574cf58b53e0e95dd",
+      "103": "94b5f67544d3119097c3c63060bda4b0aa07919362395ea21056743342064132",
+      "104": "ff7f6a336980ed6e8723354ed135d337df8d0c20dce59e334b471251fa20f96f",
+      "105": "6b5c9c721f59154bb8302aa52e70a78c661d66246daf193862740a504555aaca",
+      "106": "9a8d6d640e2ccd61e070091a7beb3b7b6b2064659e6b10081319f79e870109e3",
+      "107": "37fc243460032ca3d9e4176641b5921410f86cfc60b68c6109bb7cd12ea2dba1",
+      "108": "0f196a1e92321dddde7f4461f96f0c34a4544431a5552e916e5b8303d19fa5a0"
+    },
+    "cluster_domain": {
+      "1": "b4d8c0d5805046a0f4404c04c50192cb08b559063a68dd6729d3efd1cce95a79",
+      "101": "4632ed0e4322eccbf706d8579bc4f5cab5d811df6cd459c2f19a6165ed198b6f",
+      "102": "adb57eea59cb63ce61ec90f64d4dfaee3fde15484997c7b7c8f75da756293324",
+      "103": "4ee02b449e1e1a99486f9b7afcdf59da456ad3c2224b7fb3b3ab1cfa35addf1b",
+      "104": "d79fb60501f0183e2f527db422d6b493b859122acf5216ef80ee1bd373b94b45",
+      "105": "bd2f0c2cee5d54d91d920aca5a7b4638573a7a3d214bdd6b86b0fc7f46e6d761",
+      "106": "ea8f9b6292da792337c60eb2dea0ce40fe09e0998a260c7b88b85817b64806fb",
+      "107": "ba4c046341416f72e982f329950bdd1dee5b8068beade1bcf2cf6166890847fb",
+      "108": "8caea3ee5f2dbc6478a3f03434be1d132430924ecd6e58b675336aada5b565d5"
+    }
+  },
+  "run_sha256": {
+    "nvt_nhc": {
+      "short": "007031bfde962a3f759bc565fab5ecc9cb97810b35b303c671980e1f04b5346a",
+      "statistics": "76ad57c82a61d48c782161c8e7d7fb77e394db186502563f4e7d49f080b1634c"
+    },
+    "nvt_bdp": {
+      "short": "63cceaea7261ba184b54bf718769a3a86822def582e28aaede4245f6008847c4",
+      "statistics": "ba4d3baea57d28f74d2d70c73a40d41f5310823db1aa449c697f86c0fb45de49"
+    }
+  }
+}

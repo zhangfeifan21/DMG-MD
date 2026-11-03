@@ -1,9 +1,14 @@
 # DMG-MD 长程 NVE/NVT 正确性测试
 
-本目录实现独立于短程 committed golden 的长期 NVE 与确定性 NVT 统计正确性验收。它不生成
+本目录实现独立于短程 committed golden 的长期 NVE 与确定性 `nvt_ber` 统计正确性验收。它不生成
 或宣称性能数据，也不要求混沌轨迹在 100000 步后逐原子重合。GPUMD ordinary NEP 单 GPU仍是
 参考；DMG-MD 在相同初态上接受短程严格比较、长期守恒、温度/RDF/MSD统计、双向构型回放和
 跨 rank restart 检查。
+
+本文的 NVT profile/section 专指 `nvt_ber`；v1.0 已新增的 `nvt_nhc`/`nvt_bdp` 使用
+独立的[恒温器验收入口](../thermostats/README.md)，包含各自的统计、MPI 与新作业 restart
+合同。本目录的 profile 定义不代表已实际通过，release 执行状态见
+[当前状态](../../docs/status/current.md)。
 
 同一 fixture 已可通过
 [`tests/lammps_reference/lammps_inputs.py`](../lammps_reference/README.md)
@@ -218,7 +223,7 @@ manifest 在查看 candidate 长程结果前固定 25% 非劣 margin 和每项 a
 执行同批 GPUMD reference，分别比较五初态的 median 与 q95。最终 MSD 和最小距离作为诊断量；
 构型分布由元素对距离直方图的最大 L1 距离检查。
 
-### NVT统计正确性
+### `nvt_ber` 统计正确性
 
 三个物理 case 以 300 K、`nvt_ber` coupling 100 先平衡后采样。运行器对 GPUMD 与 DMG-MD
 分别计算温度 mean/std/RMSE、以采样首帧为原点的 MSD mean/final/max/slope，以及按元素有向对

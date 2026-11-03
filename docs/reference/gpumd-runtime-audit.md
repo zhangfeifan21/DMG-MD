@@ -99,5 +99,6 @@ small-box（nep.cu:1141、nep_small_box.cuh）显式多 image、Newton atomic sc
 | MPI | src/mpi_runtime.cu、include/dmgmd/mpi_runtime.hpp：GPU binding、collective/p2p、halo lifecycle；spatial_ownership.hpp 提供 M1 owner |
 
 M2a、migration、halo 与 local neighbor 已在当前闭包内，不能再写成“未来组件”。
-M2b、3D 和实际 overlap 仍为[剩余计划](../plans/domain-decomposition.md)。runtime 合同见
+M2b 和 3D 仍为[剩余计划](../plans/domain-decomposition.md)；实际 overlap 已由 O4 实现并
+验收，默认关闭。runtime 合同见
 [MPI](../standards/mpi-runtime.md)、[布局](../standards/data-layout.md)、[缓存](../standards/cache-validity.md)。

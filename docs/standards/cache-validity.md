@@ -65,7 +65,7 @@ VV1/wrap 后检查 owned 位移与 reason。各 rank 对有限非负的局部最
 空 owned rank 贡献零，仍参加 OR；等号复用。非有限平方不进入局部最大值，只置
 invalid 位，OR 后优先 fatal，再判断 rebuild。未决议禁止 halo/NEP，Neighbor 不再做
 第二次位移检查。有限值的 `max(m_rank)>h ⇔ OR(m_rank>h)` 证明与错误/阈值/空 rank
-及实际调用次数验收见 [O7](../status/performance/overlap-o7-results-20261023.md)。
+及实际调用次数验收见 [O7](../status/performance/cache-reduction-results.md#o7-results-20261023-report)。
 
 - reuse：manager/layout/membership/map/Verlet 固定，只刷新 ghost position。
 - rebuild：下载 dynamics，direct Alltoall count/Alltoallv 路由至最终 geometric owner；

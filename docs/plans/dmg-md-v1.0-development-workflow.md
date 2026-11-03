@@ -1,8 +1,9 @@
 # DMG-MDv1.0开发流程
 
-> 类别：实施计划（可拆分为 AI Agent 任务卡）。状态：**PROPOSED**。原稿日期：2026-10-29。审计编排日期：2026-10-30。
+> 类别：实施计划（可拆分为 AI Agent 任务卡）。状态：**IN PROGRESS**。原稿日期：2026-10-29。审计编排日期：2026-10-30。
+> Gate 0：维护者于 2026-10-30 确认第 5 节全部默认决策；A0–A6 已完成，G-A 已通过；逐 Step 进度见 [`dmg-md-v1.0-progress.md`](dmg-md-v1.0-progress.md)。
 >
-> 适用基线：DMG-MD `4457c3c`（原稿基线；本次 HEAD 相同，但工作区已有 O11 文档/测试未提交修改）。上游兼容基准：GPUMD
+> 适用基线：原稿基线 DMG-MD `4457c3c`；A0 实际执行 revision 为 `f062844`（工作区含未提交修改）。上游兼容基准：GPUMD
 > `9d23496e41319b9e2af5221a7df6285387401d1e`（**只读**，不得在其中构建或产生输出）。
 >
 > 原稿引用 `MD-ensemble-thermostat-barostat-survey.md`（v1.1，2026-10-28），本次未提供且仓库未找到；
@@ -66,9 +67,9 @@
 
 ### 0.5 可行性审计与修订结论（2026-10-30）
 
-**结论：有条件可行，适合作为独立的正式版产品化主线；尚不能视作已经批准、实现或通过验收。**
+**审计结论：有条件可行，适合作为独立的正式版产品化主线；审计结束时尚不能视作已经批准、实现或通过验收。**
 保留原稿 A/B/C/D 任务卡体系与 P0 范围，修订会导致错误实现或过度承诺的要求。
-本轮只审计和编排文档，没有执行任何开发 Step，也没有启动 GPU/MPI 验收。
+审计轮只处理文档，没有执行开发 Step 或 GPU/MPI 验收；维护者随后于 2026-10-30 确认了 Gate 0 全部默认决策，A0 验收结果见基线记录。
 O 系列负责并行性能优化，本流程负责从测试版走向可推广使用的正式版；两者无阶段门依赖，
 仅共享既有代码与回归合同。正式版默认路径仍以冻结时的当前合同为准。
 
@@ -393,8 +394,9 @@ D1 + D2 + D3 + D4 ─ D5
 | G0-D9 | 多 run 状态生命周期 | 默认每段初始化以对齐上游对象生命周期；固定 seed/cache 的重置及序列重复须明示；若选跨段持续状态，记录兼容偏离 | A1–A4/B3，多段与 restart 测试 |
 | G0-D10 | SCR 科学实现与上游 RNG 差异 | 推荐 root 持续随机流 + 实例缓存；明确偏离按值 RNG，独立统计门通过前不宣称正确 NPT 采样 | B3/B4；兼容矩阵与独立 oracle |
 
-上述均为**待确认建议**，本次审计入库不等于签署。若要求严格逐轨迹重启或更完整的多节点支持，
-须在 G0 将相关状态保存/长程与部署矩阵提升为 P0，而非在发布说明中事后补充。
+上述默认建议已由维护者于 2026-10-30 在本会话逐项确认，G0-D1–G0-D10 无例外调整。
+若后续要求严格逐轨迹重启或更完整的多节点支持，须另行将相关状态保存/长程与部署矩阵提升为 P0，
+不得在发布说明中事后补充。
 
 > 推荐理由：NHC 与 BDP 覆盖“确定性严格采样”和“随机严格采样”两种主流需求；Berendsen 保留是
 > 兼容合同。SCR 是相对便宜且真采样的 NPT；MTTK/PR 的复杂度与验证成本不适合首版。非 NEP 先做
@@ -420,7 +422,8 @@ D1 + D2 + D3 + D4 ─ D5
 
 ### Step A0：基线冻结与环境证据
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：无（Gate 0 确认前也可做）
+- **状态**：DONE｜**优先级**：P0｜**依赖**：无（Gate 0 确认前也可做）
+- **实际验收记录**：[`A0 系综开发前基线冻结`](../status/validation/ensemble-baseline.md#ensemble-baseline-20261030)；性能项按任务卡记为 `PENDING-D4`。
 - **目标**：在动手改代码前，冻结“什么算没坏”的基线：revision、构建环境、现有测试结果、
   代表性输出哈希与性能基线。后续 A2/B2/C0 的“零变化”都以本 Step 的 manifest 为准。
 - **主责文件**：只新增/修改证据文档与测试清单：
@@ -456,7 +459,8 @@ D1 + D2 + D3 + D4 ─ D5
 
 ### Step A1：IR 与 parser 扩展（NVT 部分）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A0
+- **状态**：DONE｜**优先级**：P0｜**依赖**：A0
+- **实际验收记录**：[`A1 NVT IR/parser 验收`](../status/validation/ensemble-infrastructure.md#ensemble-parser-20261030)；NHC/BDP 语法已接受，动力学仍由运行时预检拒绝。
 - **目标**：让 `run.in` 能表达 `nvt_nhc` 与 `nvt_bdp`，并把参数校验、错误来源和重复命令规则
   固定下来；NPT 的语法留到 B2/B3，不在本 Step 放开，避免 parser 接受运行时未实现的组合。
 - **主责文件**：`include/dmgmd/run_ir.hpp`（`EnsembleKind` 与 `EnsembleCommand`）、
@@ -494,7 +498,8 @@ D1 + D2 + D3 + D4 ─ D5
 
 ### Step A2：共享 `EnsembleController` 与 Berendsen 零变化迁移
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A1
+- **状态**：DONE｜**优先级**：P0｜**依赖**：A1
+- **实际验收记录**：[`A2 EnsembleController/Berendsen 验收`](../status/validation/ensemble-infrastructure.md#ensemble-control-20261102)。统筹者于 2026-11-02 独立复核 diff、测试、科学输出哈希、通信账本与文件保护；A/B 输出和通信记录一致。
 - **目标**：建立 M1/M2a 共用的系综控制层：目标温度调度、速度缩放因子、NHC 的 pre-force hook、
   BDP/SCR 的 root RNG 边界、每步标量广播；先把现有 `nvt_ber` 迁移进来，证明输出逐字节不变。
 - **主责文件**：新增 `include/dmgmd/ensemble_control.hpp`、`src/ensemble_control.cpp`（host 控制逻辑；
@@ -543,156 +548,48 @@ D1 + D2 + D3 + D4 ─ D5
 
 ### Step A3：`nvt_nhc`（Nosé–Hoover 链）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A2
-- **目标**：在 M1 与 M2a 上实现确定性的严格 NVT：链长 4、Suzuki–Yoshida 分解、每步前后各
-  半步；同二进制/同 rank/同 backend 可复现，P=1 与 GPUMD 短轨迹可比。
-- **主责文件**：`src/ensemble_control.cpp`（链状态与 `nhc` 更新）、`src/runtime.cu`（pre-force
-  hook 位置）、`src/domain_runtime.cu`（owned KE 归约与 hook）、`CMakeLists.txt`、新增
-  `tests/ensemble_control_tests.cpp` 与集成 case。缩放 kernel 复用 A2 的既有实现。
-- **必读**：上游锁定 commit 的 `src/integrate/ensemble_nhc.cu`（构造 30–50、`nhc` 105–236、
-  `integrate_nvt_nhc_1/2` 175–236）、`src/integrate/ensemble.cuh` 的链长；本计划 §2.5、§13；
-  调研报告 §4.3；`docs/standards/golden-test-standard.md`。
-- **实施要点**：
-  1. 链参数严格对齐上游：`M=4`；`pos_nhc=0`；`vel_nhc=[1,-1,1,-1]`；
-     `tau = dt * Tdamp`（`dt` 是内部时间单位，`Tdamp` 是步数，**不再乘** `TIME_UNIT_CONVERSION`）；
-     `Q_i = k_B*T1*tau^2`（i=0..3），`Q_0 *= 3N`。质量在配置时固定为段初 `T1`，即使目标温度
-     在段内 ramp 也不重建链；`kT` 使用当前目标温度。这个“质量固定、kT 随 ramp”是上游行为，
-     必须写进测试和文档。
-  2. 每步顺序（与上游一致）：`correct_velocity`（若触发）→ 自适应 `time_step` 计算 →
-     **当前 owned 速度的全局 KE 归约** → root 执行 NHC 前半步 → 广播因子 → 所有 rank 缩放
-     owned 速度 → VV1 → 位置 Allgather/force/ownership → VV2 → thermo → root 执行 NHC 后半步 →
-     广播因子 → 缩放 owned 速度 → 输出。NHC 前半步在 VV1 **之前**，不是 VV1 之后。
-  3. `nhc` 的 Suzuki–Yoshida 权重、`n_respa=4`、指数/半指数更新顺序、`Ek2` 的更新方式逐字复刻；
-     不要用“等价”的矩阵指数或不同权重。链长和权重放在一个带注释的常量表中，测试覆盖。
-  4. 全局 KE 只统计 owned 原子：M1 用 `RuntimeOwnership` 的 owned 索引，M2a 用
-     `DomainLayout` 的 owned 集合；ghost/replica 不得计入。用一次标量 `allreduce_sum`；root 的
-     链更新与 factor 广播复用 A2 的接口，不能让每个 rank 各自跑链。
-  5. NHC 仅在 `nvt_nhc` 下启用；`nve`/`nvt_ber` 不分配链、不增加归约。`npt_*` 在 B 阶段另行
-     决定是否使用 NHC（v1 的 `npt_scr` 用 BDP，不用 NHC）。
-  6. 与 `correct_velocity`、`time_step` 第二参数（自适应步长）的组合不在 A3 默认验收范围：
-     要么加专项测试证明 KE 归约顺序正确，要么在运行时失败关闭并写入限制。不要静默组合。
-  7. root 错误必须走全 rank 一致退出路径，不得抛错后让其他 rank 卡在广播。
-     失败关闭：`T<=0`、`Tdamp<1`、全局 KE 非有限或为 0（无法归一化）时，在缩放前报错；
-     不要产生 NaN 继续跑。
-- **测试/验收**：
-  - 单元：链的初始状态、质量公式、`Q0=3N*Q`、目标 ramp 时质量不变；`nhc` 在固定 `Ek2/kT`
-    输入下的 factor 与参考实现逐位一致（可用从上游独立复算的 fixture，不把上游源码链进构建）。
-  - P=1 M1 对 GPUMD `nvt_nhc` 的 100–500 步短轨迹：`thermo.out` 与 `dump_xyz` 在 golden 容差内；
-    记录最大绝对差与首个超过容差的步/列。P=1 同二进制重复运行应 byte-identical。
-  - M1 P=2/4（M1 fallback 触发）与 M2a P=2/4：同 rank/backend 重复运行 byte-identical；
-    跨 rank 不要求 byte-exact，但温度均值/能量漂移在统计容差内。
-  - 统计：至少 3 个独立初始速度/seed（NHC 本身确定，用不同初始条件）跑 NVT；`<T>` 与目标
-    须满足 §0.5 预先冻结的误差界，KE 分布/速度分量方差与相应有效自由度的正则预期一致；用块平均与
-    自相关给 CI。不得用 `nvt_ber` 的涨落来“证明” NHC 正确。
-  - restart：按 Gate 0-D4 记录“不连续”；测试只验证能从 `restart.xyz` 启动、无崩溃，并明确
-    不比较链的轨迹连续性。
-- **证据**：`docs/status/validation/nhc-<date>.md`，含 GPUMD P1 轨迹对比表、重复运行哈希、
-  MPI 矩阵、统计图/数值与限制。
-- **停止/回滚**：P1 golden 超差且无法归因；链状态在 rank 间不一致；M2a 的 KE 归约把 ghost
-  计入；或为通过测试而放宽 golden/改变 NEP。回滚 A3 的 hook 与新分支，保留 A2。
+- **状态**：DONE｜**优先级**：P0｜**依赖**：A2。
+- **实际验收**：[NHC 记录](../status/validation/thermostat-validation.md#nhc-20261102)：四节链、SY7×RESPA4、
+  owned KE/root 因子协议；独立逐位 oracle，GPUMD P1 200-step，双路径重复、11 组 KE 与
+  实际 NEP 三轴速度矩通过。额外 harmonic K PASS、轴向 mean INCONCLUSIVE 单列，
+  不作普遍遍历性保证。
+- 已完成的实施细节迁入[系综标准](../standards/ensembles.md)与上述记录；质量固定于 T1、
+  CV/自适应/实验选项限制和不连续 restart 均已明确。
 
 ---
 
 ### Step A4：`nvt_bdp`（Bussi–Donadio–Parrinello 随机速度重标定）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A2（root RNG 接口）；A3 无 RNG 依赖
-- **目标**：实现严格 NVT 的随机重标定，root 拥有 RNG，固定默认种子并支持环境覆盖；同种子
-  同 rank 可复现，不同种子产生独立样本；M1/M2a 行为一致。
-- **主责文件**：`src/ensemble_control.cpp`（RNG、`gasdev`、`resamplekin`）、`src/runtime.cu`、
-  `src/domain_runtime.cu`、`CMakeLists.txt`、`tests/ensemble_control_tests.cpp`。
-- **必读**：上游 `src/integrate/ensemble_bdp.cu`（29–100）、`src/integrate/svr_utilities.cuh`
-  （`gasdev`/`gamdev`/`resamplekin`，28–126）；调研报告 §4.6；Gate 0-D5；本计划 §3.2。
-- **实施要点**：
-  1. 严格复刻 `resamplekin(kk, sigma, ndeg, taut, rng)` 与 `gasdev`：`taut=Tdamp`（步数），
-     `ndeg=3N`，`sigma=ndeg*k_B*T/2`，`kk=ndeg*k_B*T_inst/2`；`factor=sqrt(new_KE/old_KE)`；
-     当 `taut<=0.1` 时 `exp(-1/taut)=0` 的上游分支要保留。`gasdev` 的 `iset/gset` 必须是
-     controller 实例状态，不能是全局/函数静态变量，否则多个 controller 或测试会互相污染。
-  2. 每步顺序：VV1 → gather/force/ownership → VV2 → thermo → root 用全局温度/KE 调
-     `resamplekin` → 广播 factor → 缩放 owned 速度 → 输出。BDP 没有 pre-force hook；不要在
-     VV1 前多算一次 thermo。
-  3. 随机数：rank 0 持有单一 `std::mt19937`；默认种子固定为 `12345678`（与上游 DEBUG 分支一致，
-     便于复现），`DMGMD_ENSEMBLE_SEED` 解析为无符号整数覆盖；所有 rank 必须看到相同 seed 字符串，
-     不一致时失败关闭。每步只广播 factor（或少量标量），不广播 RNG 状态。种子/cache 在每段 `run` 初始化；默认逐段重置导致重复流的限制按 G0-D9 明示。文档必须说明默认种子是对上游
-     wall-clock 种子的**有意偏离**。
-  4. 算法参数 `ndeg` 与输出温度分母沿用 3N；统计 fixture 的有效自由度另按 §0.5 核实。
-     不修改现有温度定义，不扣固定原子（当前产品没有 fixed group）。若未来引入 fixed
-     group，BDP 的 `ndeg` 必须与温度定义同时修改并重做 golden，不能在本 Step 预留“更物理”的扣除。
-  5. 安全 guard：`old_KE<=0`、`new_KE` 非有限或为负时，在缩放前报错；`factor` 必须有限且 >0。
-  6. 与 `correct_velocity`/自适应步长的组合同 A3：未验证就失败关闭；BDP 的随机重标定不允许
-     在多个 rank 各自采样。
-- **测试/验收**：
-  - 单元：固定 seed 下 `gasdev`/`resamplekin` 的 fixture 逐位一致；同 seed 两次配置产生相同序列；
-    不同 seed 产生不同序列；`taut<=0.1` 分支；`ndeg` 奇偶（本产品 3N，若 N 为奇数则 ndeg 为奇数，
-    覆盖 `resamplekin_sumnoises` 的奇分支）。
-  - P=1 M1：同 seed、同二进制重复运行 `thermo.out` byte-identical；不同 seed 的首步速度/温度
-    不同。P=2/4 M1 fallback 与 M2a 同 rank/backend 重复可复现；跨 rank 不要求 byte-exact。
-  - 统计：至少 8 个 seed × 足够长（建议 ≥20k 步，前 10% 丢弃）的 NVT；`<T>` 按 §0.5 的预注册误差界判定，
-    KE 方差与 fixture 有效自由度预期一致（输出温度定义仍为 3N）；给出块平均、自相关时间与 95% CI。与 GPUMD 的
-    `nvt_bdp` 只能比分布/均值，不能比轨迹（上游 release 用 wall-clock 种子）。
-  - restart：按 Gate 0-D4 记录不连续；测试只覆盖能启动与统计合理性。
-- **证据**：`docs/status/validation/bdp-<date>.md`，含种子矩阵、重复哈希、统计表与上游对比口径。
-- **停止/回滚**：同 seed 不可复现；M1/M2a 的 ndeg 或 factor 不一致；root 之外出现 RNG 调用；
-  或为通过统计门而挑选 seed/丢弃不利样本。
+- **状态**：DONE｜**优先级**：P0｜**依赖**：A2（无 A3 RNG 依赖）。
+- **实际验收**：[BDP 记录](../status/validation/thermostat-validation.md#bdp-20261102)：16 case 逐位 oracle、
+  root RNG/实例 cache、默认 seed 与严格跨 rank 原始字符串校验；19 项 seed 合同、
+  12 组八 seed KE（含 half-dt/GPUMD）和实际 NEP 三轴速度矩通过。
+- 独立 harmonic K oracle PASS、额外轴向诊断 INCONCLUSIVE 保留；release GPUMD 只比分布。
+  逐段重置与固定默认种子的有意偏离、restart 语义见[系综标准](../standards/ensembles.md)。
 
 ---
 
 ### Step A5：双路径、MPI 与后端验收矩阵（G-A）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A3、A4
-- **目标**：把 A3/A4 从“单卡能跑”提升为“产品可声明”：M1（含 P>1 fallback）与 M2a、P=1/2/4、
-  默认/CUDA-aware 后端、确定性与统计两类证据全部实际执行并入库。
-- **主责文件**：测试与证据为主：`tests/mpi/`、`tests/baseline/`、`tests/long_nve/` 的新增 case；
-  `docs/status/validation/thermostat-matrix-<date>.md`。只有在矩阵暴露缺陷时才回到 A2–A4 修代码。
-- **必读**：`docs/standards/mpi-runtime.md`；`tests/mpi/README` 与 `run_mpi_domain.py` 的参数；
-  `tests/long_nve/README.md`；`README.md` 的 `DMGMD_COMM_BACKEND`/`DMGMD_DOMAIN_*` 说明。
-- **实施要点**：
-  1. 先固定一个“矩阵 case”：NEP4/5、正交全周期、约 1k–5k 原子、`time_step` 固定、输出间隔固定、
-     不使用 `correct_velocity`/自适应步长/实验性 overlap 开关。为 NHC/BDP 各准备一份。
-  2. M1 P=1：NHC/BDP 的 GPUMD P1 对比（NHC 轨迹；BDP 统计）；同二进制重复哈希。
-  3. M1 P>1：用现有 `m1-fallback` 触发条件（stdout 的 `DMGMD_DOMAIN mode=m1-fallback`）构造
-     P=2/4 case；记录触发原因；不要新增“测试专用”强制开关。若现有输入无法触发，改用几何/截断
-     条件并在文档写清。
-  4. M2a P=2/4：NHC/BDP 各跑确定性重复（同 rank/backend）与统计验收；记录 `mode=m2a`、axis、
-     owned/ghost 数量；确认 `need_thermo` 对非 NVE 为真且 KE 只计 owned。
-  5. 后端：默认与 `DMGMD_COMM_BACKEND=CudaAware`（环境支持时）各跑关键 case；跨后端只比统计/
-     容差，不要求 byte-exact；记录 backend 名称。
-  6. 组合与失败关闭：NHC/BDP 与 `correct_velocity`、自适应步长、实验性 overlap/partition 开关的
-     组合，要么纳入矩阵并通过，要么在运行时明确报错；二者必须有其一，不能“默认能跑”。
-  7. 结果表必须包含：case、ensemble、potential、P、data plane、backend、steps、seed、结果
-     （PASS/FAIL/SKIP）、证据路径；skip 必须写原因与谁批准。
-- **测试/验收**：矩阵全 PASS 或经维护者书面接受的 SKIP；NHC P1 golden 与 BDP 统计均过；
-  P>1 M1 与 M2a 均无所有权/温度异常；通信记录无未解释的增长。
-- **证据**：`docs/status/validation/thermostat-matrix-<date>.md` + 原始日志；每条命令可复制。
-- **停止/回滚**：任一 data plane 的温度/能量在本该确定的场景下不确定；跨 rank 因子不一致；
-  M2a ghost 污染 KE；或矩阵缺项却声称 G-A 通过。
+- **状态**：DONE｜**优先级**：P0｜**依赖**：A3、A4。
+- **实际验收**：[恒温器矩阵](../status/validation/thermostat-validation.md#thermostat-matrix-20261102)：
+  52 短程配置及同配置重复、54 新作业 restart，NEP4/5/ZBL 的真实 M1/M2a 路由和后端逐项列出；
+  正式 NEP 统计、root 因子位模式、逐步通信增量和错误/超时门通过，无必需项 SKIP。
+- 旧 NVE/Berendsen 最终 golden、MPI 和七配置 long-NVE smoke 通过；对 A2 的
+  50 stage/181 科学文件、231 全局/160 rank 逐步记录完全相同。
+  G-A 仅按已验收单节点范围放行，不替代跨节点、release 长程、D4 或未来 C5 联合门。
 
 ---
 
 ### Step A6：恒温器文档与统计验收
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A5
-- **目标**：把 NHC/BDP 的真实语义、限制、调参单位、restart 行为与统计证据写给用户和后续 Agent；
-  同时更新兼容矩阵，避免“代码支持但文档仍说 unsupported”。
-- **主责文件**：`docs/standards/compatibility-matrix.md`、`docs/standards/ensembles.md`（新建）、
-  `docs/README.md`、`docs/status/current.md`、`README.md` 的相关段落、`docs/status/validation/`。
-  本 Step 不改运行时；文档与代码冲突时以代码/测试为准并回退文档。
-- **必读**：A5 证据；调研报告 §0.5、§4.3、§4.6、§4.9、§9；`docs/standards/golden-test-standard.md`；
-  `docs/README.md` 的文档治理规则。
-- **实施要点**：
-  1. 在 `ensembles.md` 写清：语法、`T1/T2/Tdamp` 单位（步数）、目标温度 ramp 规则、3N 自由度、
-     NHC 链长/质量固定于 T1、BDP 种子/默认值/`DMGMD_ENSEMBLE_SEED`、restart 不连续、M1/M2a 范围。
-  2. 兼容矩阵更新：`nvt_nhc`/`nvt_bdp` 从 unsupported 移入 supported；明确“M2a 支持 NVT 新系综、
-     但不支持 NPT/非 NEP”；更新 restart 表和 thermo 列语义（温度仍是 3N 定义）。
-  3. 统计验收单独成节：NHC 的确定性与 GPUMD 对比；BDP 的多种子均值/方差/自相关/CI；明确
-     Berendsen 只用于兼容，不作为严格采样证据。不要把短轨迹的“看起来稳定”写成“已证明正则”。
-  4. 给出用户可复制的命令：构建、P1 运行、P2/P4 M1 fallback、M2a、seed 覆盖；说明输出文件与
-     如何判断成功。示例输入放 `tests/` 或 `examples/` 时只放小文件，不提交大轨迹。
-  5. 更新 `docs/README.md` 的索引和 `docs/status/current.md` 的“当前能力”段落；检查相对链接。
-- **测试/验收**：文档中的每条命令实际执行或标注“仅示例”；兼容矩阵与 parser/runtime 一致；
-  链接检查通过；A5 证据在文档中可追溯。
-- **证据**：文档变更 + 链接检查输出；统计结论必须引用具体 status 文档和数值。
-- **停止/回滚**：文档承诺了未实现的行为（如 restart 连续、NHC 支持 NPT、M2a 支持新势）；
-  或统计结论超出数据支持。宁可写“未验证/不支持”。
+- **状态**：DONE｜**优先级**：P0｜**依赖**：A5。
+- **实际核对**：[恒温器文档验收](../status/validation/thermostat-validation.md#thermostat-docs-20261102)：
+  [系综标准](../standards/ensembles.md)、[兼容矩阵](../standards/compatibility-matrix.md)、
+  README/索引/当前状态、MPI/thermo/测试合同与 [测试入口](../../tests/thermostats/README.md)
+  已更新；单位、ramp 浮点顺序、3N、种子/cache、分段和非连续 restart 与代码一致。
+- 实际命令在带日期记录中；复现示例明确标注。CLI/语法与本轮 Markdown 本地链接终检通过。
+  原始非通过统计与脚本失败保留，未改 golden、容差或参考树。
 
 ---
 
@@ -1495,11 +1392,11 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 
 **G-A（恒温器）**
 
-- [ ] A0–A6 完成；A7 不阻塞。
-- [ ] NHC/BDP 在 M1 P1/P2/P4（含 fallback）与 M2a P2/P4 通过。
-- [ ] NHC P1 GPUMD golden；BDP 多种子统计；同 seed 可复现。
-- [ ] restart 不连续已文档化；兼容矩阵/用户文档更新。
-- [ ] 现有 NVE/`nvt_ber` golden 全过。
+- [x] A0–A6 完成；A7 不阻塞。
+- [x] NHC/BDP 在 M1 P1/P2/P4（含 fallback）与 M2a P2/P4 通过。
+- [x] NHC P1 GPUMD golden；BDP 多种子统计；同 seed 可复现。
+- [x] restart 不连续已文档化；兼容矩阵/用户文档更新。
+- [x] 现有 NVE/`nvt_ber` golden 全过。
 
 **G-B（控压器）**
 
@@ -1626,6 +1523,6 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 
 ---
 
-> 本计划的状态是 **PROPOSED**。维护者确认第 5 节 Gate 0 决策后，从 A0 开始逐卡派发；
-> 每个 Gate 的证据入库并通过后，才进入下一阶段。计划本身不替代代码审查、法务复核或
+> 本计划的状态是 **IN PROGRESS**。维护者已于 2026-10-30 确认第 5 节 Gate 0 决策；A0、A1、A2 已完成，
+> 当前唯一下一步为 B0（压力 oracle）。每个 Gate 的证据入库并通过后，才进入下一阶段。计划本身不替代代码审查、法务复核或
 > 真实的 GPU/MPI 验收。

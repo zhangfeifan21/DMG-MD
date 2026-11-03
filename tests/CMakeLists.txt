@@ -2,6 +2,10 @@ add_executable(dmgmd_run_parser_tests run_parser_tests.cpp)
 target_link_libraries(dmgmd_run_parser_tests PRIVATE dmgmd_input)
 add_test(NAME dmgmd.run_parser COMMAND $<TARGET_FILE:dmgmd_run_parser_tests>)
 
+add_executable(dmgmd_ensemble_control_tests ensemble_control_tests.cpp)
+target_link_libraries(dmgmd_ensemble_control_tests PRIVATE dmgmd_ensemble_control)
+add_test(NAME dmgmd.ensemble_control COMMAND $<TARGET_FILE:dmgmd_ensemble_control_tests>)
+
 add_executable(dmgmd_model_parser_tests model_parser_tests.cpp)
 target_link_libraries(dmgmd_model_parser_tests PRIVATE dmgmd_input)
 target_compile_definitions(dmgmd_model_parser_tests PRIVATE
@@ -31,6 +35,26 @@ add_test(
 set_tests_properties(dmgmd.domain_neighbor_cuda PROPERTIES SKIP_RETURN_CODE 77)
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_executable(dmgmd_nhc_fixture thermostats/nhc_fixture.cpp)
+target_link_libraries(dmgmd_nhc_fixture PRIVATE dmgmd_ensemble_control)
+add_test(NAME dmgmd.nhc_fixture
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/thermostats/check_nhc_fixture.py
+          --candidate $<TARGET_FILE:dmgmd_nhc_fixture>)
+add_executable(dmgmd_svr_fixture thermostats/svr_fixture.cpp)
+target_link_libraries(dmgmd_svr_fixture PRIVATE dmgmd_ensemble_control)
+add_test(NAME dmgmd.svr_fixture
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/thermostats/check_svr_fixture.py
+          --candidate $<TARGET_FILE:dmgmd_svr_fixture>)
+add_executable(dmgmd_harmonic_sampler thermostats/harmonic_sampler.cpp)
+target_link_libraries(dmgmd_harmonic_sampler PRIVATE dmgmd_ensemble_control)
+add_executable(dmgmd_autocorrelation thermostats/autocorrelation.cpp)
+add_test(NAME dmgmd.thermostat_statistics
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/thermostats/test_statistics.py)
+set_tests_properties(dmgmd.thermostat_statistics PROPERTIES
+  ENVIRONMENT "DMGMD_ACF_HELPER=$<TARGET_FILE:dmgmd_autocorrelation>")
+add_library(dmgmd_ensemble_factor_probe SHARED thermostats/scalar_broadcast_probe.cpp)
+target_link_libraries(dmgmd_ensemble_factor_probe PRIVATE MPI::MPI_CXX)
+
 add_test(
   NAME dmgmd.long_nve_analysis
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/long_nve/test_long_nve.py

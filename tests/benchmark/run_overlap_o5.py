@@ -259,7 +259,7 @@ class Experiment:
                 if needs_reference:jobs.append(dict(case=case,ranks=8,backend=backend,mode='full',version='o4',steps=1,warmup=1,
                                                    id=f'{case}-p8-{backend}-verify-full-oracle',reused_result=None))
         freeze(self.root/'science-accepted-plan.json',dict(identity=self.identity(),jobs=jobs,
-               reused_o4_gate='docs/status/validation/overlap-o4-20261016.md; exact binary 860c1ba3; P2/P4 verify'))
+               reused_o4_gate='docs/status/validation/communication-computation-overlap.md#overlap-o4-20261016; exact binary 860c1ba3; P2/P4 verify'))
         results=[]
         for job in jobs:
             if job['reused_result']:

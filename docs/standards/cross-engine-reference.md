@@ -51,7 +51,8 @@ DMG-MD 是 P MPI rank、每 rank 一 GPU。LAMMPS 启动包装器给每个 rank 
 
 正式速度比还需固定且核验每 rank CPU 核数、NUMA 放置、独占节点、相同 GPU 设备、
 重复波动及编译精度，并保留原始日志与二进制/源码身份。当前 benchmark runner 已能
-编排三引擎，但固定 CPU/NUMA 接口尚未实现，因此现阶段 smoke/pilot 只验证流程，
+编排三引擎，DMG-MD 也已有[固定 CPU/NUMA 启动与独立核验](cpu-binding.md)；GPUMD
+聚合入口和 LAMMPS 的正式绑定验收仍未完成，因此现阶段 smoke/pilot 只验证流程，
 不得将其数值作为正式效率结论。精确 case/profile、步数和重复次数以
 `tests/benchmark/manifest.json` 为准。
 

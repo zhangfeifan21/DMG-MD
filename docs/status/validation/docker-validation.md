@@ -119,5 +119,5 @@ CTest 后留下这个文件，内容是第二个解析器测试的 `dftd3` 命�
 `ctest --test-dir build --output-on-failure -R '^dmgmd.run_parser$'`，结果通过；同一不可写
 旧文件仍存在时，新测试也通过且没有留下新文件。用户的镜像仍需同步源码、重新构建后验收。
 
-后续另一台服务器的容器 benchmark 数据见[2026-09-26 报告](../performance/benchmark-multigpu-results-20260926.md)。
+后续另一台服务器的容器 benchmark 数据见[2026-09-26 报告](../performance/benchmark-multigpu-results.md#multigpu-20260926-report)。
 它不补足本记录的 T4/Ubuntu22.04 宿主或完整当前镜像验收。

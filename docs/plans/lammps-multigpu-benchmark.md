@@ -7,7 +7,7 @@
 [LAMMPS README](../../tests/lammps_reference/README.md)和[benchmark README](../../tests/benchmark/README.md)。
 不在计划维护另一份转换规则。
 
-[2026-10-09 验收](../status/validation/lammps-reference-20261009.md)记录 GPUMD/LAMMPS
+[2026-10-09 验收](../status/validation/lammps-reference.md#lammps-reference-20261009)记录 GPUMD/LAMMPS
 11 个静态 case、LAMMPS 1/2 GPU 和三引擎单 GPU smoke。正式效率结果尚无。
 
 ## 剩余步骤

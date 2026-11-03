@@ -3,8 +3,8 @@
 类别：辅助诊断计划。状态：**IN PROGRESS**（C0/C1 完成；O5 窄 C2 已测，完整 C2/C3 待执行）。
 更新日期：2026-10-21。
 
-已有[CPU 采样合同](../standards/cpu-sampling.md)、[C1 验收](../status/validation/cpu-sampling-c1-20261009.md)
-与[O1 固定资源窄基线](../status/performance/overlap-baseline-20261012.md)。采样不执行绑定；
+已有[CPU 采样合同](../standards/cpu-sampling.md)、[C1 验收](../status/validation/cpu-sampling.md#cpu-sampling-c1-20261009)
+与[O1 固定资源窄基线](../status/performance/communication-computation-overlap-results.md#o1-20261012-report)。采样不执行绑定；
 DMG-MD 已有[固定 CPU/NUMA 入口](../standards/cpu-binding.md)；
 跨引擎及其他调度器验收仍见[绑定剩余计划](mpi-cpu-binding.md)。O1–O3 已通过手工映射
 与 C1 核验推进，C2/C3 不阻塞其正确性工作。
@@ -17,7 +17,7 @@ GPU launch、MPI、layout/迁移和 root formatter；修速在 root CPU，自适
 
 O5 在 carbon_200k/P2/CudaAware/wait 固定四物理核/rank 下完成 off/proc/详细诊断
 各五次随机重复，采样周期 0.2 s；比较正式段、进程墙钟及启动/采集器完整生命周期，
-主性能 CPU 关闭。数据与不确定性见 [O5 记录](../status/performance/communication-computation-overlap-o5-results-20261021.md)。
+主性能 CPU 关闭。数据与不确定性见 [O5 记录](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)。
 这仅满足 O5 的局部扰动校准，不代表下列完整 C2/C3 已完成。
 
 工具可读 rank/task ticks、affinity、可见 cgroup 限制和 marker；指标/缺失语义只在合同维护。

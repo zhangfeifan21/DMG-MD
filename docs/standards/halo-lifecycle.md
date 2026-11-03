@@ -107,7 +107,7 @@ D2H 括号含发送源 event 等待，MPI wait/post 语义保持。不得把新�
 增长/复用、重复 finish、progress-only、两种完成顺序和 rank0 单边故障；故障注入通过
 独立测试二进制的链接 wrapper，生产没有故障开关。完整 O2 domain 三模式矩阵继续保留，
 同时比对已锁定 O2 输出；验收命令/结果/串行成本见
-[O3 实测](../status/validation/halo-lifecycle-20261015.md)。
+[O3 实测](../status/validation/communication-computation-overlap.md#halo-lifecycle-20261015)。
 
 ## O4 消费者与诊断
 
@@ -121,4 +121,4 @@ CudaAware output sync 保留。lease、单槽位、四个请求、方向 tag 与
 ready 的 host 观察、post 前后、send/recv 各自首次观察和 unpack 完成观察；均使用
 CLOCK_MONOTONIC。trace 关闭不读时钟。观察时间是完成的上界，不是 NIC 完成瞬间。
 独立 wrapper 延迟 post/完成用于状态验收，不能作为网络实际传输证据。O4 验收与 profiler
-重算入口见 [O4 报告](../status/validation/overlap-o4-20261016.md)。
+重算入口见 [O4 报告](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)。

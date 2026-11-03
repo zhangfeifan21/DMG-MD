@@ -10,6 +10,7 @@ M1/P1 仍走 `src/runtime.cu::run_segment` 的每步 thermo 路径。
 | `dump_thermo I` | `write_thermo_row`：温度、动能、势能和 stress | `step % I == 0` |
 | `dump_xyz I` | `write_xyz`：无条件写入头部 energy/stress；与所选逐原子 quantities、group 或输出精度无关 | `step % I == 0` |
 | NVT Berendsen | VV2 后的温度反馈，随后缩放 owned velocity；输出仍使用原先缩放前 thermo | 每步，包括耦合小到不触发缩放的配置 |
+| NVT NHC / BDP | VV2 后每步反馈全局温度；root 更新链后半步或取样，再缩放 owned velocity | 每步；NHC 还在 VV1 前另归约一次 owned KE，不属于按需跳过的 8-double thermo |
 | `dump_restart I` | `write_restart` 只读取 box、identity 和 gathered owned snapshot | 不消费 thermo |
 | snapshot gather | gid、position、velocity、force、potential、virial 和可选 unwrapped | 不消费 thermo；XYZ formatter 的需求单独计算 |
 | adaptive timestep | owned velocity 最大值及独立全局 MAX | 不消费 thermo |

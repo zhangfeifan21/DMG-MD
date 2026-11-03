@@ -315,7 +315,7 @@ CPU 测试覆盖几何门槛、预热排除、后端回退/错误绑定拒绝、
 默认 `--cpu-sampling off`，保留原有 benchmark 启动行为。CPU 工具只支持单节点 Linux、
 Open MPI 的 DMG-MD rank；GPUMD 不在 rank 采样范围。指标、原始 schema、共享 quota 与
 缺失数据语义见 [CPU 采样合同](../../docs/standards/cpu-sampling.md)，
-本轮验证见 [C1 记录](../../docs/status/validation/cpu-sampling-c1-20261009.md)。
+本轮验证见 [C1 记录](../../docs/status/validation/cpu-sampling.md#cpu-sampling-c1-20261009)。
 
 ```bash
 source ../env/md-mpi.sh
@@ -379,7 +379,7 @@ A=off、B=proc，同输入、GPU telemetry 与绑定，随机化组序、至少�
 并用程序的 CONFIG 与累计执行 SUMMARY 检查实际模式，结果写 actual_partition。
 serial 仍先完成 halo，再分区串行运行；它没有 overlap。正式成本比较使用相同输入与
 CPU/NUMA/GPU、关闭详细 profiler，另用 trace 组诊断，禁止用 verify 的双计算测速度。
-O2 原始成本样本与限制见 [状态](../../docs/status/validation/overlap-partition-20261015.md)。
+O2 原始成本样本与限制见 [状态](../../docs/status/validation/communication-computation-overlap.md#overlap-partition-20261015)。
 
 ## O4 小规模检查
 
@@ -430,7 +430,7 @@ frozen-plan 和完整随机顺序；以文件锁串行调度，独立进程 tria
 新批次。失败保留，不按速度删除，也不把 verify/trace/pilot 混进主统计。
 
 本轮实际目录为 `dmgmd-overlap-o5-20261016/`，冻结基本方案 710 个，按规则追加至
-870 个（主矩阵 600、历史 150、退化 120），独立采用验证另有 40 个；实际完成状态以[O5 报告](../../docs/status/performance/communication-computation-overlap-o5-results-20261021.md)
+870 个（主矩阵 600、历史 150、退化 120），独立采用验证另有 40 个；实际完成状态以[O5 报告](../../docs/status/performance/communication-computation-overlap-results.md#o5-20261021-report)
 和产物 `analysis-status.json` 为准。实验环境采用显式白名单，继承的 DMGMD 调试开关清除；
 基础环境、工具、输入与二进制身份在正式采集前冻结。详细诊断采用相同 warmup，C1 与主性能分组。不将脚本、pilot 或 smoke 通过写成 O5 完成。
 
@@ -564,7 +564,7 @@ bash dmgmd-overlap-o65-20261026/recompute.sh
 A–D 配对区间，生成 `candidate-evidence.json`。首次 `--seal` 只在全部采集及三个 reference
 前后状态核对完成后执行；后续拒绝修改原始清单。replay 的缓存、输出恢复与 producer
 上下文不同于真实流水线，C−D 不能精确解释原墙钟或代替 O9 的整步净收益。
-本轮范围、数值门槛、恢复记录与候选证据见 [O6.5 实测](../../docs/status/performance/overlap-o65-results-20261027.md)。
+本轮范围、数值门槛、恢复记录与候选证据见 [O6.5 实测](../../docs/status/performance/nep-execution-cost.md#o65-results-20261027-report)。
 
 ## O7 缓存判定归约
 
@@ -595,7 +595,7 @@ python3 tests/mpi/run_cache_decision.py \
 该测试覆盖严格阈值两侧/等号、非 root 贡献者、PBC、多 run、空 rank、非有限平方及
 multi-box fatal，逐字节比较科学文件；P8 使用满足 M2a eligibility 的加长盒。
 每步通信账本仍由 `tests/mpi/run_mpi_domain.py` 独立按 owned/layout/migration 记录核算。
-实测范围、冻结设计与原始目录见 [O7 报告](../../docs/status/performance/overlap-o7-results-20261023.md)。
+实测范围、冻结设计与原始目录见 [O7 报告](../../docs/status/performance/cache-reduction-results.md#o7-results-20261023-report)。
 
 ## O8 按需 NVE thermo
 
@@ -622,7 +622,7 @@ CPU 诊断使用 `o5_rank_output.py` 保存独立 rank stdout/stderr 与拼接 p
 避免 MPI 合并输出交错破坏 PID/clock marker；有 error 或缺失 CPU status 时拒绝该诊断。
 `main`/`analyze` 校验保存的门槛和科学文件；无效样本保留，不按速度删样本。
 消费者与 event 就绪边界见[thermo 合同](../../docs/standards/thermo-demand.md)。
-冻结设计、追加规则、实际结果及采集器修正见[O8 报告](../../docs/status/performance/overlap-o8-results-20261026.md)。
+冻结设计、追加规则、实际结果及采集器修正见[O8 报告](../../docs/status/performance/thermo-demand-results.md#o8-results-20261026-report)。
 
 ## O9 独立候选确认
 
@@ -656,7 +656,7 @@ python3 tests/benchmark/test_overlap_o9.py
 先核验完整原始清单，再使用保存的源码离线重算；不依赖当前 checkout 的分析实现或 GPU。
 
 `--legacy-probe` 仅回放 2026-10-26 的历史权限探测协议，不能用来完成新一轮 O9。
-历史结果见 [首次 O9 报告](../../docs/status/performance/overlap-o9-results-20261026.md)。
+历史结果见 [首次 O9 报告](../../docs/status/performance/nep-candidate-validation.md#o9-results-20261026-report)。
 
 ## O8.5 producer 拆分实验
 
@@ -704,7 +704,7 @@ bash dmgmd-overlap-o85-20261027/recompute.sh
 遥测表；`candidate-evidence.json` 给 O9 交接，不能把拆分成本下降直接当作生产采用证据。
 本轮 `recompute.sh` 使用封存的 `analysis-source/`，无需 GPU 或未来工作树源码，并生成
 报告聚合 `report-metrics.json`。已完成的范围、正负结果和证据身份见
-[O8.5 实测](../../docs/status/performance/overlap-o85-results-20261027.md)。
+[O8.5 实测](../../docs/status/performance/producer-schedule-results.md#o85-results-20261027-report)。
 
 
 ## O8.6 producer 紧凑索引与几何内缩
@@ -754,8 +754,8 @@ marker 和至少 80% 覆盖，主墙钟 `formal_cpu=null`。不将 GPU 设备全
 ## O11 限定范围采用复验
 
 `run_overlap_o11.py` 复用 O9 已验收二进制，以新配对块验证预选 B-wait。
-范围、缺项与统计规则在采样前冻结；400 个正式 trial、80 个短程科学对照、
-48 个 full/serial/wait/poll CPU 诊断。核心为 carbon_200k/P2 与 water_400k/P8
+范围、缺项与统计规则在采样前冻结；800 个正式 trial（初始 400 加一次预定追加 400）、
+80 个短程科学对照、48 个 full/serial/wait/poll CPU 诊断。核心为 carbon_200k/P2 与 water_400k/P8
 双后端；water/P4、carbon_1m/P2、高重建及空 early 为探索/退化对照。
 不声称覆盖完整三体系 × P1/2/4/8 矩阵，不改变默认或自动阈值。
 
@@ -767,7 +767,7 @@ python3 tests/benchmark/run_overlap_o11.py pilot --root dmgmd-overlap-o11-202610
 python3 tests/benchmark/run_overlap_o11.py main --root dmgmd-overlap-o11-20261029
 python3 tests/benchmark/run_overlap_o11.py cpu --root dmgmd-overlap-o11-20261029
 python3 tests/benchmark/run_overlap_o11.py analyze --root dmgmd-overlap-o11-20261029
-# 仅 analysis.json 的 extension_required 为 true 时运行 extension，再 analyze。
+# 本轮已完成一次冻结追加；extension_required=true 仅表示宽度条件仍触发，不表示还有第二次追加。
 python3 tests/benchmark/run_overlap_o11.py seal --root dmgmd-overlap-o11-20261029
 python3 tests/benchmark/recompute_overlap_o11.py --root dmgmd-overlap-o11-20261029
 ```

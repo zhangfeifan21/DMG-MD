@@ -1,4 +1,5 @@
 #include "dmgmd/runtime.hpp"
+#include "dmgmd/ensemble_control.hpp"
 
 // The NEP force path is the DMG-MD-owned replication of the minimal GPUMD
 // subset in src/gpumd_compat (copied from the pinned reference commit
@@ -658,6 +659,22 @@ void run_segment(
   // remaining consumers of non-owned velocity are correct_velocity (restored
   // here on trigger steps) and ownership migration itself (which syncs the
   // authoritative half-step velocity before a new owner takes over).
+  const EnsembleController controller(
+      ensemble, checked_int(atoms.counts.global_count, "global_count"),
+      base_time_step, mpi.is_root(),
+      ensemble.kind == EnsembleKind::nvt_bdp
+          ? parse_ensemble_seed(std::getenv("DMGMD_ENSEMBLE_SEED"))
+          : kDefaultEnsembleSeed);
+  const auto scale_velocity = [&](double factor) {
+    const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
+    if (owned_count != 0) {
+      const int stride = checked_int(atoms.counts.local_count(), "local_count");
+      scale_owned_velocity<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
+          ownership.plan().device_owned_indices, owned_count, stride, factor,
+          atoms.velocity.data());
+    }
+    check_cuda(cudaGetLastError(), "ensemble velocity scaling");
+  };
   int thermo_count = 0;
   int restart_count = 0;
   for (const Measurement& measurement : measurements) {
@@ -703,6 +720,24 @@ void run_segment(
       atoms.previous_position.copy_from_device(atoms.position.data());
     }
     // 3. VV first half + position/unwrapped update: current owned slots.
+    if (controller.needs_pre_force_kinetic_energy()) {
+      // The quantity-0 block is precisely the existing owned kinetic sum;
+      // no replica slots or virial/energy blocks participate in this reduction.
+      find_owned_thermo_sums<<<1, kThermoThreads>>>(
+          ownership.plan().device_owned_indices,
+          checked_int(ownership.current().owned_count(), "owned_count"),
+          checked_int(atoms.counts.local_count(), "local_count"), atoms.mass.data(),
+          atoms.potential.data(), atoms.velocity.data(), atoms.virial.data(),
+          device_thermo.data());
+      check_cuda(cudaGetLastError(), "launch owned pre-force kinetic reduction");
+      mpi.allreduce_sum_device(device_thermo.data(), 1, communication);
+      double ek2 = 0.0;
+      device_thermo.copy_to_host(&ek2, 1);
+      const auto factor = ensemble_velocity_factor(controller, mpi, communication, [&] {
+        return controller.before_force(time_step, ek2 * 0.5, step, steps);
+      });
+      scale_velocity(*factor);
+    }
     launch_velocity_verlet(atoms, ownership, true, time_step);
     // 4. Indexed position Allgatherv restores the replicated state.
     mpi.allgather_indexed_device_soa(
@@ -721,22 +756,10 @@ void run_segment(
     const ThermoState thermo = compute_thermo(
         atoms, box, ownership, device_thermo, mpi, communication);
 
-    if (ensemble.kind == EnsembleKind::nvt_ber) {
-      const double fraction = static_cast<double>(step) / static_cast<double>(steps);
-      const double target = ensemble.initial_temperature +
-                            (ensemble.final_temperature - ensemble.initial_temperature) * fraction;
-      const double coupling = 1.0 / ensemble.temperature_coupling;
-      if (coupling > 1.0e-5) {
-        const double factor = std::sqrt(1.0 + coupling * (target / thermo.values[0] - 1.0));
-        const int owned_count = checked_int(ownership.current().owned_count(), "owned_count");
-        if (owned_count != 0) {
-          const int stride = checked_int(atoms.counts.local_count(), "local_count");
-          scale_owned_velocity<<<(owned_count + kThreads - 1) / kThreads, kThreads>>>(
-              ownership.plan().device_owned_indices, owned_count, stride, factor,
-              atoms.velocity.data());
-        }
-        check_cuda(cudaGetLastError(), "Berendsen velocity scaling");
-      }
+    if (const auto factor = ensemble_velocity_factor(controller, mpi, communication, [&] {
+          return controller.after_force(&thermo.values, step, steps);
+        })) {
+      scale_velocity(*factor);
     }
     bool need_snapshot = false;
     for (const Measurement& measurement : measurements) {
@@ -1266,6 +1289,8 @@ void run_replicated(
   mpi.assert_same_fingerprint(detail::file_fingerprint("model.xyz"), "model.xyz");
   mpi.assert_same_fingerprint(
       detail::file_fingerprint(absolute_potential), "potential file");
+  validate_runtime_ensembles(program);
+  detail::validate_ensemble_environment(program, mpi);
   mpi.initialize_device();
   gpumd_compat::Box box = detail::make_box(model.box);
 

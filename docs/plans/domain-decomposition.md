@@ -42,7 +42,7 @@ baseline、MPI 与 long_nve。先做同步版本，随后另评估 overlap；M2b
 - 节点内连续 slab/rank 放置须实测；周期 slab 环含首尾跨节点边，不能按非周期链计数。
 - [双物理节点 I/O 验收](multi-node-io.md)暂缓；恢复后验证本地 TMPDIR、故障与清理。
 - 补跨节点 restart、自检及强/弱扩展，保留网络、拓扑、CPU/GPU 资源与重复分布。
-- [2026-09-26 单机 benchmark](../status/performance/benchmark-multigpu-results-20260926.md)
+- [2026-09-26 单机 benchmark](../status/performance/benchmark-multigpu-results.md#multigpu-20260926-report)
   已有结果；单机实测不等于跨节点效率。
 
 ## 更远扩展

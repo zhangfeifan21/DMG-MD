@@ -1,6 +1,6 @@
 # 输入/输出兼容矩阵
 
-类别：现行标准。核对日期：2026-10-16。
+类别：现行标准。核对日期：2026-11-02。
 
 GPUMD 参考 commit 为 `9d23496e41319b9e2af5221a7df6285387401d1e`。本页声明 DMG-MD 当前
 支持范围；标为参考证据的 `src/force`、`src/measure` 等路径均在锁定 GPUMD 树中，行号只
@@ -9,9 +9,11 @@ GPUMD 参考 commit 为 `9d23496e41319b9e2af5221a7df6285387401d1e`。本页声�
 
 ## 1. 产品与并行范围
 
-支持普通 NEP4/5 与 NEP-ZBL、单 bead 经典 MD、NVE/nvt_ber 及下表命令。
+支持普通 NEP4/5 与 NEP-ZBL、单 bead 经典 MD、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`
+及下表命令。恒温器的状态、随机数与统计限制见[系综标准](ensembles.md)。
 P1 恒走 M1；P>1 只支持正交全周期，满足 large-box/slab 半径条件才走 M2a，否则在已支持
 范围内 M1 fallback。详细条件见[MPI runtime](mpi-runtime.md)。
+M2a 支持上述三种 NVT；NPT 和非 NEP 势仍不支持，不能从 NVT 支持外推。
 
 每作业恰好一个 potential。GPUMD 的多 potential 追加及方向参数不在 DMG-MD 范围；
 NEP3、temperature/dipole/polarizability/charge 模型均拒绝。白名单以外的命令/ensemble
@@ -113,18 +115,21 @@ ANN num_neurons 0
 | --- | --- | --- |
 | potential | `potential FILE` | 必须在 run 前；第二条 potential 或第三方向参数拒绝 |
 | velocity | `velocity T [ANY_TOKEN SEED]` | T>0 K；四 token 形式读取最后的 int seed，第三 token 不校验 |
-| time_step | `time_step DT [MAX_DISTANCE]` | DT 为有限实数 fs，默认 1 fs；可选最大距离>0 Å，按全局 owned 最大速度限步；负 DT 边界未验收 |
+| time_step | `time_step DT [MAX_DISTANCE]` | DT 为有限实数 fs，默认 1 fs；可选最大距离>0 Å，按全局 owned 最大速度限步。NHC/BDP 要求 DT>0 且不接受 MAX_DISTANCE；旧系综负 DT 边界未验收 |
 | ensemble | `ensemble nve` / `ensemble nvt_ber T1 T2 TAU` | T1/T2>0 K，TAU≥1；目标按 step/steps 插值；run 必须已有 ensemble |
+| ensemble | `ensemble nvt_nhc T1 T2 Tdamp` / `ensemble nvt_bdp T1 T2 Tdamp` | 温度有限且>0 K，Tdamp 有限且≥1，单位步数；目标同上。root 链/RNG、段首重置、默认 seed 见[系综标准](ensembles.md) |
 | run | `run STEPS` | int；0/负步数 parser 未拒绝，未作为验证过的动力学兼容行为 |
 | dump_thermo | `dump_thermo INTERVAL` | int>0；thermo.out append |
 | dump_xyz | `dump_xyz INTERVAL FILE [OPTIONS/QUANTITIES]` | interval>0；见下表；同段可多条 |
 | dump_restart | `dump_restart INTERVAL` | int>0；restart.xyz 覆盖 |
-| correct_velocity | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval≥10，method 有效；step%interval==0，含段内 step0 |
+| correct_velocity | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval≥10，method 有效；step%interval==0，含段内 step0；与 NHC/BDP 组合明确拒绝 |
 
 无输入 vel 时 root 默认以 300 K 初始化并广播；无 seed 的随机初速不保证重复运行相同。
 显式 velocity 按全局输入顺序生成并做全局动量修正，不是每 rank 独立 RNG。
 每段 run 先计算初始 force；dump 在完成的 step+1 达 interval 时触发，无 step0 dump。
 同段重复 dump_thermo/restart 拒绝；没有后续 run 的 dump 在结束时报错。
+NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全文件预检在任何段写出科学
+输出前完成，具体白名单见[限制](ensembles.md#并行限制与通信)。
 
 ### dump_xyz 选项
 
@@ -150,6 +155,7 @@ ANN num_neurons 0
 | position/velocity/type/mass/group、box、global_time | 保留；当前不支持动态变盒 |
 | potential | 保留同一实例，不支持参考程序的多势追加 |
 | timestep / ensemble | 保留最近配置，直到覆盖 |
+| NHC 链 / BDP RNG 和 Gaussian cache | 每段新建；NHC 质量固定于该段 T1；BDP 相同 seed 重复使用同一随机流 |
 | dump / correct_velocity / maximum_distance | 段末清空，后段须重新声明 |
 | ownership/cache | M1 owner 与 M2a epoch 延续；M2a 段首 force 不强制 rebuild |
 | 文件 | thermo/单文件 XYZ append，restart 覆盖 |
@@ -174,11 +180,14 @@ ANN num_neurons 0
 
 | 列 | 单位/语义 |
 | --- | --- |
-| `T` | K，瞬时 kinetic temperature |
-| `KE` | eV，`1.5*(N-N_fixed)*kB*T`；dump代码没有再减move group |
+| `T` | K，`Σ_owned m*v²/(3N*kB)`；无 fixed/move group，不扣质心 |
+| `KE` | eV，`1.5*N*kB*T` |
 | `PE` | eV，全局每原子PE之和 |
 | `sxx syy szz syz sxz sxy` | GPa，virial+kinetic stress / volume 后乘160.2177 |
 | `a,b,c` 9列 | Å，晶格向量逐个输出 |
+
+NVT 的 thermo 是 VV2 后、末次恒温缩放前的值；同一步 XYZ/restart 的速度已经缩放。
+温度定义保持 3N，与采样 fixture 的有效自由度限制分别说明。
 
 ### 6.2 `dump_xyz`
 
@@ -201,7 +210,9 @@ ANN num_neurons 0
 - velocity由内部单位除10.18051为 Å/fs。
 - 不保存 time、force、PE、virial、RNG、thermostat state或global ID。
 
-因此它能作为新的 `model.xyz` 状态输入，但代码不会自动重命名/读取。不同rank数恢复只可承诺状态字段兼容；NVT/RNG的连续性为 `UNKNOWN`。
+因此它能作为新的 `model.xyz` 状态输入，但代码不会自动重命名/读取。不同 rank 数恢复承诺
+状态字段兼容；NHC/BDP 重建链/RNG，**不提供轨迹连续 restart**。多段 `run` 也重新初始化这些
+隐藏状态；Berendsen/NVE 的既有 snapshot 语义不变，详见[系综标准](ensembles.md#分段输出与-restart)。
 
 ### 6.4 隐式 neighbor.out
 

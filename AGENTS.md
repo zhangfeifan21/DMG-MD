@@ -4,20 +4,50 @@
 
 本仓库开发 **DMG-MD**（Distributed Multi-GPU Molecular Dynamics Runtime）。目标是一 MPI rank 对应一张 GPU 的多节点、多 GPU 经典分子动力学 runtime。
 
-面向用户的兼容目标是：继续直接读取 GPUMD 的 `model.xyz`、NEP/NEP-ZBL potential 文件和 `run.in`。对已经声明支持的功能，输入语法、默认值、单位、校验、输出文件名、输出列及物理语义必须与锁定的 GPUMD 参考版本一致；对未支持命令必须识别并报出明确的 `unsupported` 错误，不得静默忽略。
+面向用户的兼容目标是：继续直接读取 GPUMD 的 `model.xyz`、potential 文件和 `run.in`，按阶段扩展已验证的势与系综。对已经声明支持的功能，输入语法、默认值、单位、校验、输出文件名、输出列及物理语义以锁定 GPUMD 参考版本和现行兼容矩阵为准；有意兼容偏离（如 BDP 固定默认 seed）必须在标准中明确记录并验证。对未支持命令必须识别并报出明确的 `unsupported` 错误，不得静默忽略。
 
-当前产品范围仅包括：
+项目已进入 **v1.0 正式版开发**，主线由
+[开发流程](docs/plans/dmg-md-v1.0-development-workflow.md)管理，逐 Step 状态与证据见
+[开发进度](docs/plans/dmg-md-v1.0-progress.md)。必须区分发布目标与当前实现，不能将
+旧 NEP/NVE/基础 NVT 原型范围当作后续开发上限，也不能将计划功能写成已经支持。
 
-- 普通经典 MD，单 bead；
-- NEP/NEP-ZBL；
-- NVE 和一种经验证的基础 NVT；
-- owned/ghost 域分解、halo 通信、全局归约和兼容输出所需的最小功能。
+v1.0 的 P0 发布目标：
 
-当前不要求 PIMD、MC、phonon、minimize、deposition、PLUMED、长程静电、其他势函数及完整 measurement 系统。
+- 普通经典 MD，单 bead；NEP4/5/NEP-ZBL、LJ、EAM/alloy；
+- `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp`、`npt_ber`、`npt_scr`；
+- M1 覆盖上述势与六种系综；NPT 限各向同性、正交全周期盒；M2a 限 NEP 的 NVE 与三种 NVT；
+- 版本/CLI、错误与 restart 合同、用户文档、许可证与第三方声明、性能回归、打包和发布验收。
+
+Tersoff 1989、Langevin/BAOAB、NPT 三个对角分量与可选 restart sidecar 属于 P1（v1.1 候选）。
+M2a NPT/非 NEP、NPH、MTTK、Parrinello–Rahman、三斜 NPT、多势混合、变盒命令与
+minimize、PLUMED/长程静电等暂缓；PIMD、MC、phonon、deposition 和完整 measurement
+系统不在本轮 v1.0 范围。详细优先级与边界以开发流程 §1 为准。
 
 默认使用中文报告结论，即使任务说明使用英文。
 
-## 当前代码基线：M1/M2a + O1–O4/O7/O8；O6.5/O8.5/O8.6/O9/O11 限定复验已完成
+## v1.0 当前阶段与实施顺序
+
+截至 2026-11-03，Gate 0 默认决策已确认，A0–A6 已完成，G-A 在所列 NEP/单节点范围通过；
+下一步是 **B0：压力 oracle 与单位/布局验收**，B/C 阶段尚未启动，v1.0 尚未发布。
+后续按流程推进 B0/B1/G-B、C0–C3/C5 与 D 阶段；A7/C4 为独立 P1 可选项，不阻塞 P0。
+执行开发任务时一次只推进获派的 Step，按任务卡完成依赖、停止条件、回归和证据记录；
+文档维护不自动授权启动后续开发 Step。
+
+当前已实现能力与边界：
+
+- 势仍为 NEP4/5 与 NEP-ZBL；系综为 `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp`。
+  NHC/BDP 已覆盖 M1 P1/P2/P4、M2a P2/P4 与所列双后端验收；NPT、LJ、EAM 尚未实现。
+- M1/M2a 共用 `EnsembleController`；NHC 链与 BDP RNG 只由 rank 0 持有，速度缩放只作用于 owned。
+  三种 NVT 沿用 `3N` 温度自由度和步数型 Tdamp；NHC 质量使用 `dt_internal * Tdamp`。
+- NHC/BDP 要求固定正步长，拒绝 `correct_velocity`、自适应步长及非默认实验分区/重叠选项。
+  BDP 默认 seed 为 `12345678`，`DMGMD_ENSEMBLE_SEED` 的设置状态和原始字符串须在各 rank 一致。
+- 每段 `run` 重建链/RNG/cache；`restart.xyz` 不保存这些隐藏状态，跨 rank 恢复是新作业，
+  不承诺 NHC/BDP 轨迹连续。详细合同见[系综标准](docs/standards/ensembles.md)与
+  [兼容矩阵](docs/standards/compatibility-matrix.md)。
+- 统计结论限于验收体系；额外 harmonic 诊断总 K 通过、轴向均值 INCONCLUSIVE，
+  不作普遍遍历性承诺。性能门仍为 PENDING-D4，跨节点与 release 长程未完成。
+
+## 当前并行基线：M1/M2a
 
 当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
@@ -48,7 +78,7 @@ eligibility 后在两条数据面之间分派：
 - `docs/standards/`：当前产品、架构和测试合同；
 - `docs/reference/`：锁定 GPUMD 调用链与 kernel 证据；
 - `docs/operations/`：操作手册；
-- `docs/status/current.md`：当前状态；`status/validation/` 和 `status/performance/` 保存带日期的验收与实测；
+- `docs/status/current.md`：当前状态；`status/validation/` 和 `status/performance/` 按测试目标维护稳定主题报告，每次执行追加带日期的结果节；
 - `docs/plans/`：剩余方案、风险和待办。
 
 M2a 已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
@@ -56,46 +86,49 @@ nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026
 多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。M2b（Fp/partial 分阶段交换）、3D 分解、
 triclinic/非周期 local-domain 仍待后续审批。
 
-后续 P0 方向由 `docs/plans/communication-computation-overlap.md` 分步管理：
+## 独立性能主线：O1–O9 + O11 限定复验；O10 暂缓
+
+O 系列由 `docs/plans/communication-computation-overlap.md` 分步管理，与 v1.0 产品化主线
+无阶段门依赖，共享既有代码与回归合同；不替代 B/C/D 阶段或发布验收。
 O6 已完成稳态拆分诊断，carbon 主损失位于 radial，硬件计数器权限
 受限使微架构原因仍为 INCONCLUSIVE，首轮 O9 以 NO_ADOPTION 结束，报告见
-`docs/status/performance/overlap-o6-results-20261021.md`。O7 于 2026-10-23 已采用一次 reason OR
+`docs/status/performance/nep-execution-cost.md#o6-results-20261021-report`。O7 于 2026-10-23 已采用一次 reason OR
 缓存判定；golden/MPI/nightly NVE、实际调用计数与 60 个配对 trial 完成，整步收益
-INCONCLUSIVE，见 `docs/status/performance/overlap-o7-results-20261023.md`。O8 于 2026-10-26
+INCONCLUSIVE，见 `docs/status/performance/cache-reduction-results.md#o7-results-20261023-report`。O8 于 2026-10-26
 完成并采用按需 NVE thermo：NVE 只在 thermo/XYZ 输出步计算，NVT 保留每步反馈；
 292 个调用计数作业、MPI/nightly、105 个正式 trial 和 8 个 CPU 诊断完成。
-相对 O7 三组增量确认、一组 INCONCLUSIVE，见 `docs/status/performance/overlap-o8-results-20261026.md`。
+相对 O7 三组增量确认、一组 INCONCLUSIVE，见 `docs/status/performance/thermo-demand-results.md#o8-results-20261026-report`。
 O9 于 2026-10-26 完成证据门槛复核；真实 NCU 稳态重试仍受权限拒绝，
 无可信执行候选，按原完成条件以 NO_ADOPTION 结束，未改 NEP 执行；见
-`docs/status/performance/overlap-o9-results-20261026.md`。O6.5 于 2026-10-27 完成真实
+`docs/status/performance/nep-candidate-validation.md#o9-results-20261026-report`。O6.5 于 2026-10-27 完成真实
 图/mask 与同快照 A–D 对照：30 个正式 trial、18 份 trace、50 个独立重放进程及完整
 nightly 42 配置通过。carbon radial / water angular partial 紧凑映射相对 C 的目标耗时
 分别下降约 29.71%/12.32%，支持独立整步试验；D 仍慢于 A，微架构原因仍 INCONCLUSIVE，
-未采用、未测候选整步净收益，见 `docs/status/performance/overlap-o65-results-20261027.md`。
+未采用、未测候选整步净收益，见 `docs/status/performance/nep-execution-cost.md#o65-results-20261027-report`。
 O8.5 于 2026-10-28 完成只拆 filter/descriptor、力计算完整执行的显式 producer 候选：
 GPU CTest 18、producer MPI 313 次执行、受控调度 27、完整 nightly 42 + restart 12、
 120 个六组合正式 trial、24 份 trace 与 8 个 CPU 诊断通过。基础 launch 从 10 降为 7，
 四组拆分成本下降；相对同后端候选 full，water/HostStaged、carbon/CudaAware、
 water/CudaAware 的探索区间确认收益，carbon/HostStaged 仍慢。相对 HostStaged/full
 只有本轮 water/P8/HostStaged 确认约 1.0193×，须交 O9 用新样本独立确认；见
-`docs/status/performance/overlap-o85-results-20261027.md`。未采用，生产默认仍
+`docs/status/performance/producer-schedule-results.md#o85-results-20261027-report`。未采用，生产默认仍
 HostStaged/full、overlap=off、schedule=split。
 O8.6 于 2026-10-28 完成同 E/H 紧凑索引 B 和几何内缩 C；两路线分别通过完整 MPI、
 调度 27、nightly 42 + restart 12，240 个正式 trial、48 份 trace、24 个 CPU 诊断及离线复算通过。
 B/A 的四组 serial/wait 增量获探索区间支持，C/B wait 增量均未确认；相对候选 HostStaged/full，
 carbon 双后端及 water/HostStaged 的 B/C 有本轮净收益，water/CudaAware 仍慢。未采用，见
-`docs/status/performance/overlap-o86-results-20261028.md`。
+`docs/status/performance/producer-schedule-results.md#o86-results-20261028-report`。
 O9 于 2026-10-29 完成独立确认：300 个正式 trial、12 个 CPU 诊断及新科学/MPI/调度门槛通过，
 相同二进制的完整 nightly/GPU 验收经原始清单校验后复用。B 在 carbon_200k/P2 双后端及
 water_400k/P8/HostStaged 的校正净收益区间通过，water/P8/CudaAware 仍慢于默认路径；
 water/P4 有探索支持，carbon_1m/高重建/空 early 限制外推。见
-`docs/status/performance/overlap-o9-results-20261029.md`。结论为 CONFIRMED_SCOPED_CANDIDATE，
+`docs/status/performance/nep-candidate-validation.md#o9-results-20261029-report`。结论为 CONFIRMED_SCOPED_CANDIDATE，
 后续 O11 于 2026-10-30 完成限定范围复验：800 个正式 trial（一次预定追加）、
 80 个短程科学对照、48 个 CPU 诊断及 31,293 项封存文件离线复算通过。
 仅建议 carbon_200k/P2 两后端手动 B-wait，相对 HostStaged/full 为 1.0210×/1.0199×；
-water/P8/HostStaged 区间仍跨 1，本轮不建议采用；CudaAware 未胜默认路径。
+water/P8/HostStaged 区间仍跨 1，本轮不建议采用；water/P8/CudaAware 也未胜默认路径。
 water/P4 仍为探索支持，未覆盖的完整矩阵不作外推。见
-`docs/status/performance/overlap-o11-results-20261030.md`。O10 为条件性 PROPOSED、暂缓；
+`docs/status/performance/nep-candidate-validation.md#o11-results-20261030-report`。O10 为条件性 PROPOSED、暂缓；
 默认不变，首轮 O9 及后续独立确认历史保留。
 跨引擎绑定与 LAMMPS 对照仍由
 `docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md` 独立管理。
@@ -159,7 +192,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 - 不重新实现 NEP 数学公式。NEP 数学子集由 `src/gpumd_compat/` 的复现内核提供
   （复制自 GPUMD 锁定 commit），在其上只做小范围参数化；重写公式前必须先建立
   golden test 并获得维护者确认。
-- 一 MPI rank 只控制一张 GPU。当前 replicated-data 原型允许每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；进入 domain decomposition 后才收敛为 owned、ghost 和明确通信工作区。
+- 一 MPI rank 只控制一张 GPU。M1 每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；已实现的 M2a 使用 rank-local owned/ghost 布局和明确通信工作区。
 - owned atoms 与 ghost atoms 必须有不同的生命周期和写权限；ghost 不得被积分、重复计入 thermo 或直接输出。
 - 必须有跨迁移保持稳定的全局原子 ID；本地数组下标不能承担持久身份。
 - 不假设 NEP halo 等于某一个 cutoff。位置、descriptor/导数、directed partial force 和最终 force 的每一层依赖都必须有 kernel 证据。
@@ -186,7 +219,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 ## 语言与工具链
 
 - C++17、CUDA、CMake；
-- Open MPI+UCX 是 replicated-data runtime 的固定依赖；允许使用 Open MPI 的 `mpi-ext.h`/
+- Open MPI+UCX 是 M1/M2a runtime 的固定依赖；允许使用 Open MPI 的 `mpi-ext.h`/
   `MPIX_*`，不再维护 MPICH、MVAPICH 或其他 MPI 实现兼容性；
 - Python 只用于测试、验证和分析脚本，核心 runtime 不依赖 Python；
 - GPU 常驻数据只在初始化、通信、输出或验证需要时传回主机。
@@ -241,6 +274,12 @@ GPUMD 是数值和兼容性参考。验证至少分四层：
 
 比较邻居关系、每原子能量/力/virial、总 thermo、短轨迹、NVE 漂移、输出字节结构和 restart。不得为了让测试通过而随意放宽容差；容差必须来自重复的基线实验，并区分逐字段精确、确定性数值容差和随机/混沌轨迹的统计比较。
 
+新增系综与势按 v1.0 流程的 L0–L6 分层验收。既有短程 golden、MPI 与长程
+NVE/`nvt_ber` 回归必须保留；NHC/BDP 的独立标量、统计、双路径和 restart 验收入口为
+[`tests/thermostats/README.md`](tests/thermostats/README.md)。随机系综须验证同 seed 重复与
+预注册的多种子统计，不能用 Berendsen 涨落或单条轨迹证明正则/NPT 采样。
+未来 NPT/新势须通过各自 Gate 与势×系综联合矩阵，不能以解析成功或现有 NEP/NVT 通过代替。
+
 GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，允许经证明
 等价的格式/单位转换；先比较能量、力、virial 和轨迹等物理量，再比较运行效率。
 横向对照不要求输入文件或不同软件的输出字节相同；现有 DMG-MD 对 GPUMD 的
@@ -253,14 +292,23 @@ GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，
   `docs/standards/golden-test-standard.md` 说明验收原则，不得复制维护另一套参数。
 - `docs/standards/` 只描述当前已经生效的合同。代码、支持范围、数据布局或测试门槛变化时，
   必须在同一修改中更新对应标准。
-- `docs/status/` 只记录某次实际状态或验证结果。通过声明必须包含日期、代码 revision、环境、
-  精确命令和结果；“测试已定义”不得写成“当前已通过”。
+- `docs/status/` 只记录实际状态或验证结果。通过声明必须包含执行日期、代码 revision、环境、
+  精确命令和结果；“测试已定义”不得写成“当前已通过”。同一测试目标的重复执行应追加到稳定主题文件的
+  独立日期节，保留每次执行的实际日期与时间；仅在测试目标不同或证据结构确实独立时新建报告。
+  汇总和索引须链接到对应日期节，不能把不同执行合并成一个无日期结论。产物目录、日志、命令及原始
+  证据中实际使用的日期路径属于证据身份，文档整合时不得改写。
 - `docs/plans/` 必须标明 `PROPOSED`、`APPROVED` 或 `IN PROGRESS`，不得被 README 或标准描述为
   已实现。计划完成后，将最终合同迁入 standards、实测结果写入 status，并删除已完成的重复步骤。
-- 新文档必须从 `docs/README.md` 归类和链接。文档移动后使用 `rg` 检查 Markdown 链接、源码
-  注释和测试 docstring；Git 历史保存旧快照，不在工作树中新建重复 archive 文档。
+- 新文档必须从 `docs/README.md` 按主题归类和链接。文档移动或报告整合后，使用 `rg` 检查全部旧路径引用、
+  Markdown 文件与片段链接、源码注释和测试 docstring；Git 历史保存旧快照，不在工作树中新建重复 archive 文档。
 
 ## Agent 工作方式
+
+仅在用户明确要求并行工作时使用子代理。
+仅主代理可以创建子代理，子代理不得继续委派。
+子代理默认使用 gpt-6-luna，处理边界明确的任务。
+主代理负责规划、架构决策、最终代码审查和结果整合。
+避免多个代理重复探索同一问题，返回简洁结论和必要证据。
 
 非平凡任务按以下顺序进行：
 

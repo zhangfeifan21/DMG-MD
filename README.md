@@ -1,22 +1,30 @@
 # DMG-MD
 
-DMG-MD 用于使用 NEP 势函数进行经典分子动力学计算，可以读取 GPUMD 格式的
-`model.xyz`（原子结构）、`run.in`（计算设置）和 NEP 势文件。
+DMG-MD 是面向多节点、多 GPU 的经典分子动力学 runtime，正在开发 v1.0 正式版。
+当前可读取 GPUMD 格式的 `model.xyz`（原子结构）、`run.in`（计算设置）和 NEP/NEP-ZBL
+势文件，支持 NVE 与 Berendsen、Nosé–Hoover 链（NHC）、BDP 三种 NVT。
+v1.0 还计划加入各向同性 NPT、LJ、EAM/alloy 及发布交付，尚未全部实现或发布；
+范围与阶段门见[开发流程](docs/plans/dmg-md-v1.0-development-workflow.md)和
+[逐 Step 进度](docs/plans/dmg-md-v1.0-progress.md)。
 
 **第一次使用，请按下面的第 1～6 步操作。** Docker 可以理解为装好程序和配套软件的
 “计算环境包”：准备好服务器后，一条命令就能调用它进行计算，无需逐个安装 CUDA、MPI 等依赖。
 
 查看项目目前已实现和验证的功能：
-[开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/performance/benchmark-multigpu-results-20260926.md) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
+[开发进度与验证结果](docs/status/current.md) · [2026-09-26 多 GPU benchmark 实测](docs/status/performance/benchmark-multigpu-results.md#multigpu-20260926-report) · [输入命令支持范围](docs/standards/compatibility-matrix.md) · [文档索引](docs/README.md)
 
-O1–O8 本机阶段及 DMG-MD [统一 CPU/NUMA 启动与独立核验](docs/standards/cpu-binding.md)
+O1–O8、O8.5/O8.6 本机阶段及 DMG-MD [统一 CPU/NUMA 启动与独立核验](docs/standards/cpu-binding.md)
 已完成；overlap 仍默认关闭，多数配置的拆分成本抵消了收益，见
-[O5 正式结果](docs/status/performance/communication-computation-overlap-o5-results-20261021.md)。
-O6 已完成[稳态拆分成本定位](docs/status/performance/overlap-o6-results-20261021.md)，硬件原因仍为 INCONCLUSIVE。
-O7 已采用[单次缓存判定归约](docs/status/performance/overlap-o7-results-20261023.md)，整步收益 INCONCLUSIVE。
-O8 已采用[按需 NVE thermo](docs/status/performance/overlap-o8-results-20261026.md)，本机三个配置相对 O7 的增量确认，一组 INCONCLUSIVE。
-O9 已完成[执行候选证据复核](docs/status/performance/overlap-o9-results-20261026.md)，以 NO_ADOPTION 结束，未改 NEP 执行。
-[O11 限定采用复验](docs/status/performance/overlap-o11-results-20261030.md)已完成：800 个正式 trial、48 个 CPU
+[O5 正式结果](docs/status/performance/communication-computation-overlap-results.md#o5-20261021-report)。
+O6 已完成[稳态拆分成本定位](docs/status/performance/nep-execution-cost.md#o6-results-20261021-report)，硬件原因仍为 INCONCLUSIVE。
+O7 已采用[单次缓存判定归约](docs/status/performance/cache-reduction-results.md#o7-results-20261023-report)，整步收益 INCONCLUSIVE。
+O8 已采用[按需 NVE thermo](docs/status/performance/thermo-demand-results.md#o8-results-20261026-report)，本机三个配置相对 O7 的增量确认，一组 INCONCLUSIVE。
+O8.5 完成 [producer 调度拆分](docs/status/performance/producer-schedule-results.md#o85-results-20261027-report)，
+O8.6 完成[紧凑索引与几何内缩](docs/status/performance/producer-schedule-results.md#o86-results-20261028-report)，均未采用，交 O9 独立确认。
+O9 首轮[执行候选证据复核](docs/status/performance/nep-candidate-validation.md#o9-results-20261026-report)于 2026-10-26 以 NO_ADOPTION 结束；
+2026-10-29 [独立确认](docs/status/performance/nep-candidate-validation.md#o9-results-20261029-report) 在 carbon/P2 双后端及
+water/P8/HostStaged 确认净收益，结论为 CONFIRMED_SCOPED_CANDIDATE，交 O11。
+[O11 限定采用复验](docs/status/performance/nep-candidate-validation.md#o11-results-20261030-report)已完成：800 个正式 trial、48 个 CPU
 诊断及离线复算通过，仅建议 carbon/P2 两后端手动 B-wait；water/P8 本轮未通过
 采用门槛，默认保持 off。条件性 [O10](docs/plans/communication-computation-overlap.md#o10) 暂缓。跨引擎/调度器[绑定验收](docs/plans/mpi-cpu-binding.md)
 及 [LAMMPS 动力学与正式三引擎矩阵](docs/plans/lammps-multigpu-benchmark.md)独立推进，
@@ -427,13 +435,19 @@ NEP loader 及 CUDA kernels，复制自锁定 commit `9d23496e`），构建与�
 thermo 和 authoritative per-atom output；满足 M2a eligibility 的大盒输入则使用 rank-local
 owned/ghost 布局、保守两跳位置 halo、点对点 halo/迁移通信和 NEP 中心/依赖域分片。不满足
 eligibility 的输入自动回退 M1，small-box 输入继续可运行。M2b 的 Fp/partial 分阶段交换
-和 M3 多节点硬化尚未实施。
+和多节点硬化尚未实施。
 
 ## 当前进度
 
-当前代码已完成 M1/M2a、统一缓存重建和 O1–O4。O2 实验分区默认关闭，halo 默认
+截至 2026-11-03，v1.0 主线已完成 Gate 0、A0–A6 与 G-A，下一步为 B0 压力 oracle。
+NHC/BDP 已通过所列 NEP 单节点 M1/M2a 矩阵，NPT、新势与发布门仍待完成；
+完整证据和未覆盖项见[开发进度](docs/plans/dmg-md-v1.0-progress.md)。
+
+O 系列为独立性能主线，与 v1.0 产品化无阶段门依赖。
+当前代码已完成 M1/M2a、统一缓存重建及 O1–O9 的已验证阶段；O11 仅在
+carbon_200k/P2 建议限定范围手动 B-wait。O2 实验分区默认关闭，halo 默认
 begin 后立即 finish；O4 已接入默认关闭的普通步实际重叠，本轮验收见
-[O4 报告](docs/status/validation/overlap-o4-20261016.md)。2026-10-15 O3 已通过 192 组 domain
+[O4 报告](docs/status/validation/communication-computation-overlap.md#overlap-o4-20261016)。2026-10-15 O3 已通过 192 组 domain
 三模式、68 个生命周期/故障作业、golden/CTest 与 long_nve smoke；完整证据与历史
 nightly/单机八卡 benchmark 见[当前状态](docs/status/current.md)。100000-step release
 和跨节点 scaling 尚无完整通过记录。
@@ -442,13 +456,26 @@ nightly/单机八卡 benchmark 见[当前状态](docs/status/current.md)。10000
 
 - NEP4、NEP5 及对应的 NEP-ZBL potential；
 - `potential`、`velocity`、`time_step`；
-- `ensemble nve` 和 `ensemble nvt_ber`；
+- `ensemble nve`、`ensemble nvt_ber`、`ensemble nvt_nhc` 和 `ensemble nvt_bdp`；
 - `correct_velocity`；
 - `dump_thermo`、`dump_xyz`、`dump_restart`；
 - `run` 及多段 run。
 
 `run.in` 会先完整解析为带文件和行号的 command IR，再开始执行。未知命令、已知但尚未支持
 的命令和 ensemble subtype 都会立即失败，不会被静默忽略。
+
+三种 NVT 的格式均为 `ensemble NAME T1 T2 Tdamp`，温度单位 K，`Tdamp` 单位为步数。
+NHC/BDP 在 M1/M2a 上由 root 持有链或 RNG，要求固定正步长；暂不接受 `correct_velocity`、
+自适应步长和非默认实验分区/重叠选项。BDP 默认 seed 为 `12345678`，可用
+`DMGMD_ENSEMBLE_SEED` 覆盖；所有 rank 必须具有相同原始字符串。
+每段 `run` 重置新恒温器状态，`restart.xyz` 不保存链/RNG，恢复是非连续的新作业。
+语法、输出时点、统计证据及限制见[系综说明](docs/standards/ensembles.md)和
+[验收入口](tests/thermostats/README.md)。NPT 与非 NEP 势仍不支持。
+
+v1.0 的 P0 目标是在 M1 上支持 NEP/LJ/EAM 与 NVE、三种 NVT、`npt_ber`、`npt_scr`，
+NPT 限各向同性、正交全周期盒；M2a 限 NEP 的 NVE/三种 NVT。
+Tersoff 1989 与 Langevin/BAOAB 属于 P1（v1.1 候选）。这些目标须经对应阶段门验收后
+才进入当前支持范围；M1 的复制计算也不代表增加 GPU 就能加速力计算。
 
 ## 依赖
 
@@ -553,7 +580,7 @@ python3 tests/mpi/run_mpi_domain.py \
 ```
 
 100/10000/100000-step 长程正确性 suite 独立运行，不把长轨迹混入短程 committed golden。
-它保留墙钟/吞吐诊断，可显式启用性能测量，但正确性不设速度门槛。除 NVE 外，它还比较确定性 NVT 的温度统计、时间平均 RDF 和 MSD；
+它保留墙钟/吞吐诊断，可显式启用性能测量，但正确性不设速度门槛。除 NVE 外，它还比较 `nvt_ber` 的温度统计、时间平均 RDF 和 MSD；
 nightly/release 默认覆盖 HostStaged 与 CudaAware，并包含 NEP5、typewise cutoff、flexible ZBL
 和 typewise ZBL cutoff 的静态/短轨迹分支。smoke 示例：
 
@@ -563,7 +590,7 @@ python3 tests/long_nve/run_long_nve.py \
   --report /tmp/dmgmd-long-nve-smoke.json
 ```
 
-nightly 使用 4 张 GPU，覆盖 10000-step NVE/NVT、构型回放和跨 rank restart：
+nightly 使用 4 张 GPU，覆盖 10000-step NVE/`nvt_ber`、构型回放和跨 rank restart：
 
 ```bash
 scripts/run_long_nve_nightly.sh
@@ -571,6 +598,8 @@ scripts/run_long_nve_nightly.sh
 
 完整方法、smoke/nightly/release profile 几何、五初态 release 矩阵、NVT 统计、双向构型回放和
 跨 rank restart 见 [长程正确性测试说明](tests/long_nve/README.md)。
+NHC/BDP 的标量 oracle、短程/统计、MPI 与新作业 restart 另见
+[恒温器验收说明](tests/thermostats/README.md)，不由上述 long-NVE suite 覆盖。
 
 实现协议、中心分片完整性结论和逐步通信量公式见
 [MPI runtime](docs/standards/mpi-runtime.md)。
@@ -580,9 +609,10 @@ scripts/run_long_nve_nightly.sh
 独立 benchmark 已支持 GPUMD、LAMMPS、DMG-MD 的统一 case 和 1/2/4/8 卡编排，
 含 GPU 遥测、预热排除、重复统计与 JSON/CSV 报告。LAMMPS/MatPL 已通过同初态
 静态物理量检查及 1/2 GPU smoke；输入允许经证明等价的格式转换，三软件横向比较
-能量、力、virial 等物理量，不要求文件哈希相同。当前尚无固定每 rank CPU 核数/NUMA
-的一等启动参数，三引擎 smoke 不能作为正式效率结论；见[对照标准](docs/standards/cross-engine-reference.md)
-与[2026-10-09 验证记录](docs/status/validation/lammps-reference-20261009.md)。
+能量、力、virial 等物理量，不要求文件哈希相同。DMG-MD 已有固定每 rank CPU 核数/NUMA
+的启动参数与独立核验；GPUMD/LAMMPS 的统一绑定尚未完成，三引擎 smoke 不能作为正式效率结论；
+见[绑定合同](docs/standards/cpu-binding.md)、[对照标准](docs/standards/cross-engine-reference.md)
+与[2026-10-09 验证记录](docs/status/validation/lammps-reference.md#lammps-reference-20261009)。
 benchmark 不代替长程正确性验收。
 
 ```bash
@@ -617,11 +647,13 @@ database，它会错误地认为该宏未定义，并且可能找不到 `dmgmd/m
 
 - [文档索引与分类](docs/README.md)
 - [当前进度与验证结果](docs/status/current.md)
+- [v1.0 开发流程](docs/plans/dmg-md-v1.0-development-workflow.md)与[逐 Step 进度](docs/plans/dmg-md-v1.0-progress.md)
 - [Golden Test 标准](docs/standards/golden-test-standard.md)
 - [架构决策](docs/standards/architecture-decisions.md)
 - [当前数据布局](docs/standards/data-layout.md)
 - [输入兼容矩阵](docs/standards/compatibility-matrix.md)
 - [待实施计划](docs/plans/domain-decomposition.md)
-- [近期 P0：CPU 绑定、LAMMPS 对比、通信重叠](docs/plans/risk-and-backlog.md#当前开发优先级)
+- [开发优先级与待办](docs/plans/risk-and-backlog.md#当前开发优先级)
 - [Golden test 说明](tests/baseline/README.md)
 - [长程 NVE/NVT 正确性测试](tests/long_nve/README.md)
+- [NHC/BDP 验收](tests/thermostats/README.md)

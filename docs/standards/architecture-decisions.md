@@ -40,7 +40,8 @@ restart 只承诺保存字段及跨 rank 重建，不承诺未序列化 time/RNG
 
 ## D-006：显式支持白名单
 
-只支持普通 NEP4/5、NEP-ZBL、NVE/nvt_ber 和支持矩阵列出的输入/输出命令。未知与已知
+只支持普通 NEP4/5、NEP-ZBL、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp` 和支持矩阵列出的
+输入/输出命令；新 NVT 的组合限制与状态语义见[系综标准](ensembles.md)。未知与已知
 未支持项均明确 unsupported；多 potential 与 potential 方向参数拒绝，不能静默忽略。
 
 ## D-007：单一数据与几何模型
@@ -76,4 +77,4 @@ call0/1000 记录以 MPI 标准和测试脚本为准，实测通过声明只放 
 
 O2 分区默认 off，普通步按完整 Verlet 图闭包分配 producer/最终中心；O3 单槽位和显式
 request/event lease 保证物理完成。默认 begin 后立即 finish；O4 可显式在二者间提交独立 early，无 progress thread。
-合同见[分区](domain-partition.md)和[halo](halo-lifecycle.md)；O4 实现/验收见[报告](../status/validation/overlap-o4-20261016.md)，O5 正式矩阵仍在计划。
+合同见[分区](domain-partition.md)和[halo](halo-lifecycle.md)；O4 实现/验收见[报告](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)，O5 正式矩阵已于 2026-10-21 完成，见 [O5 报告](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)。

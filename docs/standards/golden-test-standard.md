@@ -1,6 +1,6 @@
 # Golden Test 与验收原则
 
-类别：现行测试标准。状态：ACTIVE。核对日期：2026-10-16。
+类别：现行测试标准。状态：ACTIVE。核对日期：2026-11-02。
 GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 
 ## 事实源与边界
@@ -22,15 +22,19 @@ GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 | `tests/mpi/run_halo_lifecycle.py` | 独立 GPU 作业：P1/2/4、两后端、收发独立完成、unpack/复用、零 count/增长/幂等和单 rank 故障有界退出 |
 | `tests/mpi/run_rank_io_isolation.py` | 本地 scratch、健康输出/清理与 mkdir/file/chdir/restore/cleanup 故障；物理双节点验收暂缓 |
 | `tests/long_nve/run_long_nve.py` | NVE/NVT 长程、双向静态回放、跨 rank restart 及兼容势静态/短轨迹 |
+| `tests/thermostats/` | NHC/SVR 逐位 oracle、NHC GPUMD 短轨迹、BDP seed 合同、两路径/后端重复、root 因子协议、预注册 KE/速度分量 CI 与新作业 restart；入口见[说明](../../tests/thermostats/README.md) |
 | `tests/lammps_reference/compare_static.py` | 三引擎物理量等价；阈值在该目录 manifest，不能套用跨软件字节一致 |
 
 ### CTest 注册项
 
-`ctest --test-dir build --output-on-failure` 当前注册十项（以 tests/CMakeLists.txt 为准）：
+`tests/CMakeLists.txt` 当前注册 23 项（以该文件为准）：
 
 | test | 覆盖 |
 | --- | --- |
 | `dmgmd.run_parser` / `dmgmd.model_parser` | typed IR、schema、参数、支持/拒绝路径 |
+| `dmgmd.ensemble_control` | target ramp、Berendsen 原表达式、NHC/BDP 标量状态与 guard、seed/cache/无分配合同 |
+| `dmgmd.nhc_fixture` / `dmgmd.svr_fixture` | 与只读上游独立提取的固定 fixture 比较 double 位模式 |
+| `dmgmd.thermostat_statistics` | 自相关/ESS、块与 seed 间 Student-t CI、预注册误差带判定 |
 | `dmgmd.spatial_ownership` | M1 边界/tie、槽位/ID/plan、空 slab/N<P、owner 覆盖 |
 | `dmgmd.domain_layout` | typewise 半径/float 上界、eligibility、P2 去重、ghost/迁移/空域计划 |
 | `dmgmd.domain_partition` | 独立图闭包、producer 唯一性与 key/ticket |
@@ -38,7 +42,14 @@ GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 | `dmgmd.long_nve_analysis` | 几何/势/hash、统计量、checkpoint、重试/失败分类 |
 | `dmgmd.benchmark_analysis` | 三引擎日志、统计、报告/超时与实验配置 |
 | `dmgmd.cpu_sampling` | 原始计数、窗口、身份/容量/缺失与采样生命周期 |
+| `dmgmd.cpu_binding` | 每 rank K 核、NUMA/rankfile 策略、绑定审计与拒绝路径 |
+| `dmgmd.overlap_o5_analysis` | 正式矩阵、历史归因、采用验证与封存一致性 |
+| `dmgmd.overlap_o6_analysis` / `dmgmd.overlap_o65_analysis` / `dmgmd.overlap_o7_analysis` / `dmgmd.overlap_o8_analysis` | 稳态成本、快照重放、缓存判定与按需 thermo 的证据/统计合同 |
+| `dmgmd.overlap_o85_analysis` / `dmgmd.overlap_o86_analysis` / `dmgmd.overlap_o9_analysis` | producer 调度、紧凑/几何调度与 O9 独立确认的矩阵/证据合同 |
 | `dmgmd.lammps_reference` | 等价势格式、单位、物理量比较器 |
+
+O11 的契约测试 `tests/benchmark/test_overlap_o11.py` 目前未注册到 CTest（单独运行 3/3
+通过），是否纳入待测试矩阵变更审批。
 
 ### O2/O3 额外门槛
 
@@ -69,6 +80,11 @@ smoke/nightly/release 分别为 100/10000/100000 步；nightly/release 的 P>1 �
 3. **长期/统计**：混沌长轨迹不逐步对坐标；NVE 比真实 E(0) 的 excursion、drift、detrended
    RMS、相邻跳变、动量、距离直方图与双向静态回放；NVT 比温度、MSD、时间平均 partial RDF。
    多初态 median/q95、非劣 margin/floor 以 manifest 为准。Berendsen 兼容不证明 canonical 采样质量。
+
+NHC/BDP 的正则矩另由 thermostat manifest 冻结的独立初速、seed、burn、块长度、预算、误差带
+和最低 ESS 判定，CI 必须完整落入误差带。Berendsen 的涨落不构成正则 oracle；总 K 通过不能
+替代速度分量/有效自由度检查。减半步长须保持物理耦合时间。完整方法及有限预算的
+INCONCLUSIVE 见[系综合同](ensembles.md#统计证据的适用范围)。
 
 [三引擎标准](cross-engine-reference.md)允许有证明的格式/单位转换；不同软件输入/输出哈希
 不必相同，转换前后哈希用于追溯。物理正确性先于正式效率排名。

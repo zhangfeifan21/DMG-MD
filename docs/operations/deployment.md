@@ -6,9 +6,9 @@ benchmark。本手册不把尚未硬化的多节点运行当作已验证能力�
 本手册下方的原生和 Docker 命令目前只部署 DMG-MD 与 GPUMD，因此运行 benchmark
 时须显式指定 `--engines gpumd,dmgmd`。runner 已支持 LAMMPS/MatPL 第三引擎，
 其只读 reference 布局与输入生成见
-[三引擎对照标准](../standards/cross-engine-reference.md)；固定 MPI CPU/NUMA
-绑定仍属 [2026-10-09 P0 计划](../plans/risk-and-backlog.md#当前开发优先级)，
-当前 smoke 不代表正式效率结果。
+[三引擎对照标准](../standards/cross-engine-reference.md)；DMG-MD 的固定 MPI CPU/NUMA
+启动与核验已见[绑定合同](../standards/cpu-binding.md)，GPUMD/LAMMPS 的统一绑定仍属
+[2026-10-09 P0 计划](../plans/risk-and-backlog.md#当前开发优先级)，当前 smoke 不代表正式效率结果。
 
 ## Docker 交付（优先）
 

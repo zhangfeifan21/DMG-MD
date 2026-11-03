@@ -74,4 +74,4 @@ python3 tests/benchmark/run_benchmark.py --profile pilot --cases carbon_1m \
 
 后续按 [benchmark 操作说明](../../../tests/benchmark/README.md) 先独占设备 smoke/pilot，再正式测量。
 
-后续单机 1/2/4/8 GPU 结果见[2026-09-26 记录](../performance/benchmark-multigpu-results-20260926.md)，不归入本次单卡验收。
+后续单机 1/2/4/8 GPU 结果见[2026-09-26 记录](../performance/benchmark-multigpu-results.md#multigpu-20260926-report)，不归入本次单卡验收。

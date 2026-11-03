@@ -52,7 +52,7 @@ O5 另核验 UUID 的逐 rank 顺序，不能只比较 GPU 集合。
 ## 当前边界
 
 原生 Linux、单机同 namespace、Open MPI 5；DMG-MD 启动与 benchmark 已接线。纯 CPU
-策略测试及实际 GPU 验收范围见 [O5 报告](../status/performance/communication-computation-overlap-o5-results-20261021.md)。
+策略测试及实际 GPU 验收范围见 [O5 报告](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)。
 策略生成和观察器可以复用到其他 MPI 程序；LAMMPS 接线未在本轮验收，GPUMD 的合计
 P×K CPU 集合入口尚未实施，benchmark 对其固定绑定请求明确拒绝。不把这些未验收面
 或三引擎正式矩阵写成完成。跨节点、任意调度器和内存页放置另行验收。

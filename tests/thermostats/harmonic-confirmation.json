@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "registered_at": "2026-11-02 (Asia/Shanghai), before the fixed 2M-step confirmation campaign",
+  "purpose": "Confirm slow per-axis harmonic equilibration after the initial 200k campaign returned INCONCLUSIVE; retain and report the initial result. No seed replacement or relaxed error bound. This is a separate fixed-budget confirmation, no intermediate statistical looks.",
+  "initial_campaign_manifest_sha256": "84d3ea6fc94e6860eab730e0bcd0e3106e75954ed12ff43bcf3ab69233e60c9f",
+  "harmonic": {
+    "natoms": 8,
+    "steps": 2000000,
+    "discard_steps": 200000,
+    "dt_internal": 0.01,
+    "damping_steps": 100,
+    "temperature_K": 300,
+    "seeds": [
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108
+    ],
+    "acceptance": {
+      "mean_relative_bound": 0.02,
+      "variance_relative_bound": 0.15,
+      "confidence_z": 2.576,
+      "block_length": 2000,
+      "minimum_effective_samples": 1000,
+      "minimum_blocks": 32
+    },
+    "oracle": "3N independent unconstrained harmonic modes, mass=1, omega=0.15+0.01*mode; exact canonical K moments and axis <m*v^2>=kB*T",
+    "half_dt": "dt 0.005, damping 200, steps 400000, burn 40000, block length 4000",
+    "budget": "Exactly 2,000,000 base-dt steps per seed; no extension beyond this confirmation budget; half-dt uses 4,000,000 steps for equal physical duration. Final CI is 99%; original 95% pilot remains INCONCLUSIVE."
+  }
+}

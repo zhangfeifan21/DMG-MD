@@ -75,6 +75,33 @@ P1 无 map hash，合计 24N+64P / 24NP+64P。HostStaged device collective 的 D
 snapshot 的 HostStaged 增同量 D2H；CudaAware root 仍需 output download。启动 hash、覆盖和
 输入一致性属于一次性 control plane，不计 step 行。
 
+### NHC / BDP 的控制通信
+
+新 NVT 的逐步增量相对于上表每步反馈 thermo 的 `nvt_ber`，M1/M2a 相同。
+链或 RNG 只在 root 存在，成功时广播两 double `[status=1, factor]`：
+
+| 系综 | 额外 collective calls / step | MPI input bytes | MPI output bytes |
+| --- | ---: | ---: | ---: |
+| `nvt_nhc` | 3：一次 1-double KE Allreduce、两次状态/因子 Bcast | `8P+32` | `40P` |
+| `nvt_bdp` | 1：一次状态/因子 Bcast | `16` | `16P` |
+
+NHC 在 VV1 前用当前 owned 速度求和 `Σmv²`；M1 用 owned 索引，M2a 用 owned prefix。
+它复用原 thermo kernel 的 quantity-0 block，只有一个 double 进入归约。
+HostStaged 为此额外记 D2H/H2D 各 `8P`，CudaAware device collective staging 增量为零。
+两路径随后都将归约标量读到 host（每 rank 8 B）；这与已有 thermo 控制量下载一样不属于
+MPI staging / snapshot output-download 字段，不能把账本当全部 CUDA memcpy 清单。
+host 状态/因子 Bcast 不计 device staging。NHC 两半步、BDP 一次末步缩放均只写 owned 速度。
+NVE/Berendsen 不进入此协议，不增加链/RNG 分配或通信。
+
+root 更新失败时先将 `status=0` 广播，再广播错误字符串，所有 rank 随后抛出并走既有 abort
+出口；失败路径的错误文字通信不属于成功步预算。逐 rank 因子位模式和上述成功步增量的实测见
+[恒温器矩阵](../status/validation/thermostat-validation.md#thermostat-matrix-20261102)。
+
+含 BDP 的整个输入在执行前校验 `DMGMD_ENSEMBLE_SEED` 的 presence 和原始字符串：root
+用长度+内容两次 Bcast 分发，再以一次 Allreduce 比较各 rank；之后解析 uint32 十进制。
+M2a 的独立入口再次执行同一预检，避免绕过 dispatcher 时漏检；这些启动控制通信不计逐步行。
+没有逐步 RNG 状态传输。选项限制、分段重置和非连续 restart 见[系综合同](ensembles.md)。
+
 ## 日志与整体计时
 
 DMGMD_COMM_LOG_INTERVAL 默认1000，各 rank 须一致；行是被采样的单步量，不是 K 步聚合。
@@ -169,7 +196,8 @@ double 平均低估实际消费 cutoff。
 9. owned VV second half；
 10. 按[消费者需求](thermo-demand.md)执行 owned thermo 求和 + 8-double Allreduce
     （NVE 只在 thermo/XYZ 输出步需要；NVT 每步保留，ghost 的 PE/virial scratch 不参与）；
-11. owned thermostat；
+11. owned thermostat（NHC 后半步或 BDP/Berendsen 末步缩放；NHC 前半步在第 3 项 VV1 前
+    另做 owned KE 归约、root 链更新与因子广播）；
 12. 输出/measurement：local-owned-prefix gather 携带 global ID，root 恢复恰好
     N 条按 global ID 排序的记录后复用既有 formatter（ghost 永不直接输出）。
 
@@ -220,7 +248,7 @@ NVT 的 `needs_thermo` 恒为 1。rebuild 若发生 owner 变化再增加 Alltoa
 migration-OR + neighbor-rebuild-OR 双判定，不得由 Neighbor 再发起位移 collective。
 O7 将原缓存 displacement MAX 的阈值判定移到各 rank 后合入 OR；自适应时间步的
 MAX 及下述 neighbor 周期 MAX 保留。证明、独立实际调用计数与配对实测见
-[O7 报告](../status/performance/overlap-o7-results-20261023.md)。
+[O7 报告](../status/performance/cache-reduction-results.md#o7-results-20261023-report)。
 `neighbor.out` 每 1000 次 force 调用（含首次）由各 rank dependency-center local
 max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须在**本次** Verlet/typewise
 邻居表生成后读取；真正 `local_count=0` 的 rank 贡献零但仍参加 collective。初始力或段首力
@@ -262,7 +290,7 @@ D2H/段末同步提供先后及就绪边界，无法从这些字段给设备事�
 完整 runner 覆盖和比较原则只在[Golden Test](golden-test-standard.md)维护，CLI 见
 [MPI README](../../tests/mpi/README.md)；已执行结果见[当前状态](../status/current.md)。
 [O2 分区](domain-partition.md)保持 L stride、半径和每中心顺序；先完成 halo 后串行执行。
-M2b、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)，O5 正式性能矩阵见[剩余计划](../plans/communication-computation-overlap.md)。
+M2b、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)；O5 正式性能矩阵已完成，见[报告](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)，O10 等剩余工作见[计划](../plans/communication-computation-overlap.md)。
 
 ## O4 默认关闭的普通步重叠
 
@@ -274,4 +302,4 @@ M2b、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)�
 同一默认 stream、FUNNELED、原 halo/tag/字节及独立收发完成合同不变；所有 rank 在
 neighbor sink、thermo/output collective 前 finish，混合 full/overlap 顺序一致。
 接口/缓存/诊断细则见[分区](domain-partition.md)与[halo](halo-lifecycle.md)，实测范围见
-[O4 验收](../status/validation/overlap-o4-20261016.md)。不含 M2b、progress thread 或 O5。
+[O4 验收](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)。不含 M2b、progress thread 或 O5。

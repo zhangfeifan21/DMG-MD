@@ -1,0 +1,84 @@
+{
+  "schema": "dmgmd.velocity-statistics.v1",
+  "purpose": "Interacting NEP cluster test of per-axis velocity second and fourth moments",
+  "fixture": {
+    "case": "cluster_domain",
+    "atoms": 432,
+    "cells": [
+      6,
+      3,
+      3
+    ],
+    "box_A": [
+      64,
+      24,
+      24
+    ],
+    "species": "C",
+    "mass_amu": 12.011,
+    "model_generator": "tests/thermostats/run_thermostats.py:model_text",
+    "model_lock_manifest": "tests/thermostats/manifest.json",
+    "velocity_initialization": "independent Gaussian components at 300 K; no COM removal; no global rescaling",
+    "seeds": [
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108
+    ]
+  },
+  "execution": {
+    "ranks": [
+      1
+    ],
+    "backends": [
+      "HostStaged"
+    ],
+    "timeout_seconds": 1800,
+    "dt_fs": 0.25,
+    "temperature_K": 300,
+    "damping_steps": 40,
+    "initial_steps": 20000,
+    "maximum_steps": 80000,
+    "analysis_looks_steps": [
+      20000,
+      40000,
+      80000
+    ],
+    "thermo_interval_steps": 50,
+    "velocity_dump_interval_steps": 50,
+    "velocity_dump": "dump_xyz 50 v.xyz precision double velocity mass",
+    "restart": "dump_restart at final step",
+    "half_dt": {
+      "dt_multiplier": 0.5,
+      "damping_steps_multiplier": 2,
+      "steps_multiplier": 2,
+      "dump_interval_steps_multiplier": 2,
+      "block_length_frames": 20
+    }
+  },
+  "statistics": {
+    "burn_in_fraction": 0.1,
+    "block_length_frames": 20,
+    "minimum_effective_samples": 1000,
+    "minimum_blocks": 32,
+    "mean_relative_bound": 0.02,
+    "variance_relative_bound": 0.15,
+    "confidence_z": 2.394,
+    "confidence_note": "Three preregistered looks with Bonferroni-corrected two-sided z=2.394; no post-hoc widening or seed selection.",
+    "quantity": "For each frame and axis, mean_i[m_i * (v_i * TIME_UNIT_CONVERSION)^2].",
+    "expected_mean_eV": 0.025852029,
+    "expected_variance_formula": "2 * (kB*T)^2 / N",
+    "constants": {
+      "kB_eV_per_K": 8.617343e-05,
+      "temperature_K": 300,
+      "N": 432,
+      "TIME_UNIT_CONVERSION": 10.18051
+    },
+    "directional_limit": "This fixture tests per-axis velocity moments under interacting NEP dynamics. It does not establish all-direction phase-space ergodicity for low-dimensional harmonic samplers."
+  },
+  "input_manifest_sha256": "84d3ea6fc94e6860eab730e0bcd0e3106e75954ed12ff43bcf3ab69233e60c9f"
+}

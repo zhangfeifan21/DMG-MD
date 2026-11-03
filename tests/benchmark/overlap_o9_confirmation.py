@@ -29,8 +29,8 @@ MODES = ['full', 'split-serial', 'producer-serial', 'producer-wait',
          'compact-serial', 'compact-wait', 'geometry-serial', 'geometry-wait']
 PREVIOUS = {'o65':'dmgmd-overlap-o65-20261026', 'o85':'dmgmd-overlap-o85-20261027',
             'o86':'dmgmd-overlap-o86-20261028'}
-REPORTS = {'o65':'overlap-o65-results-20261027.md', 'o85':'overlap-o85-results-20261027.md',
-           'o86':'overlap-o86-results-20261028.md'}
+REPORTS = {'o65':'nep-execution-cost.md', 'o85':'producer-schedule-results.md',
+           'o86':'producer-schedule-results.md'}
 load = o86.load
 
 

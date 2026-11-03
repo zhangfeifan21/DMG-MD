@@ -1,8 +1,7 @@
 # 通信与计算性能优化：条件性 O10；O11 限定复验已完成
 
-类别：分阶段后续计划。状态：**PROPOSED**（O1–O8、O6.5/O8.5/O8.6 本机阶段完成；首轮 O9 以 NO_ADOPTION 完成；
-O9 独立确认及 O11 限定范围复验已完成；条件性 O10 暂缓）。
-优先级：P0。更新日期：2026-10-29。
+类别：分阶段后续计划。状态：**PROPOSED（仅 O10 条件性暂缓；O1–O9 已完成，O11 限定复验已完成）**。
+优先级：P0。更新日期：2026-10-30。
 
 目标是通过可验证的算法/执行结构改进降低真实整步成本，并判断 overlap 是否值得采用。
 完成诊断工具或结束权限探测不等于完成优化目标；候选必须经过实际执行对照。生产默认保持
@@ -15,25 +14,25 @@ O11 已完成 800 个新 trial 的限定复验，仅建议 carbon_200k/P2 两后
 
 | 阶段 | 交付与事实源 |
 | --- | --- |
-| O0/O2 依赖与分区 | [集合、缓存、唯一写入合同](../standards/domain-partition.md)；[O2 数值与串行成本](../status/validation/overlap-partition-20261015.md) |
-| O1 原串行基线 | [普通/重建时间线、C1 与固定资源窄矩阵](../status/performance/overlap-baseline-20261012.md) |
-| O3 halo 生命周期 | [现行合同](../standards/halo-lifecycle.md)；[生命周期与串行成本验收](../status/validation/halo-lifecycle-20261015.md) |
-| O4 实际 overlap | [wait/poll 正确性与正常路径证据](../status/validation/overlap-o4-20261016.md)；[当时窄成本检查](../status/performance/communication-computation-overlap-results-20261016.md) |
-| O5 正式实验 | [910 个有效性能 trial、历史归因、诊断和独立采用验证](../status/performance/communication-computation-overlap-o5-results-20261021.md) |
-| O6 稳态归因 | [45 个正式 trial、27 份稳态 trace 与硬件指标限制](../status/performance/overlap-o6-results-20261021.md)；carbon 主损失位于 radial，原因验证已由 O6.5 补充 |
-| O7 缓存判定归约 | [语义证明、回归、实际调用计数与 60 个配对 trial](../status/performance/overlap-o7-results-20261023.md)；采用单次 OR，整步收益 INCONCLUSIVE |
-| O8 按需 NVE thermo | [消费者合同](../standards/thermo-demand.md)、[292 个调用计数作业、MPI/nightly 与 105 个三版本 trial](../status/performance/overlap-o8-results-20261026.md)；相对 O7 三组增量确认、一组 INCONCLUSIVE，采用 |
-| O6.5 原因验证 | [30 个正式 trial、18 份 trace、真实图/mask 与 50 个 A–D 重放进程](../status/performance/overlap-o65-results-20261027.md)；两目标 C/D 区间下界均大于 1，支持独立整步试验，未采用 |
-| O8.5 producer 候选 | [依赖/验证合同](../standards/domain-partition.md#o85-producer-调度)、[完整门槛、120 个六组合正式 trial、24 份 trace 与 8 个 CPU 诊断](../status/performance/overlap-o85-results-20261027.md)；拆分成本下降，默认路径净收益限于本轮 water/P8/HostStaged，未采用 |
-| O8.6 紧凑/几何候选 | [当前合同](../standards/domain-partition.md#o86-producer-紧凑与几何调度)、[完整门槛、240 个正式 trial、48 份 trace、24 个 CPU 诊断与离线复算](../status/performance/overlap-o86-results-20261028.md)；B/A 四组确认，C/B wait 增量均未确认，未采用 |
-| 首轮 O9 执行候选复核 | [冻结门槛、真实 NCU 重试与安全/反例分析](../status/performance/overlap-o9-results-20261026.md)；以 NO_ADOPTION 完成，未测执行候选；历史结论保留，新一轮另见下行 |
-| O9 独立确认 | [300 个正式 trial、12 个 CPU 诊断与限定范围确认](../status/performance/overlap-o9-results-20261029.md)；预选 B 三个核心 scope 确认，交 O11，默认不变 |
-| O11 限定采用复验 | [800 个正式 trial、48 个 CPU 诊断与离线复算](../status/performance/overlap-o11-results-20261030.md)；仅 carbon/P2 双后端手动 B-wait，默认不变 |
+| O0/O2 依赖与分区 | [集合、缓存、唯一写入合同](../standards/domain-partition.md)；[O2 数值与串行成本](../status/validation/communication-computation-overlap.md#overlap-partition-20261015) |
+| O1 原串行基线 | [普通/重建时间线、C1 与固定资源窄矩阵](../status/performance/communication-computation-overlap-results.md#o1-20261012-report) |
+| O3 halo 生命周期 | [现行合同](../standards/halo-lifecycle.md)；[生命周期与串行成本验收](../status/validation/communication-computation-overlap.md#halo-lifecycle-20261015) |
+| O4 实际 overlap | [wait/poll 正确性与正常路径证据](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)；[当时窄成本检查](../status/performance/communication-computation-overlap-results.md#o4-20261016-report) |
+| O5 正式实验 | [910 个有效性能 trial、历史归因、诊断和独立采用验证](../status/performance/communication-computation-overlap-results.md#o5-20261021-report) |
+| O6 稳态归因 | [45 个正式 trial、27 份稳态 trace 与硬件指标限制](../status/performance/nep-execution-cost.md#o6-results-20261021-report)；carbon 主损失位于 radial，原因验证已由 O6.5 补充 |
+| O7 缓存判定归约 | [语义证明、回归、实际调用计数与 60 个配对 trial](../status/performance/cache-reduction-results.md#o7-results-20261023-report)；采用单次 OR，整步收益 INCONCLUSIVE |
+| O8 按需 NVE thermo | [消费者合同](../standards/thermo-demand.md)、[292 个调用计数作业、MPI/nightly 与 105 个三版本 trial](../status/performance/thermo-demand-results.md#o8-results-20261026-report)；相对 O7 三组增量确认、一组 INCONCLUSIVE，采用 |
+| O6.5 原因验证 | [30 个正式 trial、18 份 trace、真实图/mask 与 50 个 A–D 重放进程](../status/performance/nep-execution-cost.md#o65-results-20261027-report)；两目标 C/D 区间下界均大于 1，支持独立整步试验，未采用 |
+| O8.5 producer 候选 | [依赖/验证合同](../standards/domain-partition.md#o85-producer-调度)、[完整门槛、120 个六组合正式 trial、24 份 trace 与 8 个 CPU 诊断](../status/performance/producer-schedule-results.md#o85-results-20261027-report)；拆分成本下降，默认路径净收益限于本轮 water/P8/HostStaged，未采用 |
+| O8.6 紧凑/几何候选 | [当前合同](../standards/domain-partition.md#o86-producer-紧凑与几何调度)、[完整门槛、240 个正式 trial、48 份 trace、24 个 CPU 诊断与离线复算](../status/performance/producer-schedule-results.md#o86-results-20261028-report)；B/A 四组确认，C/B wait 增量均未确认，未采用 |
+| 首轮 O9 执行候选复核 | [冻结门槛、真实 NCU 重试与安全/反例分析](../status/performance/nep-candidate-validation.md#o9-results-20261026-report)；以 NO_ADOPTION 完成，未测执行候选；历史结论保留，新一轮另见下行 |
+| O9 独立确认 | [300 个正式 trial、12 个 CPU 诊断与限定范围确认](../status/performance/nep-candidate-validation.md#o9-results-20261029-report)；预选 B 三个核心 scope 确认，交 O11，默认不变 |
+| O11 限定采用复验 | [800 个正式 trial、48 个 CPU 诊断与离线复算](../status/performance/nep-candidate-validation.md#o11-results-20261030-report)；仅 carbon/P2 双后端手动 B-wait，默认不变 |
 
 O5 已回答本机冻结范围的采用问题：多数配置的分区成本大于 overlap 回收的时间；
 固定 CudaAware 的精确 water fixture/P4/P8 有独立净收益，HostStaged/full 仍更快。
 wait/poll 没有通用的稳定优劣证据。模式定义、4.60 ms 成本的证据与推测边界及优化依据见
-[O5 后续成本分析](../status/performance/overlap-o5-cost-analysis-20261021.md)。
+[O5 后续成本分析](../status/performance/communication-computation-overlap-results.md#o5-cost-20261021-report)。
 
 O6.5 已完成两体系的单因素执行验证，O8.5/O8.6 已完成拆分粒度、紧凑映射和几何规则的整步实验。
 O9/O11 已完成独立确认与限定范围采用复验；后续保留能惠及 full 的执行优化方向。不能把增加 poll、CPU 核数或更复杂异步结构当作已有收益方案。
@@ -68,7 +67,7 @@ O9/O11 已完成独立确认与限定范围采用复验；后续保留能惠及 
 <a id="o6"></a>
 ## O6：已完成的稳态拆分诊断
 
-结果与未知项见 [O6 实测](../status/performance/overlap-o6-results-20261021.md)，
+结果与未知项见 [O6 实测](../status/performance/nep-execution-cost.md#o6-results-20261021-report)，
 现行测量约束见[分区标准](../standards/domain-partition.md#诊断与计时)。
 carbon 新墙钟拆分成本约 4.630 ms/step，主要新增 GPU 时间位于 radial；water/P8 的
 partial 增量更大。NCU 实际受计数器权限拒绝，微架构原因 INCONCLUSIVE，不精确拆账墙钟。
@@ -84,7 +83,7 @@ partial 增量更大。NCU 实际受计数器权限拒绝，微架构原因 INCO
 真实静态覆盖否定“两相在每 rank 均覆盖超过半数 warp/block”的统一解释；紧凑映射的
 C/D 为 1.4226 [1.4043, 1.4422] / 1.1405 [1.1179, 1.1661]，支持两个目标进入独立
 整步试验，但 D 仍慢于 A。微架构原因仍 INCONCLUSIVE，候选整步净收益 NOT_TESTED。
-完整范围、负结果、维护/缓存限制及 O8.5/O9 交接见 [O6.5 实测](../status/performance/overlap-o65-results-20261027.md)；
+完整范围、负结果、维护/缓存限制及 O8.5/O9 交接见 [O6.5 实测](../status/performance/nep-execution-cost.md#o65-results-20261027-report)；
 现行隔离重放与测量合同见[分区标准](../standards/domain-partition.md#o65-隔离快照重放)。
 
 <a id="o7"></a>
@@ -92,7 +91,7 @@ C/D 为 1.4226 [1.4043, 1.4422] / 1.1405 [1.1179, 1.1661]，支持两个目标�
 
 已采用各 rank 的严格位移超限判定加一次 reason OR。语义证明、阈值/错误/空 rank、
 两后端 P2/P4/P8 实际归约计数、golden/MPI/nightly NVE 与 60 个配对 trial 见
-[O7 报告](../status/performance/overlap-o7-results-20261023.md)。六个性能区间均跨过 1，
+[O7 报告](../status/performance/cache-reduction-results.md#o7-results-20261023-report)。六个性能区间均跨过 1，
 整步收益 INCONCLUSIVE；不宣称稳定加速。现行合同见[缓存标准](../standards/cache-validity.md)
 和 [MPI 标准](../standards/mpi-runtime.md)，后续对照二进制分别保留，默认仍 HostStaged/full、overlap=off。
 
@@ -103,7 +102,7 @@ M2a NVE 按 thermo/XYZ 消费者的段内步号并集计算，NVT 保留每步�
 adaptive timestep、修速和段末同步不引入隐含 thermo。所有权、数学、积分和请求输出不变。
 消费者、旧值防护、通信字节与诊断就绪合同见[thermo 标准](../standards/thermo-demand.md)。
 golden、292 个实际调用计数作业、MPI 68、nightly NVE/NVT 18 + restart 12、三版本 smoke 48、
-105 个正式 trial 和 8 个 CPU 诊断见[O8 实测](../status/performance/overlap-o8-results-20261026.md)。
+105 个正式 trial 和 8 个 CPU 诊断见[O8 实测](../status/performance/thermo-demand-results.md#o8-results-20261026-report)。
 采用该实现；相对 O7 的 carbon/HostStaged 增量 INCONCLUSIVE，其余三组确认加速。
 不从 `thermo_host` 预测节省时间，不外推范围或改变 overlap 默认。
 
@@ -125,7 +124,7 @@ water/P8/HostStaged 显示净收益；两个 CudaAware 候选仍更慢。
 
 最终合同见[分区标准](../standards/domain-partition.md#o85-producer-调度)，全部正负结果、
 依赖/唯一写入证明、固定二进制与 patch、诊断开销、原始日志和一键复算见
-[O8.5 实测](../status/performance/overlap-o85-results-20261027.md)。这些点态区间属于探索，
+[O8.5 实测](../status/performance/producer-schedule-results.md#o85-results-20261027-report)。这些点态区间属于探索，
 候选交 O9 用新配对块独立筛选和确认；该阶段未自动采用、未执行 O9/O11；后续 O9 结果另见下文。
 
 <a id="o8-6"></a>
@@ -144,7 +143,7 @@ water/CudaAware 仍慢。C 减少相对 B 的辅助空间和分类维护成本�
 
 最终合同见[分区标准](../standards/domain-partition.md#o86-producer-紧凑与几何调度)，全部
 区间、负结果、真实网格/stream/早期 GPU 时间、维护/CPU/内存、独立 patch/binary 与复算入口见
-[O8.6 实测](../status/performance/overlap-o86-results-20261028.md)。生产默认仍为
+[O8.6 实测](../status/performance/producer-schedule-results.md#o86-results-20261028-report)。生产默认仍为
 HostStaged/full、overlap=off、schedule=split；该阶段未采用；后续 O9 独立确认另见下文，该阶段未执行 O10/O11；后续 O11 结果见下文。
 
 <a id="o9"></a>
@@ -161,7 +160,7 @@ water/P8/CudaAware 仍慢于默认路径。C/B wait 增量仍未确认。
 water/P4 有探索支持；carbon_1m、高重建和空 early 的结果限制外推，全部负结果保留。
 
 完整区间、筛选依据、维护/内存/CPU、失败回退和一键复算见
-[O9 独立确认](../status/performance/overlap-o9-results-20261029.md)；工具合同见
+[O9 独立确认](../status/performance/nep-candidate-validation.md#o9-results-20261029-report)；工具合同见
 [分区标准](../standards/domain-partition.md#o9-独立确认工具合同)。
 结论为 **CONFIRMED_SCOPED_CANDIDATE**，交 O11 全局采用复验；生产默认仍为
 HostStaged/full、overlap=off、schedule=split。该 O9 阶段未执行 O10/O11；后续 O11 结果见下文，未自动采用。
@@ -194,7 +193,7 @@ O5 已表明 CudaAware 不保证端到端更快。先量化剩余调用次数、
 未覆盖的 P1 及其他体系/rank/硬件组合不作性能采用建议，不声称完成原始全矩阵。
 
 完整对照、CPU/维护代价、剩余不确定性及回退条件见
-[O11 实测](../status/performance/overlap-o11-results-20261030.md)；已生效工具合同见
+[O11 实测](../status/performance/nep-candidate-validation.md#o11-results-20261030-report)；已生效工具合同见
 [分区标准](../standards/domain-partition.md#o11-限定范围采用复验工具合同)。
 生产默认保持 HostStaged/full、overlap=off、schedule=split。默认变更、自动阈值
 或范围外推广均不在本轮结论内。O10 暂缓，不作为本轮完成的前提。

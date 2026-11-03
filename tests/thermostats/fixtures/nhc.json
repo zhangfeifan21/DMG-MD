@@ -1,0 +1,365 @@
+{
+  "source_sha1": "0d5a8e0074d399671f13a95d7e68f234172e1773",
+  "cases": [
+    {
+      "name": "case0",
+      "N": 1,
+      "T0": 300.0,
+      "Tdamp": 1000.0,
+      "dt": 0.001,
+      "initial_position": [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      "initial_momentum": [
+        "3ff0000000000000",
+        "bff0000000000000",
+        "3ff0000000000000",
+        "bff0000000000000"
+      ],
+      "initial_mass": [
+        "3fb3dab739454e9d",
+        "3f9a78f44c5c68d1",
+        "3f9a78f44c5c68d1",
+        "3f9a78f44c5c68d1"
+      ],
+      "steps": [
+        {
+          "target_temperature": 300,
+          "factor": "3fefcad9e048ccc3",
+          "Ek2_after": "3f884215866c9a7d",
+          "position": [
+            "3f7aa93a07769b72",
+            "bf938c5611770098",
+            "3f942f929d699f8e",
+            "bf939bd151d347a5"
+          ],
+          "momentum": [
+            "3ff04ecee4750805",
+            "bfef2ae3a8419eb8",
+            "3ff09d116633c1ce",
+            "bfef5b7ea9b0b3cb"
+          ],
+          "mass": [
+            "3fb3dab739454e9d",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1"
+          ]
+        },
+        {
+          "target_temperature": 300,
+          "factor": "3fefc9d876487619",
+          "Ek2_after": "3f87f0400562d63a",
+          "position": [
+            "3f8aea01230acc79",
+            "bfa349d13c660e6f",
+            "3fa48fed146dfaea",
+            "bfa366fb72ebf31f"
+          ],
+          "momentum": [
+            "3ff09cf9d8d8a272",
+            "bfee522ab1e01be9",
+            "3ff13752890e8dae",
+            "bfeeaa7c4ffb0ef7"
+          ],
+          "mass": [
+            "3fb3dab739454e9d",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1"
+          ]
+        },
+        {
+          "target_temperature": 300,
+          "factor": "3fefc8d96324d1f9",
+          "Ek2_after": "3f879e037ef0f3da",
+          "position": [
+            "3f945fcbd7c562b3",
+            "bfac89e73d85be7c",
+            "3faf6698984ac4cd",
+            "bfacc7513e03764d"
+          ],
+          "momentum": [
+            "3ff0ea6075783a1c",
+            "bfed764e7dfb5e63",
+            "3ff1ce7f959cc0c6",
+            "bfedecc3a53b0238"
+          ],
+          "mass": [
+            "3fb3dab739454e9d",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1"
+          ]
+        },
+        {
+          "target_temperature": 300,
+          "factor": "3fefc7dd101ecbdc",
+          "Ek2_after": "3f874b6f8f1e985c",
+          "position": [
+            "3f9b6a58b70ad5c9",
+            "bfb2c2c3a98f740c",
+            "3fb54ce77469f119",
+            "bfb2f57a2ad93a68"
+          ],
+          "momentum": [
+            "3ff136e2d0ca6e72",
+            "bfec97c8d913badb",
+            "3ff26253f25b1de3",
+            "bfed222bda81c4ec"
+          ],
+          "mass": [
+            "3fb3dab739454e9d",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1",
+            "3f9a78f44c5c68d1"
+          ]
+        }
+      ],
+      "initial_Ek2": 0.012
+    },
+    {
+      "name": "case1",
+      "N": 17,
+      "T0": 725.0,
+      "Tdamp": 800.0,
+      "dt": 0.0005,
+      "initial_position": [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      "initial_momentum": [
+        "3ff0000000000000",
+        "bff0000000000000",
+        "3ff0000000000000",
+        "bff0000000000000"
+      ],
+      "initial_mass": [
+        "3fe0504c4f0eb513",
+        "3f8478d83b0d6fc8",
+        "3f8478d83b0d6fc8",
+        "3f8478d83b0d6fc8"
+      ],
+      "steps": [
+        {
+          "target_temperature": 725,
+          "factor": "3feffbef602939a2",
+          "Ek2_after": "3fc84bbe29d43c42",
+          "position": [
+            "3f404387d2b08cef",
+            "bf9947ef7120070c",
+            "3f9a3f5023afdc84",
+            "bf994774820377f8"
+          ],
+          "momentum": [
+            "3ff06346bdce4a03",
+            "bfef2cc0bdd16549",
+            "3ff0cb6383fb91b4",
+            "bfef28e1a4993f57"
+          ],
+          "mass": [
+            "3fe0504c4f0eb513",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8"
+          ]
+        },
+        {
+          "target_temperature": 700,
+          "factor": "3feffbd67be2949e",
+          "Ek2_after": "3fc8456c98ce2313",
+          "position": [
+            "3f507556c718ac4f",
+            "bfa8f27d85660605",
+            "3faae0d3c20cf4df",
+            "bfa8ed27ed1638e8"
+          ],
+          "momentum": [
+            "3ff0c658b59b077a",
+            "bfee5512d5d51090",
+            "3ff1938724151fbd",
+            "bfee3c92163948dc"
+          ],
+          "mass": [
+            "3fe0504c4f0eb513",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8"
+          ]
+        },
+        {
+          "target_temperature": 675,
+          "factor": "3feffbbdab0a3ad6",
+          "Ek2_after": "3fc83ef70c78914b",
+          "position": [
+            "3f58fa91de417cca",
+            "bfb274fa2b749f0c",
+            "3fb4a0553c233f38",
+            "bfb269d74d9cdc9e"
+          ],
+          "momentum": [
+            "3ff129054fdc187e",
+            "bfed79c378bd5fb4",
+            "3ff257ccb68ce8c1",
+            "bfed3a7902a43e54"
+          ],
+          "mass": [
+            "3fe0504c4f0eb513",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8"
+          ]
+        },
+        {
+          "target_temperature": 650,
+          "factor": "3feffba4f9b654c9",
+          "Ek2_after": "3fc8385dd20f1be0",
+          "position": [
+            "3f60d89b21ee83c7",
+            "bfb84488cb36c292",
+            "3fbc1de923cb9f45",
+            "bfb8273e9f0dcef5"
+          ],
+          "momentum": [
+            "3ff18b1ce0bad5b4",
+            "bfec9ba1610a54cf",
+            "3ff3178f40f038ab",
+            "bfec221e3b18cf9b"
+          ],
+          "mass": [
+            "3fe0504c4f0eb513",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8",
+            "3f8478d83b0d6fc8"
+          ]
+        }
+      ],
+      "initial_Ek2": 0.19
+    },
+    {
+      "name": "case2",
+      "N": 103,
+      "T0": 1200.0,
+      "Tdamp": 400.0,
+      "dt": 0.002,
+      "initial_position": [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      "initial_momentum": [
+        "3ff0000000000000",
+        "bff0000000000000",
+        "3ff0000000000000",
+        "bff0000000000000"
+      ],
+      "initial_mass": [
+        "403473327afd2573",
+        "3fb0f14030defb67",
+        "3fb0f14030defb67",
+        "3fb0f14030defb67"
+      ],
+      "steps": [
+        {
+          "target_temperature": 1200,
+          "factor": "3fefff9a3c897fda",
+          "Ek2_after": "3ffb328634c9a018",
+          "position": [
+            "3f097106142ef0df",
+            "bf8eb61500d89df0",
+            "3f8f68fdcfe5b0b5",
+            "bf8eb55bed6ce947"
+          ],
+          "momentum": [
+            "3fef8212e54c1007",
+            "bfef83c46a57522e",
+            "3ff07adf56c524af",
+            "bfef814f70ff4a42"
+          ],
+          "mass": [
+            "403473327afd2573",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67"
+          ]
+        },
+        {
+          "target_temperature": 1225,
+          "factor": "3fefff9bdee0e73c",
+          "Ek2_after": "3ffb31dc01c00ed7",
+          "position": [
+            "3f193cba824a8971",
+            "bf9e799a8589af77",
+            "3f9fdf4f3a5648b1",
+            "bf9e76456a69a5c1"
+          ],
+          "momentum": [
+            "3feefae3e0819ef9",
+            "bfef05debbe2d2e4",
+            "3ff0f4ade41c4a40",
+            "bfeefb05a5859483"
+          ],
+          "mass": [
+            "403473327afd2573",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67"
+          ]
+        },
+        {
+          "target_temperature": 1250,
+          "factor": "3fefff9d9f0ba47e",
+          "Ek2_after": "3ffb3134cc931076",
+          "position": [
+            "3f22c475fa88bf63",
+            "bfa6ad76552f4ddd",
+            "3fa83fac794ec22d",
+            "bfa6a78842bda938"
+          ],
+          "momentum": [
+            "3fee6a59e20d0d8b",
+            "bfee867b01ab2a6f",
+            "3ff16d49f2237a26",
+            "bfee6cfce11d292f"
+          ],
+          "mass": [
+            "403473327afd2573",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67"
+          ]
+        },
+        {
+          "target_temperature": 1275,
+          "factor": "3fefff9f7d566c2d",
+          "Ek2_after": "3ffb3090c83d9bde",
+          "position": [
+            "3f28cca9ac687603",
+            "bfadff297752f648",
+            "3fb064d8bebcd142",
+            "bfadf0a40ed00602"
+          ],
+          "momentum": [
+            "3fedd05e1f717da8",
+            "bfee05c5a6751b75",
+            "3ff1e490d3b5044d",
+            "bfedd7133d146e85"
+          ],
+          "mass": [
+            "403473327afd2573",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67",
+            "3fb0f14030defb67"
+          ]
+        }
+      ],
+      "initial_Ek2": 1.7
+    }
+  ]
+}

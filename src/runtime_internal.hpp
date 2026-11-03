@@ -13,6 +13,7 @@
 // include/dmgmd/domain_layout.hpp stays pure CPU and must not include this.
 
 #include "dmgmd/domain_layout.hpp"
+#include "dmgmd/ensemble_control.hpp"
 #include "dmgmd/model.hpp"
 #include "dmgmd/mpi_runtime.hpp"
 #include "dmgmd/run_ir.hpp"
@@ -28,6 +29,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +42,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -110,6 +113,78 @@ struct ThermoState {
 };
 
 using Measurement = std::variant<DumpThermoCommand, DumpXyzCommand, DumpRestartCommand>;
+
+// New thermostats are validated only with the production default force path.
+// Scan the whole input before any segment can create scientific output.
+inline void validate_ensemble_environment(const RunProgram& program, MpiRuntime& mpi)
+{
+  const bool stateful = std::any_of(program.commands.begin(), program.commands.end(),
+      [](const Command& command) {
+        const auto* ensemble = std::get_if<EnsembleCommand>(&command.data);
+        return ensemble && (ensemble->kind == EnsembleKind::nvt_nhc ||
+                            ensemble->kind == EnsembleKind::nvt_bdp);
+      });
+  if (!stateful) return;
+  for (const auto& option : std::array<std::pair<const char*, const char*>, 4>{{
+           {"DMGMD_DOMAIN_PARTITION", "off"}, {"DMGMD_DOMAIN_OVERLAP", "off"},
+           {"DMGMD_DOMAIN_SCHEDULE", "split"}, {"DMGMD_OVERLAP_TRACE", "0"}}}) {
+    const char* value = std::getenv(option.first);
+    if (value && std::string(value) != option.second) {
+      throw std::runtime_error(std::string("new NVT ensembles require ") +
+                               option.first + "=" + option.second);
+    }
+  }
+  const bool stochastic = std::any_of(program.commands.begin(), program.commands.end(),
+      [](const Command& command) {
+        const auto* ensemble = std::get_if<EnsembleCommand>(&command.data);
+        return ensemble && ensemble->kind == EnsembleKind::nvt_bdp;
+      });
+  if (stochastic) {
+    const char* value = std::getenv("DMGMD_ENSEMBLE_SEED");
+    // Include presence, so unset differs from explicitly spelling the default.
+    // Compare strings exactly before parsing: "01" differs from "1".
+    const std::string local = value ? std::string("set:") + value : "unset";
+    const std::string root = mpi.broadcast_string(mpi.is_root() ? local : "");
+    if (!mpi.allreduce_all_passed(local == root, "ensemble seed consistency")) {
+      throw std::runtime_error("DMGMD_ENSEMBLE_SEED differs between MPI ranks");
+    }
+    static_cast<void>(parse_ensemble_seed(value));
+  }
+}
+
+// One broadcast carries both status and factor. Root catches scalar failures
+// before entering the collective; every rank then takes the same error branch.
+// Legacy NVE/Berendsen do not enter this protocol or add communication.
+template <class Evaluate>
+std::optional<double> ensemble_velocity_factor(
+    const EnsembleController& controller, MpiRuntime& mpi,
+    CommunicationVolume& communication, Evaluate&& evaluate)
+{
+  if (!controller.uses_root_state()) return evaluate();
+  std::array<double, 2> message{{1.0, 1.0}};
+  std::string error;
+  if (mpi.is_root()) {
+    try {
+      const auto factor = evaluate();
+      if (!factor || !std::isfinite(*factor) || *factor <= 0.0) {
+        throw std::runtime_error("invalid ensemble velocity factor");
+      }
+      message[1] = *factor;
+    } catch (const std::exception& exception) {
+      message[0] = 0.0;
+      error = exception.what();
+    }
+  }
+  mpi.broadcast_doubles(message.data(), message.size());
+  ++communication.collective_calls;
+  communication.mpi_input_bytes_global += sizeof(double) * message.size();
+  communication.mpi_output_bytes_global +=
+      sizeof(double) * message.size() * static_cast<std::uint64_t>(mpi.world_size());
+  if (message[0] != 1.0) {
+    throw std::runtime_error(mpi.broadcast_string(std::move(error)));
+  }
+  return message[1];
+}
 
 // ---------------------------------------------------------------------------
 // Rank I/O isolation (docs/standards/mpi-runtime.md "I/O 与

@@ -165,6 +165,16 @@ target_include_directories(dmgmd_input PUBLIC
 )
 target_link_libraries(dmgmd_input PUBLIC gpumd_compat)
 
+add_library(dmgmd_ensemble_control STATIC
+  src/ensemble_control.cpp
+  src/gpumd_compat/thermostat_nhc.cpp
+  src/gpumd_compat/thermostat_svr.cpp
+)
+target_include_directories(dmgmd_ensemble_control PUBLIC
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/src
+)
+
 add_library(dmgmd_runtime STATIC
   src/domain_runtime.cu
   src/mpi_runtime.cu
@@ -176,6 +186,7 @@ target_include_directories(dmgmd_runtime PUBLIC
 )
 target_link_libraries(dmgmd_runtime PUBLIC
   dmgmd_input
+  dmgmd_ensemble_control
   gpumd_compat
   CUDA::cudart
   MPI::MPI_CXX
