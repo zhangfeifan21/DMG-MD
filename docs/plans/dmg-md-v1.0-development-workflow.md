@@ -464,7 +464,7 @@ D1 + D2 + D3 + D4 ─ D5
 - **目标**：让 `run.in` 能表达 `nvt_nhc` 与 `nvt_bdp`，并把参数校验、错误来源和重复命令规则
   固定下来；NPT 的语法留到 B2/B3，不在本 Step 放开，避免 parser 接受运行时未实现的组合。
 - **主责文件**：`include/dmgmd/run_ir.hpp`（`EnsembleKind` 与 `EnsembleCommand`）、
-  `src/run_parser.cpp`、`tests/run_parser_tests.cpp`；`src/runtime.cu` / `src/domain_runtime.cu`
+  `src/run_parser.cpp`、`tests/unit/run_parser_tests.cpp`；`src/runtime.cu` / `src/domain_runtime.cu`
   仅增加动力学前的未实现系综 guard 与负例，不改数值路径。
 - **必读**：`docs/standards/compatibility-matrix.md` 的 run.in 语法；`src/run_parser.cpp` 的
   `ensemble`/`known_unsupported` 分支；上表 §2.5 的 5-token 事实；`run_parser_tests.cpp` 现有风格。
@@ -723,7 +723,7 @@ D1 + D2 + D3 + D4 ─ D5
   温度缩放后盒缩放、M1（含 P>1 fallback）路由、restart 与输出时点；M2a 明确不可达。
 - **主责文件**：`include/dmgmd/run_ir.hpp`、`src/run_parser.cpp`、`src/runtime.cu`
   （dispatcher 与 `run_segment`）、`src/box_control.*`、`src/ensemble_control.*`、
-  `tests/run_parser_tests.cpp`、`tests/` 新 NPT 集成 case、`tests/CMakeLists.txt`。
+  `tests/unit/run_parser_tests.cpp`、`tests/` 新 NPT 集成 case、`tests/CMakeLists.txt`。
 - **必读**：上游 `src/integrate/integrate.cu` 的 8-token 解析（455–463、620–712）与单位换算
   （1152–1153、1190）；`src/integrate/ensemble_ber.cu` 的 `cpu_pressure_isotropic`（138–148）与
   `compute2`（195–280）；`src/gpumd_compat/common.cuh` 的常数；本计划 §2.5、§13；B0/B1 的结论。
@@ -918,7 +918,7 @@ D1 + D2 + D3 + D4 ─ D5
 - **主责文件**：`include/dmgmd/model.hpp`（`PotentialMetadata`）、`src/model_parser.cpp`
   （`load_potential_metadata`）、`include/dmgmd/run_ir.hpp`（`PotentialCommand`）、
   `src/run_parser.cpp`、`src/force_field.cpp`、`src/runtime.cu`（dispatcher）、
-  `src/dmgmd_main.cpp`（传参）、`tests/model_parser_tests.cpp`、`tests/run_parser_tests.cpp`。
+  `src/dmgmd_main.cpp`（传参）、`tests/unit/model_parser_tests.cpp`、`tests/unit/run_parser_tests.cpp`。
 - **必读**：`src/model_parser.cpp:257` 的当前白名单；`src/run_parser.cpp` 的 `potential`
   分支（约 163）；`src/dmgmd_main.cpp` 的 potential 提取；上游 `src/force/force.cu:75-190`
   （格式分发、`max_neighbor` 1..1024、默认 400）；上游 `lj.cu`/`eam_alloy.cu` 的文件头；

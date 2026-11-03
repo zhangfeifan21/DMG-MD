@@ -20,7 +20,7 @@ namespace dmgmd {
 
 // Owner rank of a fractional coordinate for P equal-width slabs.
 //
-// Slab rules (unit-tested in tests/spatial_ownership_tests.cpp):
+// Slab rules (unit-tested in tests/unit/spatial_ownership_tests.cpp):
 //   * slabs are half-open [k/P, (k+1)/P), so an interior boundary k/P
 //     belongs to the right slab k, and s=0 belongs to slab 0;
 //   * the exact upper edge s=1 stays with the last slab, matching the

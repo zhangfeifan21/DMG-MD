@@ -82,7 +82,7 @@ def freeze(root, previous):
     current = experiment(root)
     sources = [Path(__file__), benchmark.HERE/'test_overlap_o8.py', benchmark.HERE/'o5_rank_output.py',
                benchmark.ROOT/'src/domain_runtime.cu', benchmark.ROOT/'tests/mpi/run_mpi_domain.py',
-               benchmark.ROOT/'tests/mpi/run_thermo_demand.py', benchmark.ROOT/'tests/thermo_demand_wrappers.cpp']
+               benchmark.ROOT/'tests/mpi/run_thermo_demand.py', benchmark.ROOT/'tests/mpi/thermo_demand_wrappers.cpp']
     o5.freeze(root/'frozen-plan.json', dict(design_sha256=digest(root/'frozen-design.json'),
         identity=current.identity(VERSIONS), bindings=binding_identity(current.bindings),
         sources={str(path.relative_to(benchmark.ROOT)): digest(path) for path in sources}))

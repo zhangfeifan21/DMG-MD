@@ -20,7 +20,7 @@ from analyze_overlap_o65 import snapshot_report
 
 execute_local = b.execute
 SOURCES = ['CMakeLists.txt', 'tests/CMakeLists.txt', 'src/gpumd_compat/nep.cu',
-    'src/gpumd_compat/nep.cuh', 'src/gpumd_compat/nep_o65.inc', 'tests/o65_replay.cu',
+    'src/gpumd_compat/nep.cuh', 'src/gpumd_compat/nep_o65.inc', 'tests/benchmark/o65_replay.cu',
     'tests/benchmark/run_overlap_o65.py', 'tests/benchmark/run_overlap_o65_replays.py',
     'tests/benchmark/analyze_overlap_o65.py', 'tests/benchmark/test_overlap_o65.py']
 

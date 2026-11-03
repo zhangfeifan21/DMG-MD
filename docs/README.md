@@ -36,7 +36,7 @@ O 系列是与 v1.0 产品化独立的性能主线。按优化目标查看[通�
 ## 操作入口
 
 - [Docker 快速开始](../README.md#docker-部署推荐跨服务器使用)、[跨服务器部署](operations/deployment.md)。
-- 测试目录：[单 GPU baseline](../tests/baseline/README.md)、[MPI/halo](../tests/mpi/README.md)、[长程 NVE/NVT](../tests/long_nve/README.md)、[NHC/BDP 验收](../tests/thermostats/README.md)。
+- [测试目录总览](../tests/README.md)：源码、构建与 CTest 的范围说明；具体测试目录：[单 GPU baseline](../tests/baseline/README.md)、[MPI/halo](../tests/mpi/README.md)、[长程 NVE/NVT](../tests/long_nve/README.md)、[NHC/BDP 验收](../tests/thermostats/README.md)。
 - [Benchmark](../tests/benchmark/README.md)、[LAMMPS 输入与静态比较](../tests/lammps_reference/README.md)。
 
 ## 验证记录

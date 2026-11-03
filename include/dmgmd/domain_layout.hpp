@@ -3,7 +3,7 @@
 // M2a local-domain layout: pure host-side geometry, classification, counting
 // and exchange-plan generation (docs/standards/mpi-runtime.md). Nothing here
 // touches MPI or CUDA; the domain runtime in
-// src/domain_runtime.cu drives these helpers, and tests/domain_layout_tests.cpp
+// src/domain_runtime.cu drives these helpers, and tests/unit/domain_layout_tests.cpp
 // exercises them directly.
 //
 // Contracts implemented here:

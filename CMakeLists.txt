@@ -145,7 +145,7 @@ target_link_libraries(gpumd_compat PUBLIC CUDA::cudart)
 option(DMGMD_ENABLE_O65_DIAGNOSTICS "Build isolated O6.5 snapshot/replay experiments" OFF)
 if(DMGMD_ENABLE_O65_DIAGNOSTICS)
   target_compile_definitions(gpumd_compat PUBLIC DMGMD_ENABLE_O65_DIAGNOSTICS=1)
-  add_executable(dmgmd-o65-replay tests/o65_replay.cu)
+  add_executable(dmgmd-o65-replay tests/benchmark/o65_replay.cu)
   target_link_libraries(dmgmd-o65-replay PRIVATE gpumd_compat)
 endif()
 # Whole-program CUDA compilation (like the reference GPUMD build): the static

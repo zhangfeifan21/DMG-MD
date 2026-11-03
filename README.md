@@ -293,7 +293,7 @@ docker run --rm --gpus '"device=0"' --shm-size=1g --ulimit memlock=-1:-1 \
 | `unsupported` | `run.in` 使用了当前尚未支持的命令，请对照支持范围调整 |
 | 自检失败，但显卡信息能正常显示 | 保存自检完整输出给维护者；显卡可见不代表计算环境全部正常 |
 | 构建时出现 `generated model hash mismatch` | 更新项目文件，确认 `tests/long_nve/long_nve_common.py` 是包含 `math.fsum` 的新版，然后重跑第 3 步 |
-| 容器自检报 `run parser test failure: unsupported command 'dftd3'` | 更新项目文件，确认 `tests/run_parser_tests.cpp` 包含 `mkstemp`，重新执行第 3 步构建镜像，再运行第 4 步自检 |
+| 容器自检报 `run parser test failure: unsupported command 'dftd3'` | 更新项目文件，确认 `tests/unit/run_parser_tests.cpp` 包含 `mkstemp`，重新执行第 3 步构建镜像，再运行第 4 步自检 |
 | 导入镜像后误执行 `docker build`，报 `resolve image config for docker.io/docker/dockerfile:1` 或 `403 Forbidden` | 不要在新服务器上重建；直接运行第 4 步的自检命令。若确实需要从源码构建，构建服务器需能访问 Docker Hub 及其他构建依赖 |
 
 ### 可选：用两张显卡计算
@@ -496,6 +496,8 @@ GPU_Vector、邻居构建、Potential、NEP/NEP-ZBL CUDA kernels）已在 `src/g
 
 ## 原生构建与测试
 
+测试目录职责、CTest 范围和完整验收边界见[测试总览](tests/README.md)。
+
 ```bash
 source ../env/md-mpi.sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -638,7 +640,7 @@ build/compile_commands.json
 workspace root；如果打开的是它的父目录，compile database 路径需要相应写成
 `newmd/build/compile_commands.json`。
 
-`tests/model_parser_tests.cpp` 中的 `DMGMD_SOURCE_DIR` 是
+`tests/unit/model_parser_tests.cpp` 中的 `DMGMD_SOURCE_DIR` 是
 `dmgmd_model_parser_tests` target 专属的 compile definition。如果编辑器没有加载上述 compile
 database，它会错误地认为该宏未定义，并且可能找不到 `dmgmd/model.hpp`；CMake 构建本身不会
 出现这个问题。

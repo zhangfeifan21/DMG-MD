@@ -61,7 +61,7 @@ def freeze(root, previous):
                 raise ValueError('input differs from accepted fixture')
     e = experiment(root)
     tools = [Path(__file__), b.HERE/'test_overlap_o7.py', b.HERE/'o5_rank_output.py', b.HERE/'analyze_overlap_o5.py',
-             b.ROOT/'tests/mpi/run_cache_decision.py', b.ROOT/'tests/cache_decision_wrappers.cpp']
+             b.ROOT/'tests/mpi/run_cache_decision.py', b.ROOT/'tests/mpi/cache_decision_wrappers.cpp']
     plan = dict(design_sha256=digest(root/'frozen-design.json'),
                 identity=e.identity(('before', 'after')), bindings=e.bindings,
                 tool_sha256={str(p.relative_to(b.ROOT)): digest(p) for p in tools},

@@ -84,7 +84,7 @@ def initialize(root):
     source_names += ['tests/benchmark/'+name for name in ('run_overlap_o86.py', 'analyze_overlap_o86.py',
                      'test_overlap_o86.py', 'recompute_overlap_o86.py', 'o5_rank_output.py')]
     source_names += ['tests/mpi/run_mpi_domain.py', 'tests/long_nve/run_long_nve.py',
-                     'tests/domain_neighbor_cuda_tests.cu']
+                     'tests/gpu/domain_neighbor_cuda_tests.cu']
     o5.freeze(root/'frozen-plan.json', dict(design=design, design_sha256=digest(root/'implementation-plan.json'),
         identity=current.identity(VERSIONS), bindings=current.bindings,
         diagnostic_amendment=None,
