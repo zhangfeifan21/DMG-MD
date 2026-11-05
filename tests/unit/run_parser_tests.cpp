@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <utility>
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -252,11 +253,100 @@ void test_legacy_ensemble_sequence()
 
 void test_unsupported_ensembles()
 {
-  for (const std::string& name : {"nvt_lan", "nvt_bao", "npt_ber", "npt_scr", "npt_mttk", "heat"}) {
+  for (const std::string& name : {"nvt_lan", "nvt_bao", "npt_mttk", "heat"}) {
     const std::string arguments = name.rfind("npt_", 0) == 0
                                      ? " 300 300 100 0 100 1000" : " 300 300 100";
     expect_parse_error("ensemble " + name + arguments,
                        "unsupported command 'ensemble " + name + "' in the current version");
+  }
+}
+
+void test_npt_scr_parser()
+{
+  const std::string valid = "ensemble npt_scr 300 450 100 -2.5 1500 20";
+  const TemporaryInput input(valid + "\nrun 2\n");
+  const auto program = dmgmd::parse_run_file(input.path().string());
+  const auto& parsed = std::get<dmgmd::EnsembleCommand>(program.commands[0].data);
+  expect(parsed.kind == dmgmd::EnsembleKind::npt_scr &&
+             parsed.initial_temperature == 300 && parsed.final_temperature == 450 &&
+             parsed.temperature_coupling == 100 && parsed.target_pressure_gpa == -2.5 &&
+             parsed.bulk_modulus_gpa == 1500 && parsed.pressure_coupling == 20,
+         "npt_scr fields or GPa input changed");
+  dmgmd::validate_runtime_ensembles(program);
+  expect(dmgmd::program_uses_npt(program), "whole-program NPT scan missed npt_scr");
+  for (const auto& [line, expected] : std::array<std::pair<std::string, std::string>, 7>{{
+           {"ensemble npt_scr 0 300 100 0 1000 10", "initial and final temperatures should be > 0"},
+           {"ensemble npt_scr 300 -1 100 0 1000 10", "initial and final temperatures should be > 0"},
+           {"ensemble npt_scr 300 300 0 0 1000 10", "temperature coupling should be >= 1"},
+           {"ensemble npt_scr 300 300 100 0 0 10", "bulk modulus should be > 0"},
+           {"ensemble npt_scr 300 300 100 0 -1 10", "bulk modulus should be > 0"},
+           {"ensemble npt_scr 300 300 100 0 1000 0", "pressure coupling time should be >= 1"},
+           {"ensemble npt_scr 300 300 100 nan 1000 10", "target pressure (GPa) should be a finite real number"}}}) {
+    expect_parse_error(line, expected);
+  }
+  for (int token_count : {12, 18}) {
+    std::string line = valid;
+    for (int index = 8; index < token_count; ++index) line += " 1";
+    expect_parse_error(line, "npt_scr: v1 supports isotropic 8-token syntax only");
+  }
+  for (const auto& setting : {"correct_velocity 10", "time_step 1 0.5", "time_step 0", "time_step -1"}) {
+    const TemporaryInput invalid(std::string("ensemble nve\nrun 1\n") + setting +
+                                 "\nensemble npt_scr 300 300 100 0 1000 10\nrun 1\n");
+    bool rejected = false;
+    try { dmgmd::validate_runtime_ensembles(dmgmd::parse_run_file(invalid.path().string())); }
+    catch (const dmgmd::InputError& error) {
+      rejected = std::string(error.what()).find("npt_scr") != std::string::npos;
+    }
+    expect(rejected, "npt_scr accepted an incompatible runtime option");
+  }
+  report_ensemble_case(valid, "typed npt_scr fields, negative P, and M1 scan accepted",
+                       "typed npt_scr fields, negative P, and M1 scan accepted");
+}
+
+void test_npt_ber_parser()
+{
+  const std::string valid = "ensemble npt_ber 300 450 100 -2.5 1500 20";
+  const TemporaryInput input(valid + "\nrun 2\n");
+  const auto program = dmgmd::parse_run_file(input.path().string());
+  const auto& parsed = std::get<dmgmd::EnsembleCommand>(program.commands[0].data);
+  expect(parsed.kind == dmgmd::EnsembleKind::npt_ber, "wrong NPT kind");
+  expect(parsed.initial_temperature == 300 && parsed.final_temperature == 450 &&
+             parsed.temperature_coupling == 100 && parsed.target_pressure_gpa == -2.5 &&
+             parsed.bulk_modulus_gpa == 1500 && parsed.pressure_coupling == 20,
+         "NPT fields or GPa input changed");
+  dmgmd::validate_runtime_ensembles(program);
+  report_ensemble_case(valid, "typed npt_ber fields and negative P accepted",
+                       "typed npt_ber fields and negative P accepted");
+
+  for (const auto& [line, expected] : std::array<std::pair<std::string, std::string>, 7>{{
+           {"ensemble npt_ber 0 300 100 0 1000 10", "initial and final temperatures should be > 0"},
+           {"ensemble npt_ber 300 -1 100 0 1000 10", "initial and final temperatures should be > 0"},
+           {"ensemble npt_ber 300 300 0 0 1000 10", "temperature coupling should be >= 1"},
+           {"ensemble npt_ber 300 300 100 0 0 10", "bulk modulus should be > 0"},
+           {"ensemble npt_ber 300 300 100 0 -1 10", "bulk modulus should be > 0"},
+           {"ensemble npt_ber 300 300 100 0 1000 0", "pressure coupling time should be >= 1"},
+           {"ensemble npt_ber 300 300 100 nan 1000 10", "target pressure (GPa) should be a finite real number"}}}) {
+    expect_parse_error(line, expected);
+  }
+  for (int token_count : {12, 18}) {
+    std::string line = valid;
+    for (int index = 8; index < token_count; ++index) line += " 1";
+    expect_parse_error(line, "npt_ber: v1 supports isotropic 8-token syntax only");
+  }
+
+  for (const auto& setting : {"correct_velocity 10", "time_step 1 0.5", "time_step 0", "time_step -1"}) {
+    const TemporaryInput invalid(std::string("ensemble nve\nrun 1\n") + setting +
+                                 "\nensemble npt_ber 300 300 100 0 1000 10\nrun 1\n");
+    bool rejected = false;
+    try {
+      dmgmd::validate_runtime_ensembles(dmgmd::parse_run_file(invalid.path().string()));
+    } catch (const dmgmd::InputError& error) {
+      expect(error.location().line == 5, "NPT preflight lost run source");
+      expect(std::string(error.what()).find("npt_ber") != std::string::npos,
+             "NPT preflight has wrong diagnostic");
+      rejected = true;
+    }
+    expect(rejected, "NPT accepted correction or adaptive/invalid timestep");
   }
 }
 
@@ -284,9 +374,8 @@ void test_runtime_ensemble_preflight()
       expect(rejected, "unverified new NVT combination was accepted");
     }
   }
-  // The reserved NPT kinds are not parsed, but a constructed IR must fail closed.
-  const std::array<dmgmd::EnsembleKind, 3> rejected_kinds{{
-      dmgmd::EnsembleKind::npt_ber, dmgmd::EnsembleKind::npt_scr,
+  // Unknown constructed IR kinds must fail closed even though npt_scr is now supported.
+  const std::array<dmgmd::EnsembleKind, 1> rejected_kinds{{
       static_cast<dmgmd::EnsembleKind>(999)}};
   for (const auto kind : rejected_kinds) {
     const dmgmd::SourceLocation source{"constructed.run", 42, "constructed ensemble"};
@@ -318,6 +407,8 @@ int main()
     test_nvt_syntax_and_boundaries();
     test_legacy_ensemble_sequence();
     test_unsupported_ensembles();
+    test_npt_ber_parser();
+    test_npt_scr_parser();
     test_runtime_ensemble_preflight();
   } catch (const std::exception& error) {
     std::cerr << "run parser test failure: " << error.what() << '\n';

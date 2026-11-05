@@ -115,7 +115,7 @@ def main():
                                 assert (before[0]/filename).read_bytes() == (after[0]/filename).read_bytes(), (name, filename)
                     (root/'results.json').write_text(json.dumps(records, indent=2)+'\n')
                     print('PASS', ranks, backend, name, flush=True)
-        # M1/P1 remains on the original protocol and produces identical bytes.
+        # replicated-full/P1 remains on the original protocol and produces identical bytes.
         for backend in ('HostStaged', 'CudaAware'):
             pair = []
             for version in ('before', 'after'):

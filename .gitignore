@@ -5,6 +5,7 @@
 # ----- Build -----
 build/
 build-*/
+/artifacts/
 cmake-build-*/
 CMakeCache.txt
 CMakeFiles/
@@ -76,3 +77,10 @@ dmgmd-*/
 # Authoritative GPUMD baseline outputs are intentionally versioned test fixtures.
 !tests/baseline/goldens/
 !tests/baseline/goldens/**
+
+# Keep only the final NPT confirmation report visible; intermediate evidence
+# was intentionally removed after acceptance.
+!docs/status/validation/evidence/npt-scr-gb/
+!docs/status/validation/evidence/npt-scr-gb/results/
+!docs/status/validation/evidence/npt-scr-gb/results/n3/
+!docs/status/validation/evidence/npt-scr-gb/results/n3/paired-analysis.json

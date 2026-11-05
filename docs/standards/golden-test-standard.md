@@ -1,6 +1,6 @@
 # Golden Test 与验收原则
 
-类别：现行测试标准。状态：ACTIVE。核对日期：2026-11-02。
+类别：现行测试标准。状态：ACTIVE。核对日期：2026-11-03。
 GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 
 ## 事实源与边界
@@ -16,13 +16,14 @@ GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 | CTest | 见下表；不自动启动 baseline/MPI/long_nve GPU 矩阵 |
 | `tests/baseline/run_baselines.py` | 四个 committed case；reference 身份/输入/golden hash 与单 GPU，结构 exact、数值按 manifest；reference 复现还须 byte-exact |
 | `tests/mpi/check_environment.py` | 指定 executable/linkage、Open MPI/UCX CUDA transport、唯一 GPU、device collective 与 p2p 主动自检；环境变化先过此门 |
-| `tests/mpi/run_mpi_differential.py` | P1/2/4、两后端，committed baseline、owned 覆盖、输出/通信及跨 rank/backend 比较；明确 M1 fallback |
-| `tests/mpi/run_mpi_migration.py` | M1 逐步几何 owner、内部/周期/多 slab/N<P/空 slab、修速、多 run、跨 rank restart；精确字节与 P1 oracle；P>1 unsupported-box 门 |
+| `tests/mpi/run_mpi_differential.py` | P1/2/4、两后端，committed baseline、owned 覆盖、输出/通信及跨 rank/backend 比较；明确 全量复制回退路径 |
+| `tests/mpi/run_mpi_migration.py` | 全量复制逐步几何 owner、内部/周期/多 slab/N<P/空 slab、修速、多 run、跨 rank restart；精确字节与 P1 oracle；P>1 unsupported-box 门 |
 | `tests/mpi/run_mpi_domain.py` | P2/4 两后端、同输入 P1 oracle，强制 mode=m2a；两跳/空域1000步、NEP5/typewise/ZBL、缓存/迁移/多 run/restart、计时 A/B、精确通信与 allocation |
 | `tests/mpi/run_halo_lifecycle.py` | 独立 GPU 作业：P1/2/4、两后端、收发独立完成、unpack/复用、零 count/增长/幂等和单 rank 故障有界退出 |
 | `tests/mpi/run_rank_io_isolation.py` | 本地 scratch、健康输出/清理与 mkdir/file/chdir/restore/cleanup 故障；物理双节点验收暂缓 |
 | `tests/long_nve/run_long_nve.py` | NVE/NVT 长程、双向静态回放、跨 rank restart 及兼容势静态/短轨迹 |
 | `tests/thermostats/` | NHC/SVR 逐位 oracle、NHC GPUMD 短轨迹、BDP seed 合同、两路径/后端重复、root 因子协议、预注册 KE/速度分量 CI 与新作业 restart；入口见[说明](../../tests/thermostats/README.md) |
+| `tests/npt/` | B2 `npt_ber` GPUMD golden、P1/P2/P4 全量复制路径、压力方向/输入安全/restart 分类；B3 `npt_scr` 统计条件冻结为同条件 GPUMD reference；总状态见[NPT/G-B 矩阵](../status/validation/npt-validation.md#npt-matrix-20261104) |
 | `tests/lammps_reference/compare_static.py` | 三引擎物理量等价；阈值在该目录 manifest，不能套用跨软件字节一致 |
 
 ### CTest 注册项
@@ -35,7 +36,7 @@ GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。
 | `dmgmd.ensemble_control` | target ramp、Berendsen 原表达式、NHC/BDP 标量状态与 guard、seed/cache/无分配合同 |
 | `dmgmd.nhc_fixture` / `dmgmd.svr_fixture` | 与只读上游独立提取的固定 fixture 比较 double 位模式 |
 | `dmgmd.thermostat_statistics` | 自相关/ESS、块与 seed 间 Student-t CI、预注册误差带判定 |
-| `dmgmd.spatial_ownership` | M1 边界/tie、槽位/ID/plan、空 slab/N<P、owner 覆盖 |
+| `dmgmd.spatial_ownership` | 全量复制边界/tie、槽位/ID/plan、空 slab/N<P、owner 覆盖 |
 | `dmgmd.domain_layout` | typewise 半径/float 上界、eligibility、P2 去重、ghost/迁移/空域计划 |
 | `dmgmd.domain_partition` | 独立图闭包、producer 唯一性与 key/ticket |
 | `dmgmd.domain_neighbor_cuda` | CUDA 容器、非零 center offset、分类/oracle、key 失效和非法 row/token/反边拒绝；无 GPU 返回 skip |
@@ -66,7 +67,7 @@ O3 生产立即 finish，保留完整三模式矩阵，并与锁定 O2 输出核
 
 精确几何、步数、seed、rank/backend、sections 和统计门槛只在 long_nve manifest 维护。
 smoke/nightly/release 分别为 100/10000/100000 步；nightly/release 的 P>1 专属长轴几何
-必须命中 M2a、最大 P slab>2*d_coord。三物理势执行适用动力学/回放/restart，四兼容势
+必须命中局部域分解模式、最大 P slab>2*d_coord。三物理势执行适用动力学/回放/restart，四兼容势
 只执行静态/短轨迹。缩小 cases/seeds/ranks/sections 只算子集，不等于完整 profile。
 100000-step release 尚无完整通过记录；最新 O3 只重跑 smoke。
 
@@ -85,6 +86,8 @@ NHC/BDP 的正则矩另由 thermostat manifest 冻结的独立初速、seed、bu
 和最低 ESS 判定，CI 必须完整落入误差带。Berendsen 的涨落不构成正则 oracle；总 K 通过不能
 替代速度分量/有效自由度检查。减半步长须保持物理耦合时间。完整方法及有限预算的
 INCONCLUSIVE 见[系综合同](ensembles.md#统计证据的适用范围)。
+
+NPT 的候选若在冻结的相同模型、势、`run.in`、物理单位和运行条件下与 GPUMD 或 LAMMPS 参考相容，即按维护者批准的 cross-engine compatibility 口径判通过；共同偏离理论目标单列诊断，不以未验证的理论近似造成假失败，也不据此声称普遍严格采样。NPT 统计范围和指标见[预注册 NPT 矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)。跨引擎相容不能替代直接错误/安全检查：非法参数或几何、非有限状态、无效缩放因子、所有权/邻居缓存错误、MPI 挂起、错误文件/输出时点仍必须失败或被专项测试发现。正式 G-B 需同时具备参考一致性和这些直接安全门。
 
 [三引擎标准](cross-engine-reference.md)允许有证明的格式/单位转换；不同软件输入/输出哈希
 不必相同，转换前后哈希用于追溯。物理正确性先于正式效率排名。

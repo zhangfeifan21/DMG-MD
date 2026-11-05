@@ -44,7 +44,7 @@ small-box/large-box dispatch driven by the DMG-MD runtime.
 
 Adaptations for this replica are listed at the bottom of this header block.
 
-DMG-MD domain additions (M2a): the parse-only NEP constructor with a separate
+DMG-MD domain additions (local-domain): the parse-only NEP constructor with a separate
 allocate_workspace (parameters parsed exactly once; workspaces sized only
 after the domain-mode decision), the public params()/zbl_params() views used
 by the eligibility/radius computation, the neighbor_record_sink routing for
@@ -132,7 +132,7 @@ static std::vector<float> get_descriptor_parameters_type_pair(
 // descriptor dimensions, ANN widths, then the flat parameter block; uploads
 // parameters to the device. Exits the process on malformed input, exactly
 // like the reference loader (reference nep.cu:100). This deferred form
-// allocates no per-atom workspace: the M2a runtime parses once, decides the
+// allocates no per-atom workspace: the local-domain runtime parses once, decides the
 // domain mode, and only then sizes the workspaces through allocate_workspace.
 
 NEP::NEP(const char* file_potential)
@@ -418,7 +418,7 @@ NEP::NEP(const char* file_potential)
 }
 
 // Legacy eager constructor: parse once, then size every per-atom workspace
-// for num_atoms. P1/M1 keeps this entry point and its behavior unchanged.
+// for num_atoms. P1/replicated-full keeps this entry point and its behavior unchanged.
 
 NEP::NEP(const char* file_potential, const int num_atoms)
   : NEP(file_potential)
@@ -427,9 +427,9 @@ NEP::NEP(const char* file_potential, const int num_atoms)
 }
 
 // Sizes every per-atom NEP workspace and the neighbor scratch for
-// num_atoms atoms (global N on the M1 fallback path, local_count on the M2a
+// num_atoms atoms (global N on the replicated-full fallback path, local_count on the local-domain
 // domain path). Repeated calls update every logical size/stride and invalidate
-// the neighbor rebuild reference. M2a storage retains sufficient physical
+// the neighbor rebuild reference. local-domain storage retains sufficient physical
 // capacity, so a small local_count fluctuation does not imply
 // cudaFree/cudaMalloc; kernels still receive the exact logical stride (R27).
 void NEP::allocate_workspace(const int num_atoms)
@@ -1282,7 +1282,7 @@ void NEP::compute_large_box(
   }
 }
 
-// M2a local-domain large-box orchestration
+// local-domain large-box orchestration
 // (docs/standards/mpi-runtime.md). Same kernel sequence and
 // arithmetic as compute_large_box, but with the center domains split:
 //   * [N1, N2)   final-force centers (owned prefix);
@@ -1426,7 +1426,7 @@ void NEP::compute_domain(
     // workspace, while every rank still invokes the sink in lockstep.
     if (record_neighbors) {
       // Local maxima over the dependency centers only (rows outside [ND1,ND2)
-      // are never written on the domain path). The sink lets the M2a runtime
+      // are never written on the domain path). The sink lets the local-domain runtime
       // aggregate with MPI and write one legacy-format record from rank 0.
       int radial_actual = 0;
       int angular_actual = 0;
@@ -1699,7 +1699,7 @@ void NEP::compute_domain(
         initial_pe = partition_download(potential_per_atom);
         initial_force = partition_download(force_per_atom);
         initial_virial = partition_download(virial_per_atom);
-        // Original, unselected M2a kernels, same coordinates/V/stride. No
+        // Original, unselected local-domain kernels, same coordinates/V/stride. No
         // extra force-call counter, neighbor rebuild, record or MPI operation.
         replay = true;
         filter(nullptr, false);

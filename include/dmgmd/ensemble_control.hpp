@@ -35,6 +35,9 @@ class EnsembleController {
   bool needs_post_force_thermo() const noexcept;
   bool needs_pre_force_kinetic_energy() const noexcept;
   bool uses_root_state() const noexcept;
+  bool has_barostat() const noexcept;
+  const EnsembleCommand& configuration() const noexcept { return configuration_; }
+  double last_barostat_gaussian() const noexcept { return last_barostat_gaussian_; }
 
   // step is zero-based within this segment; 0 <= step < steps.
   double target_temperature(int step, int steps) const;
@@ -54,10 +57,20 @@ class EnsembleController {
   std::optional<double> after_force(
       const std::array<double, 8>* global_thermo, int step, int steps) const;
 
+  // Root-only isotropic NPT factor from pre-thermostat normalized thermo and
+  // pre-scale volume. SCR consumes the shared root RNG after BDP; global_step
+  // is used in diagnostics.
+  double barostat_scale(
+      const std::array<double, 8>* global_thermo, double pre_scale_volume,
+      int step, int steps, std::uint64_t global_step) const;
+
  private:
   struct State;
   EnsembleCommand configuration_;
   std::unique_ptr<State> state_;
+  double target_pressure_internal_ = 0.0;
+  double pressure_coupling_internal_ = 0.0;
+  mutable double last_barostat_gaussian_ = 0.0;
 };
 
 }  // namespace dmgmd

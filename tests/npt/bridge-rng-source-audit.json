@@ -1,0 +1,62 @@
+{
+  "schema": "dmgmd.npt-scr-bridge-rng-source-audit.v1",
+  "status": "PASS_ROOT_REVIEWED",
+  "scope": "Source-level evidence that, for one full run segment using the same locked candidate binary/toolchain, initial SvrState/ensemble seed, N, dt and step count, the same root-owned pseudorandom draw stream is consumed at P1/P2/P4. This establishes call-stream alignment, not bitwise equality of resulting thermo, scale factors, positions or trajectories; no per-step RNG trace was captured.",
+  "candidate_binary_sha256": "c3c9cd0b81a3f18ebbd8f4379dfbd3dbf929785eb5aa883fa4730b025d70bcdf",
+  "source_digest": {
+    "path": "/tmp/dmgmd-b0-b4-20261103/b3-source-digest.sha256",
+    "sha256": "52069b5aca1dc5d3d7b9a674041e814ef3898eb9a6f93d15d6c38653ff5b1c18"
+  },
+  "source_files": [
+    {
+      "path": "include/dmgmd/ensemble_control.hpp",
+      "sha256": "4c401711fbf70d5397a7c77a22aa9641eda67442feddfdf2129f53ce4ee5c3b3",
+      "symbols": "EnsembleController root-state and barostat API",
+      "lines": "19-24, 60-65"
+    },
+    {
+      "path": "src/ensemble_control.cpp",
+      "sha256": "4425b1b741d5a157f17b6e74e544d347e8f61250ebb9785a0fa92dec35514af2",
+      "symbols": "EnsembleController::State; constructor; after_force; barostat_scale",
+      "lines": "15-20, 57-108, 199-240, 262-303"
+    },
+    {
+      "path": "src/gpumd_compat/thermostat_svr.cpp",
+      "sha256": "5ee2ff5da16db1b432c226e1195928e31e996f764d8a9e626fa3fadd4c820381",
+      "symbols": "SvrState::SvrState; gasdev; resamplekin_sumnoises; resamplekin; gamdev",
+      "lines": "29-51, 53-104, 106-124"
+    },
+    {
+      "path": "src/runtime_internal.hpp",
+      "sha256": "0765b2b99c9f8feccf29676ad78de37213278b6a8bf71d67332652e20b2be2dd",
+      "symbols": "validate_ensemble_environment; ensemble_velocity_factor; ensemble_box_factor",
+      "lines": "154-170, 173-205, 207-251"
+    },
+    {
+      "path": "src/runtime.cu",
+      "sha256": "20e4c32994fe13d4affcc7452cf015e03ab81319900ead2dfffd536ab87c2479",
+      "symbols": "M1 run_segment controller ownership and seed; step loop; M1 replicated runtime; segment dispatch",
+      "lines": "681-710, 748-812, 852-880, 935-950"
+    },
+    {
+      "path": "src/domain_runtime.cu",
+      "sha256": "82215f5a52b1f14eb3cb1e1dd54a52fad2a6c415b3a0379eaa53f263519aa388",
+      "symbols": "run_local_domain fail-closed NPT rejection",
+      "lines": "2163-2176"
+    }
+  ],
+  "findings": {
+    "seed_consistency": "Before runtime, stochastic ensemble commands compare the exact DMGMD_ENSEMBLE_SEED string across ranks and validate its uint32 syntax (runtime_internal.hpp:154-170). The registered decimal seed is common across ranks; run_segment constructs one EnsembleController on root with that seed and creates SvrState there (runtime.cu:705-710; ensemble_control.cpp:98-106). For this 216-atom fixture ndeg=3N=648, so resamplekin_sumnoises receives fixed ndeg-1=647 on every rank-count/backend condition. Non-root ranks do not own or advance SCR RNG.",
+    "per_step_order": "For each fixed-dt NPT step, the M1 replicated runtime computes globally reduced thermo, invokes root-owned after_force() for the BDP kinetic resampling, broadcasts its validated velocity factor, applies velocity scaling, then invokes root-owned ensemble_box_factor()/barostat_scale() and broadcasts the checked box factor. Thus the shared RNG order is BDP draws followed by the pressure Gaussian draw once per step.",
+    "draw_count_independence": "resamplekin() always draws one gasdev value then calls resamplekin_sumnoises(ndeg-1). ndeg is fixed by the common atom count. Its branch is based only on ndeg parity/value; gamma rejection loops depend on RNG values, not kk/velocity/thermo. With same RNG state and binary, rejection decisions and draw counts therefore match. Pressure barostat_scale() calls gasdev exactly once per NPT SCR step even when pressure coupling is zero (B>2000 fixed-box path). gasdev's cached paired variate is part of the same root SvrState.",
+    "rank_backend_independence": "Rank count/backend changes force/reduction roundoff and can alter thermo state and resulting factors. It does not change root-only BDP/SCR call sites, ndeg, fixed step loop, or random draw schedule. With identical starting SvrState and same binary/toolchain, gasdev/gamdev take the same RNG-driven rejection decisions and consume the same pseudorandom stream. The audit is source-level (no per-step RNG trace), and does not claim equal factor values, thermo, positions, or trajectories across rank/backend.",
+    "m1_only": "M2a local-domain execution explicitly rejects NPT before entering its dynamics loop. The relevant comparison is P1/P2/P4 through the replicated M1 runtime, not an M2a NPT loop.",
+    "run_boundary": "A fresh controller/RNG is constructed per run segment. This confirmation registers one single full-budget run per seed/profile/condition, so no cross-segment RNG-continuation assumption is used."
+  },
+  "limits": [
+    "Requires candidate binary SHA, source digest, inputs and ensemble_seed to match the registration.",
+    "Any source or candidate binary change, or failure of the specified MPI rank seed-consistency/rng_draw_evidence checks, invalidates bridge eligibility.",
+    "The same-stream conclusion assumes the locked candidate binary/toolchain and initial SvrState. Rank/backend floating-point reductions may change trajectory values, but source control flow does not branch RNG consumption on those values. No per-step RNG trace was captured."
+  ],
+  "approval": "Root reviewed and accepted this source-level pairing premise on 2026-11-03 06:51 UTC. This approval covers only static RNG call-stream equivalence prerequisites; it does not approve the registration as a whole and does not authorize any new sampling."
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""O1 diagnostic runner for the existing M2a crossings/rebuild fixture."""
+"""O1 diagnostic runner for the existing local-domain crossings/rebuild fixture."""
 from __future__ import annotations
 
 import argparse

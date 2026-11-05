@@ -76,7 +76,7 @@ enum class Memory_Type {
 
 // DMG-MD diagnostic counter: successful GPU_Vector device/managed
 // allocations in this process. It counts allocations rather than resize
-// calls so M2a can distinguish logical layout updates from capacity growth
+// calls so local-domain can distinguish logical layout updates from capacity growth
 // without adding synchronization.
 inline std::uint64_t& gpu_vector_allocation_counter()
 {
@@ -184,7 +184,7 @@ public:
     fill(value);
   }
 
-  // DMG-MD M2a capacity-aware resize. Unlike the GPUMD-compatible resize()
+  // DMG-MD local-domain capacity-aware resize. Unlike the GPUMD-compatible resize()
   // above, this retains a sufficiently large allocation while always
   // updating the logical size (and therefore size()/copy/fill semantics).
   // Growth intentionally does not preserve contents, matching resize().

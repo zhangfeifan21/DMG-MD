@@ -1,0 +1,1023 @@
+{
+  "schema": "dmgmd.npt-scr-formal-look-index.v1",
+  "date": "2026-11-03",
+  "status": "FORMAL_LOOKS_COMPLETE_OVERALL_INCONCLUSIVE",
+  "scope": {
+    "base_conditions": 5,
+    "base_looks_each": 3,
+    "half_conditions": 1,
+    "half_looks_each": 3,
+    "formal_look_count": 18,
+    "diagnostic_excluded": "base P1 HostStaged 20k prefix rebuilt from the new 80k rerun chain is diagnostic only; it is not an additional formal look."
+  },
+  "gate_semantics": "Only same-condition GPUMD reference compatibility is assessed; common theory-target deviations are reported separately. No universal strict-sampling/ergodicity claim.",
+  "identity": {
+    "candidate_binary": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md",
+      "sha256": "c3c9cd0b81a3f18ebbd8f4379dfbd3dbf929785eb5aa883fa4730b025d70bcdf"
+    },
+    "candidate_source_digest": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/b3-source-digest.sha256",
+      "sha256": "52069b5aca1dc5d3d7b9a674041e814ef3898eb9a6f93d15d6c38653ff5b1c18"
+    },
+    "reference_binary": {
+      "path": "/data/home/zhangyifei/fdata/zhangyifei/newmd/gpumd-reference/src/gpumd",
+      "sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414"
+    },
+    "potential": {
+      "path": "tests/baseline/inputs/potentials/nep_C.txt",
+      "sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623"
+    },
+    "preregistration": {
+      "path": "tests/npt/manifest.json",
+      "sha256": "2c39011cf9cab192a801ef95cec427a78933b4ce6b29eb50b618b3f80617da60"
+    },
+    "analyzer": {
+      "path": "tests/npt/analyze_statistics.py",
+      "sha256": "da0b26270c5c9330deec1b30c96179d516a5b0c2f95b973e6431cd2e77520496"
+    },
+    "native_acf_source": {
+      "path": "tests/thermostats/autocorrelation.cpp",
+      "sha256": "3453c32097ae4e80e8bbcd20fb805159614802bf694a6a32d24ce9cb1c2ac1b9"
+    },
+    "native_acf_executable": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/build-b3/tests/dmgmd_autocorrelation",
+      "sha256": "ffa85c62195c6886c40510024ffd60ecea30531fc0851242208f0fc796db9761"
+    },
+    "shared_statistics_primitives": {
+      "path": "tests/thermostats/sample_statistics.py",
+      "sha256": "0b85ecee1b7ec7aee19d5b350ec5bdc7a5e23d635874843e68a50aa5faee6b67"
+    },
+    "thermo_column_map": {
+      "T_K": 0,
+      "KE_eV": 1,
+      "PE_eV": 2,
+      "stress_GPa": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "box_A": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "pressure_GPa": "mean(stress columns 3,4,5)",
+      "volume_A3": "det(box columns 9..17)"
+    },
+    "statistics": {
+      "burn_in_fraction": 0.1,
+      "block_length_steps": 500,
+      "block_length_fs": 125,
+      "variance_bootstrap_replicates": 20000,
+      "analysis_seed": 2026110301,
+      "confidence_z": 2.394
+    }
+  },
+  "independent_provenance_review": {
+    "status": "PASS_HASH_AND_RECORD_IDENTITY_REVIEWED",
+    "summary": "Root independently checked all 16 P2/CudaAware runs and their three analysis-to-records SHA links; prior P2Host/P4Host/P4Cuda groups were also independently checked, including duplicate thermo identities. Each analysis JSON embeds the matching records SHA; the frozen analyzer verified run inputs/outputs and seed/profile contracts.",
+    "limits": "The analysis reports remain statistical INCONCLUSIVE; identity review is not a compatibility PASS."
+  },
+  "formal_looks": [
+    {
+      "profile": "base",
+      "partition": "P1",
+      "backend": "HostStaged",
+      "ranks": 1,
+      "dt_fs": 0.25,
+      "look_steps": 20000,
+      "candidate_actual_steps": [
+        20000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p1-hoststaged-look20k.json",
+      "records_sha256": "19a825e4df604b2d0e9099afb6f37e88e76626377b55dbd1c9f9045cb0e3d24b",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/base-p1-hoststaged-look20k.json",
+      "analysis_sha256": "869323842b1339b64a4b11cfe6d0728093e566dab21f5c24285eb153cfd22a00",
+      "analysis_embedded_records_sha256": "19a825e4df604b2d0e9099afb6f37e88e76626377b55dbd1c9f9045cb0e3d24b",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.030993055555555538
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.012784722222222211
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03634027777777782
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P1",
+      "backend": "HostStaged",
+      "ranks": 1,
+      "dt_fs": 0.25,
+      "look_steps": 40000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p1-hoststaged-look40k.json",
+      "records_sha256": "6a6b1914a136b3d781c6f7615d2e34b0057a8c285c0e062eb7ae0b9d1d2edf51",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/base-p1-hoststaged-look40k-rerun-chain.json",
+      "analysis_sha256": "a2924be0a75e450d22827f295bac820fdd41a05826052316c04a4ad3b7d2479e",
+      "analysis_embedded_records_sha256": "6a6b1914a136b3d781c6f7615d2e34b0057a8c285c0e062eb7ae0b9d1d2edf51",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.03347569444444448
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009565972222222219
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03629513888888891
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P1",
+      "backend": "HostStaged",
+      "ranks": 1,
+      "dt_fs": 0.25,
+      "look_steps": 80000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p1-hoststaged-look80k.json",
+      "records_sha256": "bca58c05fd22c8a429e473318f0fb4702ab06d3e8b50c8d723ce2d450f16187d",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/base-p1-hoststaged-look80k-rerun-chain.json",
+      "analysis_sha256": "27f59c2ce5eefdaa94b84c318ca507ca67682a9140751845a34acec48aebfc4d",
+      "analysis_embedded_records_sha256": "bca58c05fd22c8a429e473318f0fb4702ab06d3e8b50c8d723ce2d450f16187d",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.04456944444444444
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009371527777777833
+        },
+        "volume_A3": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "PASS",
+          "cdf_sup_distance": 0.048097222222222236
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P2",
+      "backend": "HostStaged",
+      "ranks": 2,
+      "dt_fs": 0.25,
+      "look_steps": 20000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p2-hoststaged-look20k.json",
+      "records_sha256": "bf1c4f2b3682ed0432ee293682807e03dda2343a60b5c5ee0fb1b8e88f7b4bfe",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p2-hoststaged/look20k.json",
+      "analysis_sha256": "4de6849c2b51ec4a21b774db5f1836fd2796f783f94bdef15f48cc541e438c81",
+      "analysis_embedded_records_sha256": "bf1c4f2b3682ed0432ee293682807e03dda2343a60b5c5ee0fb1b8e88f7b4bfe",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.030993055555555538
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.012784722222222239
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03634027777777782
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P2",
+      "backend": "HostStaged",
+      "ranks": 2,
+      "dt_fs": 0.25,
+      "look_steps": 40000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p2-hoststaged-look40k.json",
+      "records_sha256": "29da89b2dbb30f5be95e4a6a0ff9a8ff4d06a084ba42e30216235c32531542d8",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p2-hoststaged/look40k.json",
+      "analysis_sha256": "4d780e65e756affde8ebe584eb5e58a4f99e3899530611656f3cb0d35a05e4a5",
+      "analysis_embedded_records_sha256": "29da89b2dbb30f5be95e4a6a0ff9a8ff4d06a084ba42e30216235c32531542d8",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.03347569444444448
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009572916666666709
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03629513888888891
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P2",
+      "backend": "HostStaged",
+      "ranks": 2,
+      "dt_fs": 0.25,
+      "look_steps": 80000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p2-hoststaged-look80k.json",
+      "records_sha256": "da826e643569716cb42d26459fa6c181edd4c2dd2bd7416a2b3b5c383a680f49",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p2-hoststaged/look80k.json",
+      "analysis_sha256": "a0417997450a07f0c5f9d481467e83ecc35533d197286d2c228cde3a7e12d8d9",
+      "analysis_embedded_records_sha256": "da826e643569716cb42d26459fa6c181edd4c2dd2bd7416a2b3b5c383a680f49",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.04456944444444444
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009371527777777833
+        },
+        "volume_A3": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "PASS",
+          "cdf_sup_distance": 0.048097222222222236
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P2",
+      "backend": "CudaAware",
+      "ranks": 2,
+      "dt_fs": 0.25,
+      "look_steps": 20000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p2-cudaaware-look20k.json",
+      "records_sha256": "0e2116dd935b6513d5e34e96845f893c1ef4f5530f60a5ac8d12393482aa22aa",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p2-cudaaware/look20k.json",
+      "analysis_sha256": "45a99f8d932687455f6862e0b116cfa0f6b237d2391355118147d9db1040186c",
+      "analysis_embedded_records_sha256": "0e2116dd935b6513d5e34e96845f893c1ef4f5530f60a5ac8d12393482aa22aa",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.030993055555555538
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.012784722222222211
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03634027777777782
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P2",
+      "backend": "CudaAware",
+      "ranks": 2,
+      "dt_fs": 0.25,
+      "look_steps": 40000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p2-cudaaware-look40k.json",
+      "records_sha256": "feefd49c0201faf50e8028285e1b0cdace4a336de63a383d157375e2a98788e0",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p2-cudaaware/look40k.json",
+      "analysis_sha256": "3b89de45f1aaadad852159ffe9baa5c5dafc0aba418ded3d254adc4fbd730dd9",
+      "analysis_embedded_records_sha256": "feefd49c0201faf50e8028285e1b0cdace4a336de63a383d157375e2a98788e0",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.03347569444444448
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009572916666666709
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03629513888888891
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P2",
+      "backend": "CudaAware",
+      "ranks": 2,
+      "dt_fs": 0.25,
+      "look_steps": 80000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p2-cudaaware-look80k.json",
+      "records_sha256": "fcc4659392dced2f60674f0d31eccd208cc719eb7a0f740e75abbed1f280e56d",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p2-cudaaware/look80k.json",
+      "analysis_sha256": "01a52a4a19206e8a8a2a37bebc4cace8500a86ac24839631aaed17e9a455d594",
+      "analysis_embedded_records_sha256": "fcc4659392dced2f60674f0d31eccd208cc719eb7a0f740e75abbed1f280e56d",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.04456597222222225
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009371527777777833
+        },
+        "volume_A3": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "PASS",
+          "cdf_sup_distance": 0.048097222222222236
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P4",
+      "backend": "HostStaged",
+      "ranks": 4,
+      "dt_fs": 0.25,
+      "look_steps": 20000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p4-hoststaged-look20k.json",
+      "records_sha256": "7dac74c410061c94a8c4c7d9686a7c6c6e4a22b4f1b08ec45777764259de1959",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p4-hoststaged/look20k.json",
+      "analysis_sha256": "49a7bc66a25c6d45371c63d55aa5bb58683dc1777da6fcd0f8ff3d318d2c227c",
+      "analysis_embedded_records_sha256": "7dac74c410061c94a8c4c7d9686a7c6c6e4a22b4f1b08ec45777764259de1959",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.030993055555555538
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.012784722222222239
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03634027777777782
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P4",
+      "backend": "HostStaged",
+      "ranks": 4,
+      "dt_fs": 0.25,
+      "look_steps": 40000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p4-hoststaged-look40k.json",
+      "records_sha256": "c8e5ce6b37e9185c7a3c168143f36009d575425ca93c141313dd3b8c6235f778",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p4-hoststaged/look40k.json",
+      "analysis_sha256": "f785695510ac6a8c278f1da79899f6e344434dee86ba98998914efe2c0788cd3",
+      "analysis_embedded_records_sha256": "c8e5ce6b37e9185c7a3c168143f36009d575425ca93c141313dd3b8c6235f778",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.033475694444444426
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009572916666666709
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03629513888888891
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P4",
+      "backend": "HostStaged",
+      "ranks": 4,
+      "dt_fs": 0.25,
+      "look_steps": 80000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p4-hoststaged-look80k.json",
+      "records_sha256": "de652c1ad3f6b3fad43554803dce4f46e9a4286481064aaba36874d1a4ad5b93",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p4-hoststaged/look80k.json",
+      "analysis_sha256": "92cc4e07f99ec9d5c334fce286dcce1433c717191908310b1a9be6b098e55031",
+      "analysis_embedded_records_sha256": "de652c1ad3f6b3fad43554803dce4f46e9a4286481064aaba36874d1a4ad5b93",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.04456597222222225
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009371527777777833
+        },
+        "volume_A3": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "PASS",
+          "cdf_sup_distance": 0.048097222222222236
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P4",
+      "backend": "CudaAware",
+      "ranks": 4,
+      "dt_fs": 0.25,
+      "look_steps": 20000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p4-cudaaware-look20k.json",
+      "records_sha256": "89b41ea7c166b0fd1e74484c738659a422a40c5cab5c43ff4bd7cce9d3f2b144",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p4-cudaaware/look20k.json",
+      "analysis_sha256": "468eb6938fa406c5d638d9e26f3bbabfa6c46dec8be946feb4aa0c2fcddef45a",
+      "analysis_embedded_records_sha256": "89b41ea7c166b0fd1e74484c738659a422a40c5cab5c43ff4bd7cce9d3f2b144",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.030993055555555538
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.012784722222222211
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03634027777777782
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P4",
+      "backend": "CudaAware",
+      "ranks": 4,
+      "dt_fs": 0.25,
+      "look_steps": 40000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p4-cudaaware-look40k.json",
+      "records_sha256": "1386dcc5cec1ec5431af60f41b763a24dd010ae8f3545ae76f5d095c9ea6f10d",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p4-cudaaware/look40k.json",
+      "analysis_sha256": "326aa5224713aa21cbcec15f730e30d3f8104dc93f979efd40d3dcef92121c26",
+      "analysis_embedded_records_sha256": "1386dcc5cec1ec5431af60f41b763a24dd010ae8f3545ae76f5d095c9ea6f10d",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.03347569444444448
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009572916666666709
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.03629513888888891
+        }
+      }
+    },
+    {
+      "profile": "base",
+      "partition": "P4",
+      "backend": "CudaAware",
+      "ranks": 4,
+      "dt_fs": 0.25,
+      "look_steps": 80000,
+      "candidate_actual_steps": [
+        80000
+      ],
+      "reference_actual_steps": 80000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-base-p4-cudaaware-look80k.json",
+      "records_sha256": "b872e03d8c779e985f2f638157e5c1a37ad8e80ab54ee886afd23d32700d5d5e",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/p4-cudaaware/look80k.json",
+      "analysis_sha256": "87248398129212b94db6822af5478e818e65f561d7203e194a514e6d1a136d0d",
+      "analysis_embedded_records_sha256": "b872e03d8c779e985f2f638157e5c1a37ad8e80ab54ee886afd23d32700d5d5e",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.044567708333333345
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.009371527777777833
+        },
+        "volume_A3": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "PASS",
+          "cdf_sup_distance": 0.048097222222222236
+        }
+      }
+    },
+    {
+      "profile": "half",
+      "partition": "P1",
+      "backend": "HostStaged",
+      "ranks": 1,
+      "dt_fs": 0.125,
+      "look_steps": 40000,
+      "candidate_actual_steps": [
+        160000
+      ],
+      "reference_actual_steps": 160000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-half-p1-hoststaged-look40k.json",
+      "records_sha256": "a9f3456a7554947fe8c5fbcbcfa02df87a613f33b0f3e41d4c58f67b917fd3d4",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/half-p1-hoststaged-look40k.json",
+      "analysis_sha256": "445bf4c01e64fbe2c23b9a7d023f76becadac751bd7b3d4aecee3b9fe669695c",
+      "analysis_embedded_records_sha256": "a9f3456a7554947fe8c5fbcbcfa02df87a613f33b0f3e41d4c58f67b917fd3d4",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.03308333333333335
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.008319444444444435
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.028847222222222246
+        }
+      }
+    },
+    {
+      "profile": "half",
+      "partition": "P1",
+      "backend": "HostStaged",
+      "ranks": 1,
+      "dt_fs": 0.125,
+      "look_steps": 80000,
+      "candidate_actual_steps": [
+        160000
+      ],
+      "reference_actual_steps": 160000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-half-p1-hoststaged-look80k.json",
+      "records_sha256": "98d57bc12dcad5f1caded2202734a8fd0ab3dcf112c170a7ae4bee7d9c8319bc",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/half-p1-hoststaged-look80k.json",
+      "analysis_sha256": "bafc7956cb3e1432e2f8eefd6b6e4837019e8758fac83544cc739340db5d856c",
+      "analysis_embedded_records_sha256": "98d57bc12dcad5f1caded2202734a8fd0ab3dcf112c170a7ae4bee7d9c8319bc",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.032838541666666665
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.003963541666666681
+        },
+        "volume_A3": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "INCONCLUSIVE",
+          "cdf_sup_distance": 0.032749999999999946
+        }
+      }
+    },
+    {
+      "profile": "half",
+      "partition": "P1",
+      "backend": "HostStaged",
+      "ranks": 1,
+      "dt_fs": 0.125,
+      "look_steps": 160000,
+      "candidate_actual_steps": [
+        160000
+      ],
+      "reference_actual_steps": 160000,
+      "reference_prefix_reused": true,
+      "seeds": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "records_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/records-half-p1-hoststaged-look160k.json",
+      "records_sha256": "1d8de57de30fd23ebc637a484c086c731fbaa8f9904232327a9356f3ad42fada",
+      "analysis_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/analysis-final/half-p1-hoststaged-look160k.json",
+      "analysis_sha256": "bea17b92d75298c97124e788aa81fbfeb5ab67eb4c4df6325892be630d5f8937",
+      "analysis_embedded_records_sha256": "1d8de57de30fd23ebc637a484c086c731fbaa8f9904232327a9356f3ad42fada",
+      "overall_decision": "INCONCLUSIVE",
+      "metrics": {
+        "pressure_GPa": {
+          "mean_decision": "INCONCLUSIVE",
+          "variance_ratio_decision": "INCONCLUSIVE",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.008955729166666648
+        },
+        "temperature_K": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "REPORT_ONLY",
+          "cdf_sup_distance": 0.0029184027777777732
+        },
+        "volume_A3": {
+          "mean_decision": "PASS",
+          "variance_ratio_decision": "PASS",
+          "cdf_decision": "PASS",
+          "cdf_sup_distance": 0.006463541666666683
+        }
+      }
+    }
+  ],
+  "independent_confirmation_followup_preflight": {
+    "status": "PREFLIGHT_ONLY_SAMPLING_UNAUTHORIZED",
+    "outer_preflight": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/npt-independent-confirmation-draft-v2/outer-preflight-final-v2.json",
+      "sha256": "248734e4abb52bb3b9f5179e73ee8f3facf923351f73a5e1b58fdd65a5ee77fa"
+    },
+    "dry_run_plan": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/npt-independent-confirmation-draft-v2/dry-run-plan.json",
+      "sha256": "dc975bb94b9986923897d8572bbad67038c7b6727860fba64e5d68db5ed6862a"
+    },
+    "dry_run_ledger": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/npt-independent-confirmation-draft-v2/execution-ledger.draft.json",
+      "sha256": "fba9bb8d31e2da6aeae8f609f3cfa0989c0ebb86a942c94e754bd4a137164ec4"
+    },
+    "preflight_scope": "160 registered jobs and 192 inputs; runner/source/binary identities checked. No job was launched. The fail-closed run-one test rejected before creating a runnable execution ledger or reference registry; only the explicitly marked dry-run plan and draft ledger exist.",
+    "cpu_tests": "4/4 PASS; sampling authorization remains false pending explicit root approval.",
+    "note": "This final-v2 identity preflight supersedes final-v1; it binds the current runner hash. It remains PREFLIGHT_ONLY, sampling_authorized=false."
+  },
+  "independent_confirmation_formal_execution": {
+    "status": "SCHEDULER_RUNNING",
+    "approval": "Root authorization received 2026-11-03; all 160 registered jobs may execute.",
+    "outer_execution_freeze": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/npt-independent-confirmation-formal-v1/outer-execution-freeze.json",
+      "sha256": "f4d73ec74585938ccb7ceb53b326b455b9a02d7886c55f237084fd9c2452c412",
+      "status": "FROZEN_FOR_EXECUTION",
+      "identity_review": "Root independently verified 54 file identities, 192 registered inputs and 160 unique jobs with zero differences."
+    },
+    "plan": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/npt-independent-confirmation-formal-v1/dry-run-plan.json",
+      "sha256": "d44891d0c073021e3c287058549b000d52b6610d9be066669309df60e76b70c4"
+    },
+    "execution_ledger_initial": {
+      "path": "/tmp/dmgmd-b0-b4-20261103/npt-independent-confirmation-formal-v1/execution-ledger.draft.json",
+      "sha256": "427701ba9274897c9f74797fa8a3e9f62a4eacdbba7f307c1a8784548da6a22c",
+      "note": "Initial frozen ledger identity; final execution ledger is to be checked after all jobs finish."
+    },
+    "registered_jobs": 160,
+    "registered_input_files": 192,
+    "science_result": "PENDING; run the frozen CLI once, only after all 160 jobs and records pass identity, row-count and hash review.",
+    "g_b": "PENDING",
+    "latest_runtime_snapshot": {
+      "observed_at_utc_approx": "2026-11-03T07:47Z",
+      "completed_jobs": 7,
+      "running_jobs": 8,
+      "planned_jobs": 145,
+      "note": "Point-in-time runtime ledger snapshot; counts are not an execution freeze and may change."
+    }
+  }
+}

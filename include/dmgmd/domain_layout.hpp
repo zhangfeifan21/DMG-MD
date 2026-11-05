@@ -1,6 +1,6 @@
 #pragma once
 
-// M2a local-domain layout: pure host-side geometry, classification, counting
+// local-domain layout: pure host-side geometry, classification, counting
 // and exchange-plan generation (docs/standards/mpi-runtime.md). Nothing here
 // touches MPI or CUDA; the domain runtime in
 // src/domain_runtime.cu drives these helpers, and tests/unit/domain_layout_tests.cpp
@@ -10,9 +10,9 @@
 //   * typewise two-hop halo radii d_dep / d_coord derived from the kernels'
 //     actual consumption paths (radial-first filter, angular list, ZBL
 //     consuming the angular list -- semantics preserved, never "corrected");
-//   * M2a eligibility: P>1, orthogonal, fully periodic, large-box criterion of
+//   * local-domain eligibility: P>1, orthogonal, fully periodic, large-box criterion of
 //     the pinned NEP implementation, and slab_width >= d_coord; everything
-//     else fails closed to the M1 replicated-full path with a stable reason;
+//     else fails closed to the replicated-full path with a stable reason;
 //   * the local slot layout [0, owned) | dependency ghosts | coordinate-only
 //     ghosts, ordered by (source face, source rank, global_id, image);
 //   * per-face halo exchange plans (P=2 uses one peer for both faces, so the
@@ -75,7 +75,7 @@ struct DomainRadii {
   double r_dep_max = 0.0;
   double d_dep = 0.0;     // max R_force + skin
   double d_coord = 0.0;   // max (R_force + R_dep) over type chains + 2*skin
-  bool proven = false;    // false -> the runtime must fail closed to M1
+  bool proven = false;    // false -> the runtime must fail closed to replicated-full
 };
 
 [[nodiscard]] inline DomainRadii compute_domain_radii(const CutoffSet& cutoffs)
@@ -123,7 +123,7 @@ struct DomainRadii {
     if (!std::isfinite(radial) || !std::isfinite(angular) || radial <= 0.0 ||
         angular <= 0.0 || !std::isfinite(static_cast<float>(radial)) ||
         !std::isfinite(static_cast<float>(angular))) {
-      return radii;  // proven == false -> the runtime fails closed to M1
+      return radii;  // proven == false -> the runtime fails closed to replicated-full
     }
   }
   radii.r_force_pair.assign(static_cast<std::size_t>(num_types) * num_types, 0.0);
@@ -175,7 +175,7 @@ struct DomainRadii {
 
 struct DomainEligibility {
   bool eligible = false;
-  int axis = -1;               // partition axis, -1 at P=1 (M1 keeps its own rule)
+  int axis = -1;               // partition axis, -1 at P=1 (replicated-full keeps its own rule)
   double d_dep = 0.0;
   double d_coord = 0.0;
   double axis_thickness = 0.0;
@@ -213,7 +213,7 @@ struct DomainEligibility {
 
 // The pinned large-box criterion (get_expanded_box): any periodic direction
 // with thickness <= 2.5*(rc_radial_max + 1) selects the small-box image path,
-// which M2a does not support.
+// which local-domain does not support.
 [[nodiscard]] inline bool box_is_large_box(
     const std::array<double, 3>& thickness, double rc_radial_max)
 {
@@ -221,10 +221,10 @@ struct DomainEligibility {
   return thickness[0] > limit && thickness[1] > limit && thickness[2] > limit;
 }
 
-// M2a eligibility for an orthogonal, fully periodic box. The caller has
-// already rejected triclinic / non-periodic inputs at P>1 with the M1
+// local-domain eligibility for an orthogonal, fully periodic box. The caller has
+// already rejected triclinic / non-periodic inputs at P>1 with the replicated-full
 // unsupported errors (that behavior is unchanged); this function only decides
-// between the M2a local-domain path and the M1 replicated-full fallback.
+// between the local-domain path and the replicated-full fallback.
 [[nodiscard]] inline DomainEligibility evaluate_domain_eligibility(
     int world_size,
     const std::array<double, 9>& h,

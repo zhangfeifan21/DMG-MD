@@ -11,6 +11,7 @@
 - [`benchmark/`](benchmark/README.md)：基准测试、性能诊断、采样和优化实验工具。
 - [`baseline/`](baseline/README.md)：单 GPU golden 基线与差分验证。
 - [`long_nve/`](long_nve/README.md)：长程 NVE/NVT、restart 等长时间正确性验收。
+- [`npt/`](npt/README.md)：NPT预注册输入、统计器与Berendsen/SCR/GPU集成验收；2026-11-04独立确认及B0–B4/G-B在所列范围PASS，见[最终结果](../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
 - [`lammps_reference/`](lammps_reference/README.md)：与锁定 LAMMPS reference 的输入、静态物理量和 smoke 对照。
 
 Python 脚本负责准备 fixture、调度 MPI/GPU 作业、比较输出及整理证据。独立 C++/CUDA 单测编译后可由 CTest 调用，也可直接运行；共享 probe 编译为库供测试驱动使用，MPI 集成测试由 Python 驱动完成环境门槛检查后启动。普通测试的 target 仍由 `tests/CMakeLists.txt` 集中定义，产物位于 `build/tests/`。O65 replay 是例外：根 CMake 在显式设置 `-DDMGMD_ENABLE_O65_DIAGNOSTICS=ON` 时构建 `build/dmgmd-o65-replay`，它不属于普通 CTest。

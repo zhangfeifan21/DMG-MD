@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the M1 spatial-ownership migration fixtures.
+"""Run the replicated-full spatial-ownership migration fixtures.
 
 These fixtures are deliberately designed so that ownership *changes* during
 the run (the committed baseline cases happen to keep every atom inside one
@@ -103,8 +103,8 @@ run 12
 
 # Explicit N < P coverage. Both atoms start in slab 0 at P=4, so three ranks
 # contribute a zero count to every indexed collective. This case guards the
-# M1 contract that empty ownership is legal even when there are fewer atoms
-# than MPI ranks (the M0 balanced-range precondition no longer applies).
+# replicated-full contract that empty ownership is legal even when there are fewer atoms
+# than MPI ranks (the single-rank baseline balanced-range precondition no longer applies).
 MORE_RANKS_THAN_ATOMS_MODEL = """2
 pbc="T T T" Lattice="24 0 0 0 24 0 0 0 24" Properties=species:S:1:pos:R:3:vel:R:3
 C 4.0 2.0 4.0 0.0 0.0 0.0
@@ -129,10 +129,10 @@ dump_xyz 1 resumed.xyz precision double velocity force potential virial
 run 10
 """
 
-# Inputs the M1 slab partitioner must reject at P>1 with one identical,
+# Inputs the replicated-full slab partitioner must reject at P>1 with one identical,
 # diagnosable error on every rank (never a silent projection and never a
 # partial collective hang). The same inputs must keep working at P=1, which
-# degenerates to the M0 path and never selects a partition axis.
+# degenerates to the single-rank baseline path and never selects a partition axis.
 TRICLINIC_MODEL = """8
 pbc="T T T" Lattice="12 4 0 0 12 4 4 0 12" Properties=species:S:1:pos:R:3:vel:R:3
 C 2.0 2.0 2.0 0.001 0.0 0.0
@@ -345,7 +345,7 @@ def validate_ownership_records(
         raise baseline.BaselineError(f"{label}: P=1 must not report a spatial partition")
 
     # These fixtures are 24 A boxes: the slab-width guard keeps them on the
-    # M1 replicated-full runtime (M2a coverage lives in run_mpi_domain.py).
+    # replicated-full runtime (local-domain coverage lives in run_mpi_domain.py).
     domain = [line for line in stdout.splitlines() if line.startswith("DMGMD_DOMAIN ")]
     if len(domain) != 1:
         raise baseline.BaselineError(f"{label}: missing unique DMGMD_DOMAIN record")
@@ -702,7 +702,7 @@ def verify_unsupported_box(
 ) -> None:
     """P>1 must reject the input on every rank with one identical, diagnosable
     error and produce no MD outputs; P=1 must keep accepting the same input
-    because the degenerate M0 path never selects a partition axis."""
+    because the degenerate single-rank baseline path never selects a partition axis."""
     if len(devices) < 2:
         raise baseline.BaselineError("the unsupported-box gate needs two devices")
 
@@ -837,7 +837,7 @@ def main() -> int:
     succeeded = False
     try:
         # First gate: inputs the slab partitioner must reject identically on
-        # every rank at P>1 (while P=1 keeps the M0 compatibility path).
+        # every rank at P>1 (while P=1 keeps the single-rank baseline compatibility path).
         verify_unsupported_box(
             "triclinic", TRICLINIC_MODEL, "supports only orthogonal boxes",
             executable, mpiexec, devices, potential, work_root, args.timeout,

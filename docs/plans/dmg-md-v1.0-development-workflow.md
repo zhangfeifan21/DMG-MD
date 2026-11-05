@@ -1,7 +1,7 @@
 # DMG-MDv1.0开发流程
 
 > 类别：实施计划（可拆分为 AI Agent 任务卡）。状态：**IN PROGRESS**。原稿日期：2026-10-29。审计编排日期：2026-10-30。
-> Gate 0：维护者于 2026-10-30 确认第 5 节全部默认决策；A0–A6 已完成，G-A 已通过；逐 Step 进度见 [`dmg-md-v1.0-progress.md`](dmg-md-v1.0-progress.md)。
+> Gate 0：维护者于 2026-10-30 确认第 5 节全部默认决策；截至2026-11-04，A0–A6/G-A与B0–B4/G-B已在所列范围验收；C/D未启动；逐 Step 进度见 [`dmg-md-v1.0-progress.md`](dmg-md-v1.0-progress.md)。
 >
 > 适用基线：原稿基线 DMG-MD `4457c3c`；A0 实际执行 revision 为 `f062844`（工作区含未提交修改）。上游兼容基准：GPUMD
 > `9d23496e41319b9e2af5221a7df6285387401d1e`（**只读**，不得在其中构建或产生输出）。
@@ -92,15 +92,15 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 
 | ID / 程度 | 证据、影响 | 本流程处理 / 验收落点 |
 | --- | --- | --- |
-| F01 / P0 | `src/run_parser.cpp::parse_run_file` 不限制全文件单次 ensemble；M1 按命令执行。原稿全局禁重会破坏既有脚本 | A1 保留旧行为；新增系综 guard 与 parser 同步落地，纳入 runtime 主责范围 |
+| F01 / P0 | `src/run_parser.cpp::parse_run_file` 不限制全文件单次 ensemble；全量复制模式按命令执行。原稿全局禁重会破坏既有脚本 | A1 保留旧行为；新增系综 guard 与 parser 同步落地，纳入 runtime 主责范围 |
 | F02 / P0 | `runtime.cu::run_segment`、`domain_runtime.cu` 当前在各 rank 对全局温度算 Berendsen 因子；改为 root 广播会新增 collective | A2 共享纯函数，旧 Berendsen 不新增通信；新链/RNG 才采用 root 状态 |
 | F03 / P0 | 上游 `main_gpumd/run.cu::perform_a_run` 每段调用 `Integrate::initialize`；后者重建 NHC/BDP/SCR。原稿“跨段沿用”不是锁定上游行为 | G0-D9 明确段边界；A2–A4 单段/多段分开验收，固定 seed 逐段重用需明示 |
 | F04 / P0 | 上游 `ensemble_npt_scr.cu::cpu_pressure_isotropic` 的 RNG 按值传参，`svr_utilities.cuh::gasdev` 有静态缓存 | G0-D10 决定持续流与兼容偏离；B3 做独立噪声 fixture/定量统计，不能只复刻上游就宣称严格采样 |
-| F05 / P0 | 当前 M1 每段起始重算力；NPT 拟在步末缩放后保留缩放前力。重启时重算力与连续下一步所用缓存可能不同 | B2/B4 取消恒温即连续的保证；明确 snapshot 中坐标/力/virial 时点；若要求轨迹连续，另立力状态/步序方案 |
+| F05 / P0 | 当前 全量复制模式每段起始重算力；NPT 拟在步末缩放后保留缩放前力。重启时重算力与连续下一步所用缓存可能不同 | B2/B4 取消恒温即连续的保证；明确 snapshot 中坐标/力/virial 时点；若要求轨迹连续，另立力状态/步序方案 |
 | F06 / P0 | GPUMD `Neighbor::find_neighbor_global` 以位移检查复用表；LJ/EAM 都使用它，原稿盒合同未覆盖非 NEP 邻居缓存 | C0 增盒变更失效接口；B1/C2/C3 测收缩后新邻居，不允许仅刷新 Box 就沿用旧表 |
 | F07 / P0 | 上游 `neighbor.cu` 的邻居写入 `NL[N*count++ + n1]` 未传容量；照抄“溢出行为”可能越界 | C2/C3 必须写入前检查容量并失败关闭；安全适配与容量内数值兼容分别验收 |
 | F08 / P0 | “体积有限/不塌缩”“2% 或 2SE 取宽”不能证明正确涨落；8 seeds/20k 步不是充分采样保证 | A5/B4 使用预注册误差界、有效样本量和步长收敛；证据不足为 INCONCLUSIVE，不通过发布门 |
-| F09 / P0 | 原稿 G-C 失败可发子集、C2 的 NPT 组合可选、C5 暗示 NEP M2a 支持全部系综，彼此冲突 | G-C 全部 P0 必须通过；NEP M2a 仅 NVE/三种 NVT；势×系综联合门不可省略 |
+| F09 / P0 | 原稿 G-C 失败可发子集、C2 的 NPT 组合可选、C5 暗示 NEP 局部域分解模式支持全部系综，彼此冲突 | G-C 全部 P0 必须通过；NEP 局部域分解模式仅 NVE/三种 NVT；势×系综联合门不可省略 |
 | F10 / P1 | A1 主责文件不含其要求的 runtime guard；C1 反依赖尚未实现的 C2/C3；C4 可选却串在 C5 前 | 修订主责范围和依赖图；G-A 后接 B2/C0；C1 元数据可识别但未实现拒绝；C4 独立 |
 | F11 / P1 | NHC 质量需 `dt*Tdamp`，与术语表“不乘 dt”矛盾；LJ 构造端 double 计算后存 float | 修订单位与精度说明；不得把源表达式都降为 float |
 | F12 / P1 | 任意压缩不必为正压，负目标压力不一定导致扩张；剪切不保证应力非对称 | B0/B2 用已知参考态和实际压力差判方向；非对称布局用合成数据测 |
@@ -131,10 +131,10 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 - 先完成 A0/G0 与许可来源盘点，再完成 G-A；随后依次做 B0/B1/G-B、C0–C3/C5，最后 D3–D5。
   文档/CLI/来源清单可提前准备，但不能替代相应数值门。此处不承诺固定工期；A0 后根据设备、
   oracle 可用性、统计有效样本量和责任人分别估算，不能将任务卡数当作工作日数。
-- P0 矩阵：NEP/LJ/EAM 在 M1 的六种系综；NEP 在 M2a 的 NVE、nvt_ber、NHC、BDP；
+- P0 矩阵：NEP/LJ/EAM 在 全量复制模式的六种系综；NEP 在 局部域分解模式的 NVE、nvt_ber、NHC、BDP；
   各自覆盖声明支持的 P1/P2/P4 和后端。所有组合至少短程/错误/输出/restart smoke；
   新方法另有代表体系的长期统计与 NVE 漂移验收。NEP4/5/ZBL 分别列 fixture，不能以一种代替全部。
-- M1 非 NEP / NPT 的 P>1 是全系统复制计算，增加 GPU 不代表力计算加速；在指南中明确规模、
+- 全量复制模式非 NEP / NPT 的 P>1 是全系统复制计算，增加 GPU 不代表力计算加速；在指南中明确规模、
   显存及伸缩性边界。多节点能力只按已实际验收的范围宣传，不由本机 MPI 通过推导。
 - D4/D5 还须明确受支持的 GPU 架构、驱动/CUDA/MPI/UCX 组合、源码包/容器/二进制选择、
   干净安装与重建步骤、长程稳定性 profile、CI/人工验收入口、已知问题和问题报告路径。
@@ -149,11 +149,11 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 把 DMG-MD 从“NEP 专用 NVE/nvt_ber 运行时”推进为可对外发布的经典 MD 软件：
 
 1. **恒温器模块**：在保留 `nvt_ber` 的前提下，提供严格正则采样器 `nvt_nhc`（确定性）与
-   `nvt_bdp`（随机），共享一套目标温度调度和速度缩放实现；M1 与 M2a 两条数据面行为一致。
+   `nvt_bdp`（随机），共享一套目标温度调度和速度缩放实现；全量复制模式与局部域分解模式两条数据面行为一致。
 2. **控压器模块**：提供各向同性 `npt_ber`（兼容 GPUMD）与 `npt_scr`（以正确 NPT 采样为目标的采样器（须通过统计门）），
-   正确处理变盒、缓存失效、所有权刷新、输出与 restart；v1 限定 M1。
+   正确处理变盒、缓存失效、所有权刷新、输出与 restart；v1 限定 全量复制模式。
 3. **势函数支持**：把 NEP 专用力计算抽象为 `ForceField`，新增 LJ、EAM/alloy（P0）与
-   Tersoff 1989（P1）；非 NEP 势 v1 只支持 M1，M2a 明确拒绝而不是静默降级。
+   Tersoff 1989（P1）；非 NEP 势 v1 只支持 全量复制模式，局部域分解模式明确拒绝而不是静默降级。
 4. **产品化**：版本/CLI、错误契约、restart 语义、文档、许可证、性能回归门、打包与发布清单。
 
 ### 1.2 v1.0 范围（P0）
@@ -162,7 +162,7 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 | --- | --- | --- |
 | 系综 | `nve`、`nvt_ber`（保持原语义）、`nvt_nhc`、`nvt_bdp`、`npt_ber`、`npt_scr` | NPH、MTTK、Parrinello–Rahman、Gaussian/DPD、Andersen |
 | 控压模式 | 各向同性；正交盒；全周期 | 3 个对角分量、6 分量三斜、非周期控压 |
-| 并行 | M1（含 P>1 replicated fallback）上的控压器与非 NEP 势；M2a 上的 NHC/BDP | M2a 上的 NPT、M2a 上的非 NEP 势 |
+| 并行 | 全量复制模式（含 P>1 replicated fallback）上的控压器与非 NEP 势；局部域分解模式上的 NHC/BDP | 局部域分解模式上的 NPT、局部域分解模式上的非 NEP 势 |
 | 势函数 | NEP4/5/ZBL（不变）、LJ、EAM/alloy | Tersoff 1988/mini、ADP/FCP、DP/NNAP/ILP、charge/dipole/polarizability、多势混合 |
 | 状态 | `restart.xyz` 与 GPUMD 兼容；明确记录未保存的系综状态 | 默认写额外 restart 状态文件 |
 
@@ -170,7 +170,7 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 
 - **P1（v1.1 候选）**：`tersoff_1989`；`nvt_lan`/`nvt_bao`；`npt_ber`/`npt_scr` 的 3 个对角
   分量；LAMMPS 动力学（NVT/NPT）横向验证；可选 restart sidecar。
-- **P2（暂缓）**：NPH；MTTK；Parrinello–Rahman；三斜 NPT；M2a NPT；M2a 非 NEP；ADP/FCP；
+- **P2（暂缓）**：NPH；MTTK；Parrinello–Rahman；三斜 NPT；局部域分解模式 NPT；局部域分解模式非 NEP；ADP/FCP；
   多势混合/`potential` 方向参数；`fix`/`move`/`deform`/`change_box`/`minimize`；PLUMED/kspace。
 - **非目标**：不改变 NEP 数学与既有 golden；不在此计划中做 O10/O11 性能优化；不承诺跨节点
   I/O；不把 GPUMD 全功能搬进来。
@@ -178,7 +178,7 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 ### 1.4 成功的定义
 
 - 每个 Gate 的验收矩阵**实际执行**并留下环境、命令、结果与限制；skip/子集单独标注。
-- 现有 `nve`/`nvt_ber` 的 golden 在各层（P1、M1 P>1、M2a、两后端）保持通过；新增功能不改变
+- 现有 `nve`/`nvt_ber` 的 golden 在各层（P1、全量复制模式 P>1、局部域分解模式、两后端）保持通过；新增功能不改变
   默认路径。
 - 新系综的物理验收区分“确定性 golden”和“随机采样统计”，绝不用 Berendsen 的涨落去证明
   正则采样（见调研报告 §0.5、§4.9）。
@@ -192,18 +192,18 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 
 ### 2.1 已实现能力
 
-- 两条数据面：**M1 replicated-full**（`src/runtime.cu`；P=1 与 M1 fallback，逻辑 slab 所有权
-  `RuntimeOwnership`）与 **M2a local-domain**（`src/domain_runtime.cu`；owned/dependency ghost、
+- 两条数据面：**全量复制模式（replicated-full）**（`src/runtime.cu`；P=1 与全量复制模式回退路径，逻辑 slab 所有权
+  `RuntimeOwnership`）与 **局部域分解模式（local-domain）**（`src/domain_runtime.cu`；owned/dependency ghost、
   两跳 halo、p2p migration）。
 - 系综只有 `nve` 与 `nvt_ber`；`nvt_ber` 的目标温度在每个 `run` 段内按 `step/steps` 线性插值，
   耦合系数为 `1/TAU`，每次 VV 第二步后缩放 owned 速度。
 - 势只有普通 NEP4/5 与 NEP-ZBL；每个作业恰好一个 `potential`。
 - 输出：`thermo.out`（18 列）、`dump_xyz`（位置/速度/力/势能/virial/group 等可选量）、
   `restart.xyz`（N、pbc、Lattice、species/pos/mass/vel/group）。
-- M2a 的 `need_thermo = ensemble.kind != nve`；NVE 时不计算 thermo，除非有输出消费。
-- M1 的 `RuntimeOwnership` 缓存 `inverse_box_` 与 `partition_axis_`；每步 `recompute_and_commit`
+- 局部域分解模式的 `need_thermo = ensemble.kind != nve`；NVE 时不计算 thermo，除非有输出消费。
+- 全量复制模式的 `RuntimeOwnership` 缓存 `inverse_box_` 与 `partition_axis_`；每步 `recompute_and_commit`
   验证 owner map 并在变化时迁移 velocity/unwrapped。
-- M2a 的 eligibility 由 NEP 的 radial/angular cutoff 与盒子几何决定；非正交/非全周期在 P>1 明确报错。
+- 局部域分解模式的 eligibility 由 NEP 的 radial/angular cutoff 与盒子几何决定；非正交/非全周期在 P>1 明确报错。
 
 ### 2.2 必须保持的数值/语义合同
 
@@ -217,7 +217,7 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 | thermo 列 | `T KE PE sxx syy szz syz sxz sxy ax ay az bx by bz cx cy cz` | NPT 的盒列必须与 `restart.xyz` 一致 |
 | 位置缩放 | GPUMD 绕原点缩放位置，不做质心平移；盒子同步缩放后 `get_inverse()` | 与质心约定、unwrapped 语义相关 |
 | restart | 只有盒/位置/速度/质量/group；无系综链变量、无 RNG、无盒速度 | NHC/BDP/SCR 的 restart 连续性必须单独记录 |
-| 力 | NEP 的 M1 路径每步 wrap + 清空 + 全量计算；M2a 有自己的 halo/cache | 变盒必须让 M1 与 M2a 的缓存假设显式失效 |
+| 力 | NEP 的全量复制模式路径每步 wrap + 清空 + 全量计算；局部域分解模式有自己的 halo/cache | 变盒必须让 全量复制模式与局部域分解模式的缓存假设显式失效 |
 
 ### 2.3 缺口清单
 
@@ -229,26 +229,26 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 | 内部应力不在 kernel 中换算为 GPa | `src/runtime_internal.hpp:546`、`src/runtime.cu:1086` | barostat 单位/符号易错 |
 | 只有 NEP；metadata parser 只认 NEP 头 | `src/model_parser.cpp:257` | 非 NEP 势无法进入 |
 | 无非 NEP 的 `ForceField` 抽象；`NepForce` 绑定 `NEP` | `src/runtime.cu:527` | 新势会复制运行时分派 |
-| M2a 依赖 NEP cutoff 做 eligibility | `src/runtime.cu:1310` 附近 | 非 NEP / NPT 需要显式拒绝或降级理由 |
+| 局部域分解模式依赖 NEP cutoff 做 eligibility | `src/runtime.cu:1310` 附近 | 非 NEP / NPT 需要显式拒绝或降级理由 |
 | 无系综状态输出/恢复 | `src/runtime.cu:1208` | NHC/BDP/SCR restart 连续性不可承诺 |
 
 ### 2.4 当前代码锚点
 
 | 路径 | 符号/位置 | 用途 |
 | --- | --- | --- |
-| `src/runtime.cu` | `RuntimeOwnership`（约 118） | M1 slab 所有权、迁移、plan |
+| `src/runtime.cu` | `RuntimeOwnership`（约 118） | 全量复制模式 slab 所有权、迁移、plan |
 | `src/runtime.cu` | `find_owned_thermo_sums`（约 412） | 8 分量 thermo 归约，含 kinetic 应力项 |
 | `src/runtime.cu` | `compute_thermo`（约 484） | allreduce + volume/T 归一化 |
 | `src/runtime.cu` | `NepForce`（约 507） | NEP 专用 force/workspace |
-| `src/runtime.cu` | `run_segment`（约 646） | M1 步序：VV1 → gather → force → ownership → VV2 → thermo → thermostat |
+| `src/runtime.cu` | `run_segment`（约 646） | 全量复制模式步序：VV1 → gather → force → ownership → VV2 → thermo → thermostat |
 | `src/runtime.cu` | Berendsen（约 724） | 目标插值、`1/tau`、`scale_owned_velocity` |
 | `src/runtime.cu` | `write_thermo_row`（约 1086） | GPa 换算与列顺序 |
 | `src/runtime.cu` | `write_restart`（约 1208） | restart 字段 |
-| `src/runtime.cu` | `run_replicated`（约 1250） | 模式决策、NEP 解析一次、M1/M2a 路由 |
-| `src/domain_runtime.cu` | `compute_domain_thermo`（约 1408） | M2a thermo |
-| `src/domain_runtime.cu` | `need_thermo`（约 1725） | M2a 按需 thermo |
-| `src/domain_runtime.cu` | Berendsen（约 1927） | M2a 重复实现 |
-| `src/domain_runtime.cu` | `run_local_domain`（约 2148） | M2a 状态机与步序 |
+| `src/runtime.cu` | `run_replicated`（约 1250） | 模式决策、NEP 解析一次、全量复制模式/局部域分解模式路由 |
+| `src/domain_runtime.cu` | `compute_domain_thermo`（约 1408） | 局部域分解模式 thermo |
+| `src/domain_runtime.cu` | `need_thermo`（约 1725） | 局部域分解模式按需 thermo |
+| `src/domain_runtime.cu` | Berendsen（约 1927） | 局部域分解模式重复实现 |
+| `src/domain_runtime.cu` | `run_local_domain`（约 2148） | 局部域分解模式状态机与步序 |
 | `src/runtime_internal.hpp` | `normalize_global_thermo`（约 546） | 除以 `3N k_B` 与体积 |
 | `include/dmgmd/run_ir.hpp` | `EnsembleKind`（约 24） | 需要扩展的 IR |
 | `src/run_parser.cpp` | `ensemble` 分支（约 199） | 语法扩展点 |
@@ -280,12 +280,12 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 
 ### 2.6 架构结论
 
-1. **先有共享系综模块，再有新系综**。当前 M1/M2a 各有一份 Berendsen；直接加 NHC 会变成四份。
+1. **先有共享系综模块，再有新系综**。当前 全量复制模式/局部域分解模式各有一份 Berendsen；直接加 NHC 会变成四份。
 2. **NHC 需要“力计算前”的全局 KE**；BDP 与 Berendsen 只需要力计算后的 thermo。步序 hook 必须在
    A2 就设计好，而不是 A3 临时插。
-3. **NPT 的本质是盒变更**，不是多一个缩放 kernel。盒变更涉及 `Box` 的逆/float 副本、M1 所有权缓存、
-   M2a 的邻居/halo 缓存、输出与 restart；v1 把范围收窄到 M1 是降低风险的关键决策。
-4. **非 NEP 势不能复用 NEP 的 M2a 域分解**；先用 M1 打通物理正确性与格式/金标，再评估 M2a。
+3. **NPT 的本质是盒变更**，不是多一个缩放 kernel。盒变更涉及 `Box` 的逆/float 副本、全量复制模式所有权缓存、
+   局部域分解模式的邻居/halo 缓存、输出与 restart；v1 把范围收窄到 全量复制模式是降低风险的关键决策。
+4. **非 NEP 势不能复用 NEP 的局部域分解模式域分解**；先用 全量复制模式打通物理正确性与格式/金标，再评估 局部域分解模式。
 
 ---
 
@@ -320,7 +320,7 @@ O 系列负责并行性能优化，本流程负责从测试版走向可推广使
 
 - 新 parser 接受的组合，若运行时尚未实现，必须在任何动力学前以带来源位置的错误退出，不能
   静默退化为 NVE 或忽略参数。
-- 自动模式中的 NPT/非 NEP 显式路由到 M1 并打印原因；强制 M2a（若提供此选项）或直接 domain
+- 自动模式中的 NPT/非 NEP 显式路由到 全量复制模式并打印原因；强制 局部域分解模式（若提供此选项）或直接 domain
   调用必须拒绝。其他不支持组合（非正交/非周期 NPT、12/18 token NPT、目标压力非有限、
   体积模量非有限/非正）必须明确报错；不能“尽力而为”。
 - 新系综只与默认调度/overlap 关闭组合验收；实验性 `DMGMD_*` 开关与新系综同时使用时，要么有
@@ -370,9 +370,9 @@ D1 + D2 + D3 + D4 ─ D5
 | Gate | 通过条件 | 失败处理 |
 | --- | --- | --- |
 | G0 | 维护者确认第 5 节决策 | 未确认不开始 A1 |
-| G-A | A0–A6 完成；NHC/BDP 在 M1/M2a、P1/P2/P4、两后端通过；确定性 golden 与统计证据入库；文档更新 | 不进入 B2/B3；先修 A |
-| G-B | B0–B4 完成；压力 oracle、NPT 短程 golden、restart、P>1 fallback、M2a 拒绝、涨落统计全部通过 | 不进入 v1.0 发布 |
-| G-C | C0–C3/C5 完成；LJ/EAM 静态与短程 golden、P 不变性、联合系综矩阵、M2a 防护、文档更新 | 未过不发布既定 v1.0；缩减范围须先修订范围和验收清单 |
+| G-A | A0–A6 完成；NHC/BDP 在 全量复制模式/局部域分解模式、P1/P2/P4、两后端通过；确定性 golden 与统计证据入库；文档更新 | 不进入 B2/B3；先修 A |
+| G-B | B0–B4 完成；压力 oracle、NPT 短程 golden、restart、P>1 fallback、局部域分解模式拒绝、涨落统计全部通过 | 不进入 v1.0 发布 |
+| G-C | C0–C3/C5 完成；LJ/EAM 静态与短程 golden、P 不变性、联合系综矩阵、局部域分解模式防护、文档更新 | 未过不发布既定 v1.0；缩减范围须先修订范围和验收清单 |
 | G-D | D1–D5 完成；许可证/文档/打包/性能门/发布清单通过 | 不发布 |
 
 ---
@@ -384,7 +384,7 @@ D1 + D2 + D3 + D4 ─ D5
 | 编号 | 决策 | 默认建议 | 改变的影响 |
 | --- | --- | --- | --- |
 | G0-D1 | v1.0 恒温器集合 | NHC + BDP；保留 `nvt_ber`；Langevin/BAOAB 放 P1 | A3/A4/A7 |
-| G0-D2 | NPT 范围 | `npt_ber` + `npt_scr`，仅各向同性，仅 M1（含 P>1 M1 fallback）；M2a 明确拒绝 | B1–B4；M2a 变盒另立计划 |
+| G0-D2 | NPT 范围 | `npt_ber` + `npt_scr`，仅各向同性，仅 全量复制模式（含 P>1 全量复制模式回退路径）；局部域分解模式明确拒绝 | B1–B4；局部域分解模式变盒另立计划 |
 | G0-D3 | 非 NEP 势优先级 | v1.0：LJ → EAM/alloy；Tersoff 1989 为 P1 | C2–C4；发布矩阵 |
 | G0-D4 | restart 策略 | 严格 GPUMD：`restart.xyz` 不含系综状态；NHC/BDP/SCR 不承诺轨迹连续；恒温 `npt_ber` 也须按 §0.5 验证，写入文档 | A3/A4/B3/D3 |
 | G0-D5 | 随机数策略 | rank 0 拥有 `mt19937`，固定默认种子 + `DMGMD_ENSEMBLE_SEED` 覆盖；每步广播因子 | A4/B3；这是对 GPUMD wall-clock 种子的**有意偏离**，必须记录 |
@@ -400,19 +400,19 @@ D1 + D2 + D3 + D4 ─ D5
 
 > 推荐理由：NHC 与 BDP 覆盖“确定性严格采样”和“随机严格采样”两种主流需求；Berendsen 保留是
 > 兼容合同。SCR 是相对便宜且真采样的 NPT；MTTK/PR 的复杂度与验证成本不适合首版。非 NEP 先做
-> M1 能把风险限制在力/格式层，不牵动 halo/所有权。root 广播标量使状态归属清楚；字节数虽小，同步延迟仍须 D4 实测。
+> 全量复制模式能把风险限制在力/格式层，不牵动 halo/所有权。root 广播标量使状态归属清楚；字节数虽小，同步延迟仍须 D4 实测。
 
 ## 6. Phase A：恒温器与共享系综模块（A0–A7）
 
 > 目标：先把“目标温度调度、速度缩放、随机数所有权、步序 hook”收进一个共享模块，再接入 NHC
-> 与 BDP；任何新系综都不得在 M1/M2a 各写一份。A2 的 Berendsen 迁移必须是零数值变化的。
+> 与 BDP；任何新系综都不得在 全量复制模式/局部域分解模式各写一份。A2 的 Berendsen 迁移必须是零数值变化的。
 
 | Step | 内容 | 优先级 | 依赖 | 关键产出 |
 | --- | --- | --- | --- | --- |
 | A0 | 基线冻结与环境证据 | P0 | — | 可复现的 baseline manifest |
 | A1 | IR/parser 扩展（NVT 部分） | P0 | A0 | 新语法与失败关闭 |
 | A2 | 共享 `EnsembleController` + Berendsen 迁移 | P0 | A1 | 两条 runtime 共用一份控制逻辑 |
-| A3 | `nvt_nhc`（确定性严格 NVT） | P0 | A2 | M1/M2a 的 NHC |
+| A3 | `nvt_nhc`（确定性严格 NVT） | P0 | A2 | 全量复制模式/局部域分解模式的 NHC |
 | A4 | `nvt_bdp`（随机严格 NVT） | P0 | A2（root RNG 接口） | 可复现的 BDP |
 | A5 | 双路径/MPI/后端验收矩阵 | P0 | A3、A4 | G-A 证据 |
 | A6 | 文档、统计验收与限制 | P0 | A5 | 用户可见合同 |
@@ -442,7 +442,7 @@ D1 + D2 + D3 + D4 ─ D5
      分别记录。没有条件执行的项写 `SKIPPED` 与原因，不能省略。
   4. 对至少一个 NEP NVE case 记录 `thermo.out`、`dump_xyz`、`restart.xyz` 的 SHA-256，以及
      每步 thermo 的列数与首尾值；对 `nvt_ber` 同样记录。后续 A2 先比哈希，再比数值。
-  5. 记录一个可重复的性能基线（建议 NEP NVE，P=1 与可用的 P4/M2a，固定步数、warmup、3 次取中位数）。
+  5. 记录一个可重复的性能基线（建议 NEP NVE，P=1 与可用的 P4/局部域分解模式，固定步数、warmup、3 次取中位数）。
      若当前机器不适合长时间基准，记录 `PENDING-D4`，不要编造数字。
   6. 把“baseline 的已知 flaky/skip/环境限制”单列，不要用它们解释新功能的失败。
 - **测试/验收**：
@@ -500,7 +500,7 @@ D1 + D2 + D3 + D4 ─ D5
 
 - **状态**：DONE｜**优先级**：P0｜**依赖**：A1
 - **实际验收记录**：[`A2 EnsembleController/Berendsen 验收`](../status/validation/ensemble-infrastructure.md#ensemble-control-20261102)。统筹者于 2026-11-02 独立复核 diff、测试、科学输出哈希、通信账本与文件保护；A/B 输出和通信记录一致。
-- **目标**：建立 M1/M2a 共用的系综控制层：目标温度调度、速度缩放因子、NHC 的 pre-force hook、
+- **目标**：建立 全量复制模式/局部域分解模式共用的系综控制层：目标温度调度、速度缩放因子、NHC 的 pre-force hook、
   BDP/SCR 的 root RNG 边界、每步标量广播；先把现有 `nvt_ber` 迁移进来，证明输出逐字节不变。
 - **主责文件**：新增 `include/dmgmd/ensemble_control.hpp`、`src/ensemble_control.cpp`（host 控制逻辑；
   如必须设备端缩放，只复用现有 kernel，不复制 NEP/compat 数学）；修改 `src/runtime.cu`、
@@ -522,14 +522,14 @@ D1 + D2 + D3 + D4 ─ D5
        **段内 0 基**；不得把 `steps` 或 `step` 变成 double 之外的类型而改变舍入。
   3. Berendsen 迁移只抽取共享纯函数，不改公式与顺序：`coupling = 1/TAU`，仅当
      `coupling > 1.0e-5` 时 `sqrt(1 + coupling*(target/T - 1))`，在 VV2 + thermo 之后缩放
-     owned 速度。M1 的 `scale_owned_velocity` 与 M2a 的对应 kernel 保持原样。
+     owned 速度。全量复制模式的 `scale_owned_velocity` 与局部域分解模式的对应 kernel 保持原样。
   4. 不为 NVE/`nvt_ber` 引入额外 collective：A2 后 NVE 不实例化 RNG/链；`nvt_ber` 的通信量与
      基线一致。若为了统一接口必须多一次归约，必须在卡内证明并得到维护者批准，否则视为失败。
   5. 状态生命周期：命令更新配置，每段 `run` 初始化控制器，与锁定 GPUMD 的
      `Run::perform_a_run → Integrate::initialize` 边界对齐。NHC 链/质量重建；BDP/SCR 的
      RNG/cache 初始化规则按 G0-D9 明示并测试。restart 是新作业，不保存隐藏状态。
      固定种子下逐段重置会重用随机序列，必须记录；跨段持续流属于另行明确的兼容偏离。
-  6. 数值顺序保持：不要为了复用把 M1 的 `thermo.values[0]` 改成 M2a 的局部量再归约；两边都使用
+  6. 数值顺序保持：不要为了复用把 全量复制模式的 `thermo.values[0]` 改成 局部域分解模式的局部量再归约；两边都使用
      已归一化的全局温度/能量。所有全局标量必须在同一位置、同一顺序归约；记录通信量变化。
   7. 先只迁移 `nvt_ber`，NHC/BDP 分支在 A3/A4 才实现；A2 的测试必须能在没有新系综实现时通过。
 - **测试/验收**：
@@ -538,10 +538,10 @@ D1 + D2 + D3 + D4 ─ D5
   - A/B 对照：A2 前后两个独立二进制使用相同工具链/构建选项、同一输入、同 rank/backend；`thermo.out`、`dump_xyz`、
     `restart.xyz` 的 SHA-256 一致；若编译器导致不可比，必须先把 A/B 都固定到同一构建配置，
     再用 golden 容差解释，不能直接放宽容差。
-  - M1 P=1、P=2 的 M1 fallback、M2a P=2 的 `nvt_ber` 均通过；通信记账与基线一致（或差异有
+  - 全量复制模式 P=1、P=2 的全量复制模式回退路径、局部域分解模式 P=2 的 `nvt_ber` 均通过；通信记账与基线一致（或差异有
     明确解释并获批）。
 - **证据**：status 文档给出 A/B 哈希表、通信量对比、单元测试输出；注明构建配置。
-- **停止/回滚**：任何既有 `nvt_ber` 输出变化；M2a 行为与 M1 不一致；为抽象引入 NEP 数学改动；
+- **停止/回滚**：任何既有 `nvt_ber` 输出变化；局部域分解模式行为与全量复制模式不一致；为抽象引入 NEP 数学改动；
   或新增了无法解释的 collective。回滚到 A1 的运行时，保留 A2 的测试设计供下次使用。
 
 ---
@@ -573,7 +573,7 @@ D1 + D2 + D3 + D4 ─ D5
 
 - **状态**：DONE｜**优先级**：P0｜**依赖**：A3、A4。
 - **实际验收**：[恒温器矩阵](../status/validation/thermostat-validation.md#thermostat-matrix-20261102)：
-  52 短程配置及同配置重复、54 新作业 restart，NEP4/5/ZBL 的真实 M1/M2a 路由和后端逐项列出；
+  52 短程配置及同配置重复、54 新作业 restart，NEP4/5/ZBL 的真实 全量复制模式/局部域分解模式路由和后端逐项列出；
   正式 NEP 统计、root 因子位模式、逐步通信增量和错误/超时门通过，无必需项 SKIP。
 - 旧 NVE/Berendsen 最终 golden、MPI 和七配置 long-NVE smoke 通过；对 A2 的
   50 stage/181 科学文件、231 全局/160 rank 逐步记录完全相同。
@@ -617,251 +617,66 @@ D1 + D2 + D3 + D4 ─ D5
 | Step | 内容 | 优先级 | 依赖 | 关键产出 |
 | --- | --- | --- | --- | --- |
 | B0 | 压力 oracle、单位/符号/列映射 | P0 | A0 | 可复算的压力基准 |
-| B1 | 盒变更合同与所有权刷新 | P0 | B0 | M1 安全变盒 |
-| B2 | `npt_ber`（各向同性，M1） | P0 | G-A、B1 | 兼容 GPUMD 的 NPT |
-| B3 | `npt_scr`（各向同性，M1） | P0 | B2、A4 | 以正确 NPT 采样为目标的采样器（须通过统计门） |
+| B1 | 盒变更合同与所有权刷新 | P0 | B0 | 全量复制模式安全变盒 |
+| B2 | `npt_ber`（各向同性，全量复制模式） | P0 | G-A、B1 | 兼容 GPUMD 的 NPT |
+| B3 | `npt_scr`（各向同性，全量复制模式） | P0 | B2、A4 | SCR 与同条件参考兼容统计门（不宣称普遍严格采样） |
 | B4 | NPT 验收、restart、文档 | P0 | B2、B3、A5 | G-B 证据与用户合同 |
 
 ---
 
 ### Step B0：压力 oracle、单位、符号与列映射
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：A0
-- **目标**：在实现任何控压之前，建立一个可执行、可复算的压力基准，回答四个问题：
-  内部应力如何归一化、输出如何换成 GPa、六个分量的列顺序、压缩/拉伸时符号是否正确。
-- **主责文件**：测试与证据为主：`tests/thermo/`（新建压力 oracle/列映射测试）、
-  `tests/CMakeLists.txt`、`docs/status/validation/pressure-oracle-<date>.md`。**不改运行时**；
-  若发现现有实现有 bug，先记录并回到维护者，不在 B0 顺手改公式。
-- **必读**：`src/runtime.cu` 的 `find_owned_thermo_sums`（基线约 412）、`compute_thermo`（约 484）、
-  `write_thermo_row`（约 1086）；`src/runtime_internal.hpp` 的 `normalize_global_thermo`（约 546）；
-  `src/gpumd_compat/common.cuh` 的 `K_B`/`PRESSURE_UNIT_CONVERSION`；上游 `src/integrate/ensemble.cu`
-  的 `find_thermo`（434–673）；调研报告 §0.4；本计划 §2.2/§2.5。
-- **实施要点**：
-  1. 在 CPU 单元测试里固定一个合成 thermo 向量，验证内部顺序
-     `[T, PE, sxx, syy, szz, sxy, sxz, syz]` 到输出列
-     `T KE PE sxx syy szz syz sxz sxy` 的映射，以及 `×160.2177` 只在写文件时发生一次。
-     用非对称的六个应力值（不要全相等）才能发现列交换。
-  2. 做一个“理想气体”积分案例：NEP 模型、原子间距大于最大截断、给定 `vel`、`nve`、
-     一个输出步；解析压力 `P = N k_B T / V`（自然单位），输出应为
-     `P × PRESSURE_UNIT_CONVERSION` GPa。温度用 3N 定义；不要减质心。记录相对误差。
-  3. 做一个“压缩/拉伸”符号案例：同一 NEP 构型，分别轻微缩小/放大盒子与位置（只做静态
-     `nve` 一步，避免 thermostat），先选择并验证接近零压的稳定参考态，再检验压缩/拉伸的压力响应，不能对任意初态断言正负；与 GPUMD 的 NVE
-     `thermo.out` 六列逐列比较。若无参考二进制，使用已提交的 GPUMD golden，不要用 DMG-MD
-     自己的另一条路径当 oracle。
-  4. 明确并记录：内部压力 = `(virial + kinetic)/V`，单位 eV/Å³；`thermo.out` 的应力列是
-     GPa；`dump_xyz` 的 virial 是每原子 9 分量、布局 `xx yy zz xy xz yz yx zx zy`，不是 GPa。
-  5. 用合成的九分量非对称 virial 测试缓冲布局；物理剪切 case 检验非零 off-diagonal，
-     不要求其 `sxy != syx`（动力学应力可能对称）。二者分别验证布局与物理值。
-- **测试/验收**：
-  - 列映射单元测试通过；理想气体相对误差 <1e-10（CPU 合成）或记录浮点来源；
-  - 压缩/拉伸符号与 GPUMD golden 一致；六列在 golden 容差内；
-  - 文档中给出公式、单位、列名、布局和可复算命令。
-- **证据**：`pressure-oracle-<date>.md`，含合成向量、解析值、六列对比、命令与环境。
-- **停止/回滚**：参考 golden 缺失、符号无法判定、或发现现有输出列与标准不一致——停止并报告，
-  不要在 B2 用“调参”掩盖。B0 无运行时回滚。
+- **状态**：DONE（2026-11-03）｜**优先级**：P0｜**依赖**：A0
+- **结果**：生产 thermo/XYZ writer、GPUMD 压力/virial 列、解析理想气体压力、压缩/扩张响应和剪切布局均完成验收。
+- **标准与证据**：[压力/温度单位和输出合同](../standards/barostat.md#输入和边界)、[B0 pressure oracle](../status/validation/npt-validation.md#pressure-oracle-20261103)。本 Step 不改 runtime；结论限报告所列 NEP 单 rank fixture。
 
 ---
 
 ### Step B1：各向同性盒变更合同与所有权刷新
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：B0
-- **目标**：实现一个可单独测试的“绕原点各向同性缩放”原语：同步更新 `Box`、位置、逆矩阵、
-  float 副本与 M1 所有权缓存；明确 unwrapped/restart/输出语义；M2a 不走这条路径。
-- **主责文件**：新增 `include/dmgmd/box_control.hpp`、`src/box_control.cpp`（或等价的最小
-  host 原语）；`src/runtime.cu` 的 `RuntimeOwnership`（新增 `refresh_box`）与
-  `src/runtime_internal.hpp`（如需要）；`tests/` 新增盒合同测试。**不修改
-  `src/gpumd_compat/box.cu` 的数学**；只在调用侧使用 `get_inverse`/`set_is_orthogonal`。
-- **必读**：`src/gpumd_compat/box.cuh` 的 `cpu_h[0..17]`/`float_h`/`thickness`；
-  `src/gpumd_compat/box.cu` 的 `get_inverse`（104）、`get_num_bins`（143）、
-  `set_is_orthogonal`（164）；`src/runtime.cu` 的 `RuntimeOwnership`（约 118）与
-  `run_segment` 的 snapshot 顺序（约 646–780）；`docs/standards/cache-validity.md`；
-  `docs/standards/mpi-runtime.md`。
-- **实施要点**：
-  1. 原语签名建议：`apply_isotropic_scale(Box&, DeviceAtoms&, RuntimeOwnership*, double factor)`；
-     `factor`、候选盒矩阵/逆矩阵和体积必须有限且有效，在 mutation 前检查溢出/下溢。只允许正交盒；调用方必须已确认全周期，
-     否则抛错，不“近似”三斜。
-  2. 盒：对正交盒 `cpu_h[0] *= s; cpu_h[4] *= s; cpu_h[8] *= s;`，随后 `get_inverse()` 与
-     `set_is_orthogonal()`（后者刷新 `float_h`）。`thickness_*` 由下一次 `get_num_bins(rc)` 刷新；
-     任何绕过邻居构建的新力必须显式调用，不能读取旧厚度。
-  3. 位置：M1 的 `atoms.position` 是复制的完整数组；所有 rank 对同一组全局槽位乘 `s`（以
-     `counts.local_count()` 为 stride，按 `global_count` 遍历，padding 不参与）。这样保持了
-     复制不变式，下一步 Allgather/force 看到一致坐标。不要只缩放 owned 后等下一次 Allgather，
-     否则 barostat 与输出的时点会分裂。
-  4. 速度不变；不引入质心平移/旋转；位置绕原点缩放，与上游一致。`unwrapped` 在 v1 **不缩放**
-     （Gate 0-D6）：下一步的 unwrapped 增量只包含 VV 位移，不包含 barostat 的仿射缩放；
-     这是上游行为，必须写测试和文档。若维护者不接受这个限制，B4 必须改为拒绝 NPT+unwrapped
-     输出，不能默默输出错误坐标。
-  5. `RuntimeOwnership`：新增 `refresh_box(const Box&)`，在任何下一次 `recompute_and_commit`
-     之前把 `cpu_h[9..17]` 复制到 `inverse_box_`，并重新计算 `partition_axis_`（各向同性下理论上
-     不变，但仍刷新，避免未来非各向同性扩展踩坑）。`host_position_` 由下一次 recompute 的
-     `copy_to_host` 更新，不要在这里另建一份权威坐标。
-  6. 时点：barostat 必须在 VV2 + thermo + thermostat **之后**、snapshot/`dump_xyz`/
-     `dump_restart` **之前**执行。否则 restart 会写出“新盒子 + 旧位置”，这是静默数据损坏。
-     `write_thermo_row` 的应力值仍是缩放前的 thermo，盒列是缩放后的 box；这个时点必须写进文档。
-  7. B1 记录盒变化事件；待 C0/C2/C3 接入时，盒变化必须通知新势邻居缓存；已有 force/virial 的采样时点须记录。
-     正常单段兼容步序不擅自增加重算；若为连续 restart 改步序，须另作兼容决策。
-  8. M2a：`run_local_domain` 不提供 `RuntimeOwnership`；B1 的原语在 M2a 上必须不可达，并在
-     B2 的路由层提前把 NPT 引到 M1。不要在 M2a 里复制一份盒缩放。
-- **测试/验收**：
-  - 纯几何：随机正交盒 + 位置，缩放 `s` 后体积乘 `s^3`；分数坐标 `r_i/L` 在容差内不变；
-    再乘 `1/s` 回到原坐标/盒子（浮点容差）；速度逐位不变。
-  - 所有权：P=1/P=2，缩放前后对同一组 wrapped 位置调用 owner map，hash 一致；缩放后
-    `refresh_box` + 下一 step 的 recompute 不抛 ownership 错误；无原子丢失/重复。
-  - 输出：缩放后 `dump_restart` 的 Lattice/pos 与 `dump_xyz` 的 wrapped 位置一致；盒列与
-    `box.cpu_h` 一致；unwrapped 明确记录不缩放。
-  - 负例：三斜/非周期/`factor<=0`/非有限 factor 必须报错；M2a 路径不可调用。
-- **证据**：`box-contract-<date>.md`，含几何、所有权、restart 和负例结果。
-- **停止/回滚**：需要改 `box.cu` 数学才能实现；或缩放后所有权/位置出现漂移；或为了“让 NPT
-  先跑起来”绕过 snapshot 时点。回滚到 B0，不保留半成品变盒。
+- **状态**：DONE（2026-11-03）｜**优先级**：P0｜**依赖**：B0
+- **结果**：全量复制模式正交全周期盒变更完成 preflight-before-mutation、float/double inverse、position scaling、ownership refresh 与 NEP neighbor-cache invalidation；局部域分解模式不接入该路径。
+- **标准与证据**：[全量复制模式盒变更合同](../standards/mpi-runtime.md#m1-isotropic-box-change-contract-b1)、[B1 验收记录](../status/validation/npt-validation.md#box-contract-20261103)。本 Step 只提供原语，不单独启用 NPT。
 
 ---
 
-### Step B2：`npt_ber`（各向同性，M1）
+### Step B2：`npt_ber`（各向同性，全量复制模式）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：G-A、B1
-- **目标**：实现与 GPUMD 兼容的各向同性 Berendsen NPT：8-token 语法、GPa/自然单位换算、
-  温度缩放后盒缩放、M1（含 P>1 fallback）路由、restart 与输出时点；M2a 明确不可达。
-- **主责文件**：`include/dmgmd/run_ir.hpp`、`src/run_parser.cpp`、`src/runtime.cu`
-  （dispatcher 与 `run_segment`）、`src/box_control.*`、`src/ensemble_control.*`、
-  `tests/unit/run_parser_tests.cpp`、`tests/` 新 NPT 集成 case、`tests/CMakeLists.txt`。
-- **必读**：上游 `src/integrate/integrate.cu` 的 8-token 解析（455–463、620–712）与单位换算
-  （1152–1153、1190）；`src/integrate/ensemble_ber.cu` 的 `cpu_pressure_isotropic`（138–148）与
-  `compute2`（195–280）；`src/gpumd_compat/common.cuh` 的常数；本计划 §2.5、§13；B0/B1 的结论。
-- **实施要点**：
-  1. 语法严格为 8 token：`ensemble npt_ber T1 T2 Tdamp P B tau_p`。`T1/T2>0`、`Tdamp>=1`；
-     `P` 是有限的目标压力（可为负，表示拉伸）；`B` 是**体积模量**，必须有限且 >0；
-     `tau_p>=1`（步数）。12/18 token（3/6 分量）在本 Step 明确报“v1 仅支持各向同性”，
-     不要解析后忽略多出的分量。
-  2. 单位换算只在边界做一次：
-     `target_p_internal = P_GPa / PRESSURE_UNIT_CONVERSION`；
-     `pc = 1/(3*tau_p*B_GPa); pc *= PRESSURE_UNIT_CONVERSION`。
-     随后所有比较用自然单位（eV/Å³）。`B>2000` 时上游把 `pc=0`（固定盒子）；为兼容也实现
-     该分支，并在文档说明它等价于“只控温、盒子不动”，不要把它当成错误。
-  3. 每步顺序：VV1 → gather/force/ownership → VV2 → thermo → Berendsen 温度缩放（若
-     `1/Tdamp>1e-5`）→ 用缩放前 thermo 的 `(sxx+syy+szz)/3` 计算
-     `scale = 1 - pc*(P_target - P_inst)` → 广播 scale → B1 盒/位置缩放 → `refresh_box` →
-     snapshot/输出。位置绕原点；速度不缩放；不要先缩放位置再算压力。
-  4. 安全 guard：`scale` 必须有限且 >0，缩放后体积必须有限且 >0；否则在任何 mutation 前
-     报错（带 step、P、P_inst、scale）。这是对上游静默产生负体积的**有意加固**，写入文档。
-  5. 路由：在 `run_replicated` 计算 M2a eligibility **之前**扫描 program 的 ensemble；若为
-     `npt_ber`，设置 `force_m1`（含 P>1 fallback），打印
-     `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`，不得进入 M2a。M1 仍需正交、全周期；
-     P>1 若盒不满足则按现有规则报错。`run_local_domain` 加防御性 `if npt -> throw`。
-  6. 目标温度 ramp 仍按段内 `step/steps`；NPT 的 `T1/T2` 与 `Tdamp` 语义与 `nvt_ber` 一致。
-     连续多个 `run` 段重新初始化控制器；restart 是新作业，ramp 重置，必须文档化。
-  7. restart：`npt_ber` 无链/RNG，但步末缩放后保存的坐标/盒与缓存力可能属于不同状态。
-     新 `run`/restart 会重算力，不能直接承诺与单段长轨迹一致。用恒温 case 分别测试
-     单长段、同进程多段、文件重启，记录首次分歧及截断精度；v1 默认承诺可重新平衡续算。
-  8. 输出：`thermo.out` 的应力是缩放前 thermo，盒列是缩放后 box；`restart.xyz` 的 Lattice/
-     pos 是缩放后状态；`dump_xyz` 的 wrapped 位置缩放、速度不变、unwrapped 不缩放（限制）。
-  9. 禁止与未验证组合一起“尽力而为”：NPT + `correct_velocity`、NPT + 自适应步长、
-     NPT + 实验性 `DMGMD_DOMAIN_*`/overlap 开关，要么有专项测试，要么在动力学前拒绝。
-- **测试/验收**：
-  - parser：合法 8-token；12/18 token 的明确拒绝；T/B/tau_p 负例；P 负值接受；`B>2000`
-    接受且 `pc=0`；重复 ensemble 的既有行为回归。
-  - P=1 M1 对 GPUMD `npt_ber` 的 100–500 步短轨迹：`thermo.out` 的温度/六应力/盒列与
-    `dump_xyz` 在 golden 容差内；记录首个超差步/列。GPUMD 输入必须有显式 `vel`，避免随机初速度。
-  - 压力跟踪：从压缩/拉伸初态出发，检查确定压力差下的单步响应方向；平均松弛单独检验，不要求瞬时压力单调。
-    `P_inst > P_target` 时扩张，反之收缩；不能仅由目标压力为负推出扩张。
-  - P=2/4 的 M1 fallback：stdout 必须显示 `mode=m1`；短轨迹/统计与 P=1 在容差内；缩放若干步后
-    无所有权错误；restart 可启动且继续缩放。
-  - restart：`T1==T2` 的单段/多段/重启对照必须实际执行并分类记录差异，不预设逐步连续；记录
-    `restart.xyz` 与 `thermo.out` 的盒列一致性。
-  - M2a：构造本来 eligible 的 case，NPT 仍走 M1；若直接调用 domain 路径必须报错。
-- **证据**：`docs/status/validation/npt-ber-<date>.md`，含 GPUMD 对比、压力跟踪、P>1/restart、
-  失败组合与输出时点。
-- **停止/回滚**：P1 golden 超差；盒/位置/restart 不一致；P>1 所有权错误；或为了通过测试改变
-  NEP/thermo 定义。回滚 B2 的 parser/runtime 路由，保留 B0/B1。
+- **状态**：DONE（2026-11-03）｜**优先级**：P0｜**依赖**：G-A、B1
+- **结果**：8-token isotropic NPT Berendsen、GPa conversion、仅全量复制模式路由、输出时点、restart 行为和安全负例完成本轮冻结验收。结论限报告所列 NEP 模型、binary、P1/P2/P4 与双后端，不代表严格系综采样。
+- **标准与证据**：[控压器合同](../standards/barostat.md)、[B2 Berendsen/restart 报告](../status/validation/npt-validation.md#npt-ber-20261103)。旧 goldens/容差未改。
 
 ---
 
-### Step B3：`npt_scr`（各向同性，M1）
+### Step B3：`npt_scr`（各向同性，全量复制模式）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：B2、A4
-- **目标**：实现随机细胞重标定（SCR）的严格 NPT：BDP 速度重标定 + 随机盒缩放；root 单一 RNG
-  流、固定种子/环境覆盖；统计验收，不承诺轨迹 byte-exact。
-- **主责文件**：`src/run_parser.cpp`、`include/dmgmd/run_ir.hpp`、`src/runtime.cu`、
-  `src/box_control.*`、`src/ensemble_control.*`、`tests/` 新 SCR case、`tests/CMakeLists.txt`。
-- **必读**：上游 `src/integrate/ensemble_npt_scr.cu` 的 `cpu_pressure_isotropic`（137–160）与
-  `compute2`（240–280）、RNG 初始化（34–36）；`src/integrate/svr_utilities.cuh`；调研报告 §6.6；
-  Gate 0-D5；B2 的盒/路由/时点。
-- **实施要点**：
-  1. 语法同样 8 token：`ensemble npt_scr T1 T2 Tdamp P B tau_p`；校验同 B2。12/18 token 拒绝。
-  2. 每步顺序：VV1 → gather/force/ownership → VV2 → thermo → **BDP 速度重标定**（用当前 T 与
-     全局 KE）→ 广播温度 factor → 缩放 owned 速度 → root 计算盒因子 →
-     `scale = 1 - pc*(P_target - P_inst) + sqrt((2/3)*pc*k_B*T/V) * gaussian` → 广播 →
-     B1 盒/位置缩放 → `refresh_box` → snapshot/输出。注意：随机项用的是**缩放前**体积与当前
-     目标温度；BDP 先于 barostat；顺序不能交换。
-  3. RNG：推荐与 BDP 共用持续推进的 root `std::mt19937` 流；`gasdev` 的 `iset/gset` 是 controller 成员。
-     但锁定上游 `cpu_pressure_isotropic(std::mt19937 rng, ...)` 按值传参，且 `gasdev` 用静态缓存，
-     因此本方案不等同于上游随机流。G0-D10 必须明确这项偏离；先温度后压力，建立独立单步
-     噪声输入 fixture 与统计 oracle，不能用同 seed GPUMD 轨迹作为正确性证明。默认种子/`DMGMD_ENSEMBLE_SEED` 同 A4；种子/cache 的段边界按 G0-D9 初始化。
-  4. 高斯分布：复刻上游 `gasdev` 的 Marsaglia polar 算法与 `std::uniform_real_distribution<double>`
-     用法；不要换成 `std::normal_distribution`（实现可能随标准库变化），也不要用各 rank 独立
-     RNG。同二进制/同标准库/同 rank 的重复运行可 byte-identical；跨编译器只承诺统计。
-  5. 安全 guard：`scale` 有限且 >0、体积有限且 >0；否则报错。SCR 的随机项可能偶发大因子，
-     但产品不能在负体积上继续跑。记录 P、P_inst、T、V、gaussian、scale。
-  6. 路由/盒/输出/restart 时点全部复用 B2；NPT 强制 M1，M2a 防御性拒绝。`npt_scr` 的 restart
-     不连续（RNG + BDP 状态不保存），只验证能启动，不做轨迹连续性承诺。
-  7. 统计自由度 3N；NPT 的温度控制用 BDP，不用 NHC；不要混用 `npt_ber` 的 NHC 假设。
-- **测试/验收**：
-  - parser 与失败关闭同 B2；`B>2000` 时 `pc=0`，随机项也为 0（盒子不动），验证实现。
-  - 同 seed、同二进制、同 rank 的重复运行：`thermo.out` byte-identical（至少短轨迹）；
-    不同 seed 结果不同；默认种子与 env 覆盖均可复现。
-  - 统计：至少 8 个 seed、≥20k 步（前 10% 丢弃）的 NPT；`<P_inst>` 接近 `P_target`，
-    `<T>` 接近目标，体积均值/方差须通过 §0.5 定量统计门，不能只检查有限或不塌缩；给出 95% CI。与 GPUMD
-    `npt_scr` 比均值/涨落（多次独立 wall-clock seed），不比单条轨迹。
-  - P=2/4 M1 fallback：`mode=m1`、无所有权错误、统计合理；restart 可启动。
-  - 负例：非正交/非周期/12/18 token/非有限 P/B/M2a 路径都必须报错。
-- **证据**：`docs/status/validation/npt-scr-<date>.md`，含种子矩阵、均值/涨落/CI、GPUMD 统计对比、
-  安全 guard 触发记录（若有）。
-- **停止/回滚**：同 seed 不可复现；BDP 与 barostat 的 RNG 顺序被改变；体积出现负值/塌缩；
-  或统计验收只靠单 seed。回滚 B3，保留 B2。
+- **状态**：DONE（2026-11-04）｜**优先级**：P0｜**依赖**：B2、A4
+- **结果**：SCR持续root RNG、实例Gaussian cache、全量复制模式盒/输出/restart合同及直接安全门完成；n3的160条全新独立确认与唯一冻结分析PASS，P1 base/half及P2/P4双后端bridge的均值、variance、体积CDF与ESS门通过。科学参数、预算和阈值未改变。
+- **标准与证据**：[控压器合同](../standards/barostat.md)、[系综合同](../standards/ensembles.md)、[最终独立确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)、[新结果索引](../status/validation/npt-scr-n3-confirmation-index.json)。原18 looks的INCONCLUSIVE及旧确认63/6/91计数摘要保留，不并入新数据；相关逐作业记录和过程材料未保留。
+- **边界**：统计限216原子NEP-C、300K/0GPa、全量复制模式各向同性正交全周期盒和单节点注册条件；half仅P1/HostStaged。共同理论target诊断单列，不证明普遍严格NPT或遍历性；RNG与隐藏状态不写入restart，不承诺轨迹连续。
 
 ---
 
 ### Step B4：NPT 验收、restart 与文档（G-B）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：B2、B3、A5
-- **目标**：把 B2/B3 变成可发布合同：完整矩阵、restart/输出/限制、兼容矩阵、用户文档与证据；
-  G-B 通过后才允许进入 v1.0 发布收尾。
-- **主责文件**：`docs/standards/barostat.md`（新建）、`docs/standards/compatibility-matrix.md`、
-  `docs/README.md`、`docs/status/current.md`、`README.md`、`docs/status/validation/npt-matrix-<date>.md`；
-  测试 case 归入 `tests/`。本 Step 以文档/矩阵为主，发现缺陷回到 B2/B3。
-- **必读**：B0–B3 证据；Gate 0-D2/D4/D5/D6；调研报告 §6.2、§6.6、§9；`docs/README.md` 的治理规则；
-  `docs/standards/golden-test-standard.md`。
-- **实施要点**：
-  1. 文档写清语法、单位、符号、参数范围：P/B 为 GPa；B 是体积模量；P 可为负；tau_p/Tdamp 是
-     步数；`B>2000` 的固定盒子分支；12/18 token 不支持。不要用“compressibility”混淆 B。
-  2. 写清两种 NPT 的算法差异与适用性：`npt_ber` 兼容 GPUMD、非严格采样；`npt_scr` 是随机
-     细胞重标定，需统计验收；两者都不是 MTTK/PR。不要宣称“任意系综”。
-  3. 写清 M1-only 路由：P=1/P>1 M1 支持；M2a 不提供 NPT；dispatcher 的 `mode=m1 reason=...`
-     日志；未来若要 M2a NPT，需另立盒/邻居/halo 计划。
-  4. 写清时点：thermo 在 thermostat/barostat 前计算，盒列在缩放后；restart 在缩放后；
-     unwrapped 不缩放（或按维护者决定拒绝 NPT+unwrapped）。给出用户可检查的列/文件对照。
-  5. 写清 restart：`npt_ber` 恒温重启也不预先承诺逐步连续（见 §0.5）；`npt_scr` 不连续；
-     ramp 的 split-run 与连续 run 不等价；不要把不连续写成“已知小问题”。
-  6. 矩阵必须覆盖：P=1/P=2/P=4（M1，含 fallback）、M2a 路由拒绝/绕过、默认/CUDA-aware
-     （可用时）、`npt_ber`/`npt_scr`、restart、负 P、B>2000、非正交/非周期错误、12/18 token 错误。
-  7. 更新兼容矩阵的 supported/unsupported 列表、restart 表、thermo 列/盒列语义；更新
-     `docs/status/current.md`；`docs/README.md` 加 `barostat.md` 链接；检查链接。
-- **测试/验收**：发布支持范围内的 G-B 矩阵全 PASS；范围外 SKIP 明示且不计通过；文档命令可执行；兼容矩阵与实际 parser/runtime
-  一致；所有限制有证据或明确标为未验证。
-- **证据**：`npt-matrix-<date>.md` + 原始日志 + 文档链接检查输出。
-- **停止/回滚**：矩阵缺项却声称 G-B；文档把 M2a/NPT 写成支持；restart 语义与实测不符；
-  或 unwrapped 输出会误导用户却未警告。回滚文档到 B3 的已知事实，不发布。
+- **状态**：DONE；G-B PASS（2026-11-04）｜**优先级**：P0｜**依赖**：B2、B3、A5
+- **结果**：B0–B3、输出/restart/新作业重建、直接错误/安全门、NEP5/ZBL短合同和冻结旧路径回归证据已整合。160条确认的身份审计、唯一统计分析和独立复核通过；分析结束后完成两处draft fixture维护及6项CPU测试；状态、标准、索引和文档链接完成最终复核。
+- **标准与证据**：[控压器标准](../standards/barostat.md)、[NPT/G-B矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)、[兼容矩阵](../standards/compatibility-matrix.md)、[输出/restart合同](../status/validation/npt-validation.md#npt-output-20261103)、[旧路径回归](../status/validation/npt-validation.md#npt-regression-20261103)。精确身份与最终审查记录见[新结果索引](../status/validation/npt-scr-n3-confirmation-index.json)。
+- **阶段门范围**：主审在所列NEP、单节点全量复制模式、各向同性正交全周期范围放行G-B；NEP5/ZBL仅短合同，非NEP、局部域分解模式 NPT、RDMA/跨节点及普遍严格采样未获验证。C/D未启动，v1.0未发布。
+
+---
 
 ## 8. Phase C：势函数抽象与 LJ/EAM/Tersoff（C0–C5）
 
-> 目标：把“NEP 专用”改成“可插拔的力场”，但**不改变 NEP 的任何数值**；非 NEP 势 v1 只走 M1，
-> 不做 M2a 的 halo/邻居分块。C0 只做抽象，C1 只做格式分发，C2/C3 才引入新物理。
+> 目标：把“NEP 专用”改成“可插拔的力场”，但**不改变 NEP 的任何数值**；非 NEP 势 v1 只走全量复制模式，
+> 不做 局部域分解模式的 halo/邻居分块。C0 只做抽象，C1 只做格式分发，C2/C3 才引入新物理。
 
 | Step | 内容 | 优先级 | 依赖 | 关键产出 |
 | --- | --- | --- | --- | --- |
 | C0 | `ForceField` 抽象与 NEP adapter | P0 | G-A | 不改 NEP 的可插拔接口 |
 | C1 | 势格式分发、metadata、`potential` 第三 token | P0 | C0 | LJ/EAM 可进入构建 |
 | C2 | LJ | P0 | C1 | 解析/力/virial/GPUMD golden |
-| C3 | EAM/alloy | P0 | C1、C2 的 M1 适配经验 | setfl + spline + golden |
+| C3 | EAM/alloy | P0 | C1、C2 的全量复制模式适配经验 | setfl + spline + golden |
 | C4 | Tersoff 1989 | P1 | C3；G0-D3 批准 | 可选，不阻塞 v1.0 |
 | C5 | 势能力矩阵、示例与文档 | P0 | C2、C3（C4 若启用） | G-C 证据 |
 
@@ -870,7 +685,7 @@ D1 + D2 + D3 + D4 ─ D5
 ### Step C0：`ForceField` 抽象与 NEP adapter
 
 - **状态**：PROPOSED｜**优先级**：P0｜**依赖**：G-A
-- **目标**：定义 M1 全系统力计算的稳定接口，让 NEP 作为第一个实现；M2a 仍只接受 NEP，不因抽象
+- **目标**：定义 全量复制模式全系统力计算的稳定接口，让 NEP 作为第一个实现；局部域分解模式仍只接受 NEP，不因抽象
   改变 halo/所有权/数值。C0 结束时，所有既有 golden 必须一条不变。
 - **主责文件**：新增 `include/dmgmd/force_field.hpp`、`src/force_field.cpp`（工厂/adapter）；
   `src/runtime.cu` 的 `NepForce`/`run_m1_replicated`/`run_replicated`；`src/domain_runtime.cu`
@@ -880,7 +695,7 @@ D1 + D2 + D3 + D4 ─ D5
   与 `NEP` 的 `compute` 签名；`docs/standards/architecture-decisions.md`；`AGENTS.md` 的
   “不改变 NEP 数学”约束。
 - **实施要点**：
-  1. 接口只暴露 M1 需要的操作：
+  1. 接口只暴露 全量复制模式需要的操作：
      - `compute(Box&, DeviceAtoms&)`：读取 type/position，写 potential/force/virial；
      - `cutoff()`/`num_types()`/`requires_full_system()`（或等价能力查询）；
      - 析构与移动语义。
@@ -889,12 +704,12 @@ D1 + D2 + D3 + D4 ─ D5
   2. `NepForce` 成为第一个实现（或由 adapter 包装），保留它的 wrap + clear + `NEP::compute`
      顺序、workspace 大小、launch 参数与累加顺序。**不要**把 NEP 的 `compute` 重写成新的通用
      kernel；不要改 `src/gpumd_compat/`。
-  3. M2a 仍然持有 `NEP`/`NepForce`，不通过新接口；`run_local_domain` 的签名可以不变。若为了
+  3. 局部域分解模式仍然持有 `NEP`/`NepForce`，不通过新接口；`run_local_domain` 的签名可以不变。若为了
      编译必须改，只做类型擦除，不改变调用序、halo 或 thermo 需求。
   4. 工厂只识别“已实现格式”；C0 阶段仍只有 NEP。未知/未实现格式在构造前报错，不能返回空指针
      或静默退化为 NEP。
-  5. 运行时分派保持：P=1 走 M1；P>1 若 M2a eligible 且格式为 NEP 走 M2a；否则 M1 fallback。
-     C0 不改变这个决策，只把“M1 用哪个力”抽象出来。
+  5. 运行时分派保持：P=1 走全量复制模式；P>1 若局部域分解模式 eligible 且格式为 NEP 走局部域分解模式；否则 全量复制模式回退路径。
+     C0 不改变这个决策，只把“全量复制模式用哪个力”抽象出来。
   6. ForceField 必须预留盒 epoch/`on_box_changed`（或等价失效接口）；C2/C3 的邻居缓存不能只看原子位移。
      盒缩放后强制安全重建或证明复用，覆盖盒收缩、跨 cutoff 新邻居、近原点原子。
      不提前写 LJ/EAM 的 parser 或 compat 文件；C0 的测试应能在
@@ -902,10 +717,10 @@ D1 + D2 + D3 + D4 ─ D5
 - **测试/验收**：
   - 完整 CTest、baseline、long_nve smoke 与 A5 的 NHC/BDP 关键 case 全部通过；
   - NEP `thermo.out`/`dump_xyz`/`restart.xyz` 与 A5 基线在 golden 容差内（同构建配置优先哈希）；
-  - M2a P=2/4 的 NEP case 与 C0 前一致；无新增 collective/内存峰值异常；
+  - 局部域分解模式 P=2/4 的 NEP case 与 C0 前一致；无新增 collective/内存峰值异常；
   - 代码审查确认 `src/gpumd_compat/` 无 diff、NEP kernel 无 diff。
-- **证据**：`docs/status/validation/forcefield-c0-<date>.md`，含变更文件、NEP 对比、M2a 回归。
-- **停止/回滚**：任何 NEP 数值变化；M2a 行为变化；为了抽象复制了 NEP kernel；或把 M2a 强行
+- **证据**：`docs/status/validation/forcefield-c0-<date>.md`，含变更文件、NEP 对比、局部域分解模式回归。
+- **停止/回滚**：任何 NEP 数值变化；局部域分解模式行为变化；为了抽象复制了 NEP kernel；或把 局部域分解模式强行
   接入通用接口。回滚 C0，保留 A2。
 
 ---
@@ -914,7 +729,7 @@ D1 + D2 + D3 + D4 ─ D5
 
 - **状态**：PROPOSED｜**优先级**：P0｜**依赖**：C0
 - **目标**：让 `potential` 能按文件头识别 NEP/LJ/EAM（Tersoff P1），把类型符号/metadata 传给
-  model 解析与力工厂；支持 `eam/alloy` 的 `max_neighbor` 第三 token；非 NEP 强制 M1 并记录原因。
+  model 解析与力工厂；支持 `eam/alloy` 的 `max_neighbor` 第三 token；非 NEP 强制 全量复制模式并记录原因。
 - **主责文件**：`include/dmgmd/model.hpp`（`PotentialMetadata`）、`src/model_parser.cpp`
   （`load_potential_metadata`）、`include/dmgmd/run_ir.hpp`（`PotentialCommand`）、
   `src/run_parser.cpp`、`src/force_field.cpp`、`src/runtime.cu`（dispatcher）、
@@ -940,9 +755,9 @@ D1 + D2 + D3 + D4 ─ D5
      不能忽略。错误来源要指向 `run.in` 的行。
   4. model 解析继续用 metadata.symbols 建立 species→type；EAM 的 body 元素顺序必须与第一行
      symbols 一致，力工厂在构造时再校验 body；不要只信第一行。
-  5. 路由：格式为 NEP 时保持现有 M2a eligibility；非 NEP 时在 eligibility **之前**设置
+  5. 路由：格式为 NEP 时保持现有 局部域分解模式 eligibility；非 NEP 时在 eligibility **之前**设置
      `force_m1`，打印 `DMGMD_DOMAIN mode=m1 reason=non-nep-m1-only`（NPT 时再加
-     `npt-m1-only`）。M1 在 P>1 仍要求正交、全周期；否则在动力学前报错，不得进入 M2a 或
+     `npt-m1-only`）。全量复制模式在 P>1 仍要求正交、全周期；否则在动力学前报错，不得进入 局部域分解模式或
      “自动降级”为非 NEP 的 NVE。
   6. 未知/未实现格式（如 `tersoff_1988`、`adp`、`eam_zhou_2004`）明确 unsupported；不要
      因为文件头像 setfl 就误判为 `eam/alloy`。C1 仅识别元数据并以未实现 guard 拒绝执行；C2/C3 分别开放 LJ/EAM，Tersoff 到 C4。
@@ -952,19 +767,19 @@ D1 + D2 + D3 + D4 ─ D5
     非 EAM 带第三 token（错误）、缺文件/空文件；
   - metadata：NEP 合法/非法头、LJ 头、EAM 三行头、Tersoff 头；model species 与 symbols 匹配；
   - 路由：NEP P=1/P>1 与基线一致；C1 的 LJ/EAM 在 P>1 预检时明确报未实现；到 C2/C3 后验证 `mode=m1 reason=non-nep-m1-only`；
-    三斜/非周期 P>1 报错；M2a 不被调用；
+    三斜/非周期 P>1 报错；局部域分解模式不被调用；
   - 完整 CTest + NEP baseline 不变。
 - **证据**：`forcefield-c1-<date>.md`，含格式表、parser 用例、路由日志、NEP 回归。
 - **停止/回滚**：EAM 文件头假设未用 fixture 验证；NEP metadata 行为改变；或非 NEP 静默进入
-  M2a。回滚 C1 的 parser/工厂，保留 C0。
+  局部域分解模式。回滚 C1 的 parser/工厂，保留 C0。
 
 ---
 
-### Step C2：LJ 势（M1）
+### Step C2：LJ 势（全量复制模式）
 
 - **状态**：PROPOSED｜**优先级**：P0｜**依赖**：C1
 - **目标**：按锁定上游实现 LJ：`lj T symbols` + T×T `epsilon sigma cutoff`，无 shift，float 参数
-  与邻居容量 700；M1 全系统力/能量/virial；M2a 明确不支持。
+  与邻居容量 700；全量复制模式全系统力/能量/virial；局部域分解模式明确不支持。
 - **主责文件**：`src/gpumd_compat/lj.cu`、`src/gpumd_compat/lj.cuh`（带 Origin 头，最小复制）、
   `src/force_field.cpp`（LJ adapter/工厂）、`CMakeLists.txt`、`tests/` 新增 LJ fixtures 与
   `tests/CMakeLists.txt`。**不改 NEP 数学**；新增 LJ/EAM 专用安全邻居适配可独立文件实现，
@@ -981,7 +796,7 @@ D1 + D2 + D3 + D4 ─ D5
   3. 邻居：沿用上游 `neighbor.initialize(rc, N, 700)` 的容量及实际邻居构建分支；不要擅自
      提高容量或改成新的 cell list。容量必须在写邻居表前检查；不得沿用越界写/静默截断。新增安全适配要留 Origin，
      保持容量内的数学/排序不变，并跑 NEP 回归。
-  4. 力计算对 M1 的完整复制位置/type 操作；不接 M2a、不做 ghost/halo。P>1 时仍由 M1 slab
+  4. 力计算对 全量复制模式的完整复制位置/type 操作；不接 局部域分解模式、不做 ghost/halo。P>1 时仍由 全量复制模式 slab
      所有权决定积分/thermo，力本身是全系统计算。
   5. 工厂只接受 LJ 元数据；`max_neighbor` 第三 token 对 LJ 报错；未知类型/负 epsilon/非正
      sigma/cutoff 的处理按上游或明确失败关闭，不能产生 NaN。
@@ -989,22 +804,22 @@ D1 + D2 + D3 + D4 ─ D5
   - 解析：合法单/双 type；T×T 行数不足/多；参数非有限；header 错；第三 token 错。
   - 静态二聚体：`U=4ε[(σ/r)^12-(σ/r)^6]`，力与有限差分/GPUMD 一致；virial 与 `r⊗f` 的
     9 分量布局一致；cutoff 内外行为；两种 type 的 epsilon/sigma 矩阵。
-  - P=1 GPUMD LJ NVE 100–500 步短轨迹（thermo/dump）在 golden 容差内；P=2 M1 fallback
-    不崩溃、无所有权错误；M2a 输入明确拒绝/不进入。
+  - P=1 GPUMD LJ NVE 100–500 步短轨迹（thermo/dump）在 golden 容差内；P=2 全量复制模式回退路径
+    不崩溃、无所有权错误；局部域分解模式输入明确拒绝/不进入。
   - 与 B2/B3 组合为 P0：LJ + `npt_ber`/`npt_scr` 的短轨迹/统计及盒缓存失效测试；
     参考输入须匹配；缺 oracle 标阻塞，不能据此声明支持。C5 汇总全部系综 × 势组合。
   - 性能/内存记录：邻居容量 700 的实际最大邻居数；若溢出，记录失败行为。
-- **证据**：`lj-<date>.md`，含解析、解析力、GPUMD 对比、P=1/P=2、M2a 拒绝与限制。
+- **证据**：`lj-<date>.md`，含解析、解析力、GPUMD 对比、P=1/P=2、局部域分解模式拒绝与限制。
 - **停止/回滚**：LJ 与参考不一致且无法归因；NEP golden 受影响；为了“更物理”加 shift 或改
-  float 精度；M2a 被误接入。回滚 C2 的 compat 文件与工厂分支。
+  float 精度；局部域分解模式被误接入。回滚 C2 的 compat 文件与工厂分支。
 
 ---
 
-### Step C3：EAM/alloy（M1）
+### Step C3：EAM/alloy（全量复制模式）
 
-- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：C1、C2 的 M1 适配经验
+- **状态**：PROPOSED｜**优先级**：P0｜**依赖**：C1、C2 的全量复制模式适配经验
 - **目标**：实现 GPUMD 包装的 EAM/alloy：三行头 + setfl 正文、Hermite 样条、嵌入能/电子密度/
-  对势、`max_neighbor` 可选；M1 全系统；与 GPUMD 静态/短轨迹 golden 对齐。
+  对势、`max_neighbor` 可选；全量复制模式全系统；与 GPUMD 静态/短轨迹 golden 对齐。
 - **主责文件**：`src/gpumd_compat/eam_alloy.cu`、`eam_alloy.cuh`（带 Origin 头）、
   `src/force_field.cpp`、`CMakeLists.txt`、`tests/` 的 EAM fixtures 与 `tests/CMakeLists.txt`。
 - **必读**：上游 `src/force/eam_alloy.cu`（构造函数 116–165、`initialize_eamalloy` 165–260、
@@ -1020,21 +835,21 @@ D1 + D2 + D3 + D4 ─ D5
      除非上游明确 double。`max_neighbor` 默认 400、范围 1..1024；邻居容量按该值分配。
   4. 元数据/类型：第一行 symbols 必须与正文第 4 行一致、与 model species 映射一致；不一致
      在构造前报错。`rc` 用于邻居；不要用元素行里的晶格常数替代。
-  5. M1 only；M2a 明确不可达；P>1 的 M1 fallback 仍走全系统力；NPT 组合遵循 B2 的 M1 路由。
+  5. 仅全量复制模式；局部域分解模式明确不可达；P>1 的全量复制模式回退路径 仍走全系统力；NPT 组合遵循 B2 的全量复制模式路由。
   6. 失败关闭：文件截断、非有限值、非法 `nrho/nr`/网格间距、元素数不符、`max_neighbor` 越界
      都要报带文件/行的错误；不要用默认 0 填充后继续。
 - **测试/验收**：
   - 纯 Cu fcc 与 CuNi 合金：静态能量/力/virial 与 GPUMD 一致；晶格常数/ cohesive energy
     在 golden 容差内；`max_neighbor` 400 与较小值的行为；截断/样条边界。
-  - P=1 GPUMD EAM NVE 100–500 步短轨迹在 golden 容差内；P=2/4 M1 fallback 无所有权错误；
-    M2a 不进入。
+  - P=1 GPUMD EAM NVE 100–500 步短轨迹在 golden 容差内；P=2/4 全量复制模式回退路径 无所有权错误；
+    局部域分解模式不进入。
   - 解析错误矩阵：三行头缺失、元素数不符、nrho/nr 非法、截断、NaN、max_neighbor 0/1025。
   - 与全部 P0 系综联合验证；NPT 收缩必须让邻居缓存失效。表格边界/密度超出表域的处理按参考复核，
     不凭一般物理直觉拒绝所有负表项。
   - 邻居数恰好等于容量与超容量负例必须在任何越界写前处理；分配大小检查乘法溢出/OOM。
   - 内存/性能：按 `N*max_neighbor` 记录峰值；不因 golden 通过而忽略 OOM 风险。
 - **证据**：`eam-<date>.md`，含格式说明、静态/轨迹对比、错误矩阵、P=1/P>1、内存。
-- **停止/回滚**：EAM 与 GPUMD 不一致且无法归因；样条/浮点被“优化”；M2a 被误接入；
+- **停止/回滚**：EAM 与 GPUMD 不一致且无法归因；样条/浮点被“优化”；局部域分解模式被误接入；
   或文件格式假设与 fixture 不符。回滚 C3，保留 C2。
 
 ---
@@ -1048,9 +863,9 @@ D1 + D2 + D3 + D4 ─ D5
   CMake、tests、文档。**不包含** tersoff_1988/mini、ILP、SW。
 - **必读**：上游 `src/force/tersoff1989.cu`、`force.cu:93-95`；Tersoff 1989 参数文件格式；
   `docs/standards/golden-test-standard.md`。
-- **实施要点**：按上游逐字实现三体角度/截断/参数表与 virial；M1 only；文件头
+- **实施要点**：按上游逐字实现三体角度/截断/参数表与 virial；仅全量复制模式；文件头
   `tersoff_1989 T symbols...`；与 `potential` 第三 token 规则一致（不支持）。测试 Si/diamond
-  静态与短 NVE golden；M2a 拒绝；文档标注 P1。
+  静态与短 NVE golden；局部域分解模式拒绝；文档标注 P1。
 - **证据/停止**：独立 status 文档；若三体邻居/角度顺序无法与参考对齐，停止并保持 unsupported，
   不要把 Tersoff 放进 v1.0 矩阵。
 
@@ -1067,20 +882,20 @@ D1 + D2 + D3 + D4 ─ D5
 - **必读**：C0–C4 证据；上游 force 分发表；B0 的压力/列结论；`docs/standards/golden-test-standard.md`；
   `docs/README.md` 的索引规则。
 - **实施要点**：
-  1. 能力矩阵按“格式 × 数据面 × 系综”写：NEP 在 M1 支持全部 v1 系综，在 M2a 仅支持 NVE、nvt_ber、NHC、BDP；LJ/EAM 支持 M1
-     （含 P>1 fallback），不支持 M2a；Tersoff 标 P1。明确 NPT+non-NEP 也走 M1。
+  1. 能力矩阵按“格式 × 数据面 × 系综”写：NEP 在 全量复制模式支持全部 v1 系综，在 局部域分解模式仅支持 NVE、nvt_ber、NHC、BDP；LJ/EAM 支持 全量复制模式
+     （含 P>1 fallback），不支持 局部域分解模式；Tersoff 标 P1。明确 NPT+non-NEP 也走全量复制模式。
   2. 文件格式逐项写：NEP 头/ZBL；LJ 无 shift、T×T 顺序/单位；EAM 三行头 + setfl 正文 +
      `max_neighbor`；Tersoff（若启用）。给出最小示例与常见错误。
   3. 示例：NEP NVE、LJ NVE、EAM NVE 各一个可运行小 case；不要提交大轨迹/大势文件；
      说明从哪里获取测试势（不把参考仓库链接进构建）。
-  4. 限制：LJ 截断不连续、EAM 邻居上限/内存、非 NEP 无 M2a、Tersoff 为 P1、NPT 的 M1 限制；
+  4. 限制：LJ 截断不连续、EAM 邻居上限/内存、非 NEP 无 局部域分解模式、Tersoff 为 P1、NPT 的全量复制模式限制；
      不要用“支持 LJ/EAM”暗示支持所有 LAMMPS 势。
   5. 更新兼容矩阵的 supported/unsupported、`potential` 第三 token、restart/输出列不变；
      更新 `docs/status/current.md`；链接检查。
 - **测试/验收**：发布支持范围内的 G-C 矩阵全 PASS；范围外 SKIP 明示且不计通过；示例命令实际执行；NEP baseline 不变；
   LJ/EAM golden 在库；文档与实际 parser/工厂一致。
 - **证据**：`potential-matrix-<date>.md` + 示例日志 + 链接检查。
-- **停止/回滚**：文档把 M2a/未实现势写成支持；示例不可运行；或为了“矩阵完整”把 Tersoff
+- **停止/回滚**：文档把 局部域分解模式/未实现势写成支持；示例不可运行；或为了“矩阵完整”把 Tersoff
   临时提升为 P0。回滚文档，不改代码。
 
 ---
@@ -1180,8 +995,8 @@ D1 + D2 + D3 + D4 ─ D5
   2. run.in reference：按命令列语法、参数单位、默认值、失败行为；与 parser/兼容矩阵逐项对齐。
      特别写清 Tdamp/tau_p 是步数、NPT P/B 是 GPa、`max_neighbor` 只对 EAM。
   3. 系综/势文档链接到标准页，不复制公式；给出“选哪个”的简短指南（NVE/NVT/NPT；NEP/LJ/EAM），
-     明确 Berendsen 非严格采样、NHC/BDP 的 restart 限制、NPT 仅 M1。
-  4. MPI/GPU：P=1 与 P>1 的差异、M1/M2a 路由、日志字段、常见 UCX/绑定问题；不要承诺跨节点
+     明确 Berendsen 非严格采样、NHC/BDP 的 restart 限制、NPT 仅 全量复制模式。
+  4. MPI/GPU：P=1 与 P>1 的差异、全量复制模式/局部域分解模式路由、日志字段、常见 UCX/绑定问题；不要承诺跨节点
      I/O 或未验证的 GPU 拓扑。
   5. 输出/restart：18 列含义、盒列时点、restart 字段与不保存的系综状态、NPT unwrapped 限制；
      给出校验命令。
@@ -1205,7 +1020,7 @@ D1 + D2 + D3 + D4 ─ D5
 - **必读**：A0 的性能基线；`README.md` 的 benchmark/MPI 命令；`docs/standards/golden-test-standard.md`
   的“性能不等于正确性”；`docs/operations/deployment.md`；D3 的示例。
 - **实施要点**：
-  1. 固定 benchmark case：NEP NVE P=1、NEP NVE P=4（M2a 与 M1 fallback 各一）、NHC/BDP、NPT、
+  1. 固定 benchmark case：NEP NVE P=1、NEP NVE P=4（局部域分解模式与全量复制模式回退路径 各一）、NHC/BDP、NPT、
      LJ/EAM P=1；固定原子数、步数、warmup、输出关闭或固定间隔；3 次仅作先导；正式采用配对/交错重复、预先冻结样本数与 CI 方法，记录
      GPU/驱动/CUDA/MPI/UCX/rank/backend。
   2. 门限默认（维护者可改，但必须书面）：现有 NEP NVE/`nvt_ber` 相对 A0 同机同配置中位数退化
@@ -1239,7 +1054,7 @@ D1 + D2 + D3 + D4 ─ D5
 - **实施要点**：
   1. 逐项勾选 G-A/G-B/G-C/G-D 的门条件；每项附证据路径与执行日期；未执行的矩阵项写明原因，
      不能把“没跑”写成“通过”。
-  2. 版本/变更：语义版本、支持矩阵、已知限制（NHC/BDP restart、NPT unwrapped、非 NEP 无 M2a、
+  2. 版本/变更：语义版本、支持矩阵、已知限制（NHC/BDP restart、NPT unwrapped、非 NEP 无 局部域分解模式、
      Tersoff P1、LJ 无 shift、EAM 格式）、破坏性变更（若有）；不要用“全面支持 GPUMD”描述。
   3. 发布物料：源码包/二进制、LICENSE/NOTICE、文档、示例、校验和、构建环境；确认 `--version`
      与包一致；确认未包含参考仓库/大轨迹/本机路径。
@@ -1263,7 +1078,7 @@ D1 + D2 + D3 + D4 ─ D5
 | L1 | 单步静态力/能量/virial/压力 | 1 GPU | 解析值 + GPUMD 单步 golden |
 | L2 | 确定性短轨迹：NVE、`nvt_ber`、`nvt_nhc`、`npt_ber` | 1 GPU（P=1） | GPUMD golden / 同二进制哈希 |
 | L3 | 随机统计：`nvt_bdp`、`npt_scr` | 1 GPU，多种子 | 均值/方差/自相关/CI，不做轨迹比对 |
-| L4 | MPI/后端矩阵：M1 P1/P2/P4、M1 fallback、M2a P2/P4、默认/CudaAware | 多 GPU | 同 rank/backend 可复现；跨 rank 容差/统计 |
+| L4 | MPI/后端矩阵：全量复制模式 P1/P2/P4、全量复制模式回退路径、局部域分解模式 P2/P4、默认/CudaAware | 多 GPU | 同 rank/backend 可复现；跨 rank 容差/统计 |
 | L5 | 合同：restart、输出列/时点、失败关闭、路由 | 1–4 GPU | 逐项断言/错误来源 |
 | L6 | 性能/内存/打包 | 指定机器 | 中位数、阈值、干净构建 smoke |
 
@@ -1320,7 +1135,7 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 | case_id | `npt_ber-m1-p2-lj-001` |
 | ensemble | `npt_ber T1 T2 Tdamp P B tau_p` |
 | potential | `NEP4` / `LJ` / `EAM/alloy`（含 `max_neighbor`） |
-| ranks / plane / backend | `2 / M1 / 默认` |
+| ranks / plane / backend | `2 / 全量复制模式/ 默认` |
 | steps / seed / output interval | `500 / 12345678 / 10` |
 | 预期/判定 | `PASS` / `FAIL` / `SKIP`（原因、批准人） |
 | 证据 | status 文档段落 + 原始日志路径 + 哈希 |
@@ -1362,10 +1177,10 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 | --- | --- | --- | --- | --- |
 | R1 | Berendsen 迁移改变既有数值 | A/B 哈希不一致、thermo 列漂移 | A2 先做零变化迁移；同构建 A/B；不碰 NEP | A2 |
 | R2 | 压力单位/符号/列映射错误 | 压缩为负压、GPa 差 160 倍、sxy/syx 互换 | B0 oracle；非对称应力列测试；单一换算边界 | B0/B2/B3 |
-| R3 | 变盒缓存/所有权失效 | P>1 变盒后原子丢失/重复、owner 报错 | B1 `refresh_box` + 缩放后 owner map 测试；M2a 不接入 | B1/B2 |
+| R3 | 变盒缓存/所有权失效 | P>1 变盒后原子丢失/重复、owner 报错 | B1 `refresh_box` + 缩放后 owner map 测试；局部域分解模式不接入 | B1/B2 |
 | R4 | NPT restart/unwrapped 语义错误 | split-run 不连续、unwrapped 与 box 不一致 | 缩放后 snapshot；restart 测试；B4/D3 文档或拒绝组合 | B1/B2/B4 |
 | R5 | 随机系综不可复现/各 rank 独立采样 | 同 seed 不同结果、跨 rank 温度异常 | root `mt19937`；seed env；只广播 factor；统计多种子 | A4/B3 |
-| R6 | M2a 的 NHC/BDP 与 M1 不一致 | M2a 温度漂移、ghost 计入 KE | owned-only KE 归约；A5 矩阵；不共用 M1 所有权假设 | A3/A4/A5 |
+| R6 | 局部域分解模式的 NHC/BDP 与全量复制模式不一致 | 局部域分解模式温度漂移、ghost 计入 KE | owned-only KE 归约；A5 矩阵；不共用 全量复制模式所有权假设 | A3/A4/A5 |
 | R7 | 势抽象污染 NEP | NEP golden 变化、kernel diff | C0 adapter 不改 NEP；A/B/C0 回归；代码审查 | C0–C3 |
 | R8 | EAM 文件格式/样条误解 | 能量/力不对、文件头读取失败 | 用 GPUMD 包装 fixture；逐字样条；静态/轨迹 golden | C1/C3 |
 | R9 | GPL/第三方合规 | 发布包缺 LICENSE/NOTICE、来源不明 | D2 审计 + 法务复核；保留 Origin/版权头 | D2/D5 |
@@ -1393,7 +1208,7 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 **G-A（恒温器）**
 
 - [x] A0–A6 完成；A7 不阻塞。
-- [x] NHC/BDP 在 M1 P1/P2/P4（含 fallback）与 M2a P2/P4 通过。
+- [x] NHC/BDP 在 全量复制模式 P1/P2/P4（含 fallback）与局部域分解模式 P2/P4 通过。
 - [x] NHC P1 GPUMD golden；BDP 多种子统计；同 seed 可复现。
 - [x] restart 不连续已文档化；兼容矩阵/用户文档更新。
 - [x] 现有 NVE/`nvt_ber` golden 全过。
@@ -1402,14 +1217,14 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 
 - [ ] B0 压力 oracle、B1 盒合同、B2/B3 NPT、B4 矩阵/文档完成。
 - [ ] `npt_ber` GPUMD P1 golden；`npt_scr` 统计验收。
-- [ ] P>1 M1 fallback、M2a 路由/防御性拒绝、restart、负 P、B>2000、错误矩阵通过。
+- [ ] P>1 全量复制模式回退路径、局部域分解模式路由/防御性拒绝、restart、负 P、B>2000、错误矩阵通过。
 - [ ] 盒/位置/restart/输出时点一致；unwrapped 限制已处理。
 - [ ] 现有全矩阵无回归。
 
 **G-C（势函数）**
 
 - [ ] C0/C1 不改 NEP 数值；C2 LJ、C3 EAM 静态/短轨迹 golden 通过。
-- [ ] P=1/P>1 M1、M2a 拒绝、`max_neighbor`/格式错误矩阵通过。
+- [ ] P=1/P>1 全量复制模式、局部域分解模式拒绝、`max_neighbor`/格式错误矩阵通过。
 - [ ] C4 若启用则独立验收，不阻塞 v1.0；C5 能力矩阵/文档完成。
 - [ ] NEP+LJ/EAM 的既定 P0 支持组合全部通过；缺项不得以“子集可发布”绕过。
 
@@ -1423,7 +1238,7 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 ### 12.3 v1.0 发布 DoD
 
 - [ ] 版本号、`--version`、CHANGELOG、README 的安装/许可/限制一致。
-- [ ] 兼容矩阵覆盖 NEP/LJ/EAM、NVE/nvt_ber/nvt_nhc/nvt_bdp/npt_ber/npt_scr、M1/M2a 范围。
+- [ ] 兼容矩阵覆盖 NEP/LJ/EAM、NVE/nvt_ber/nvt_nhc/nvt_bdp/npt_ber/npt_scr、全量复制模式/局部域分解模式范围。
 - [ ] 所有 P0 测试在候选包上实际执行；P1（Tersoff/Langevin）不伪装成 P0。
 - [ ] restart/输出/错误契约有测试与文档；没有“静默降级”。
 - [ ] 许可证/第三方声明/法务复核完成。
@@ -1435,7 +1250,7 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 - 未运行测试却写“全部通过”；把 skip 写成 pass；只跑单卡就宣称 MPI 支持。
 - 为了让新功能通过而更新 golden、放宽容差、改变 NEP 数学或温度自由度。
 - 用 Berendsen 的涨落证明 NHC/BDP/SCR 的正确性；用单 seed 证明随机采样。
-- 在 M2a 上静默降级 NPT/非 NEP；在 NPT 中静默缩放/不缩放 unwrapped 而不记录。
+- 在 局部域分解模式上静默降级 NPT/非 NEP；在 NPT 中静默缩放/不缩放 unwrapped 而不记录。
 - 在参考仓库内构建/写文件，或把参考源码链接进构建。
 
 ## 13. 上游证据附录（只读 GPUMD 锁定 commit）
@@ -1504,14 +1319,16 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 
 | 术语 | 含义 |
 | --- | --- |
-| M1 | replicated-full 数据面：位置/类型等全量复制，逻辑 slab 所有权；P=1 与 fallback 路径 |
-| M2a | local-domain 数据面：owned/dependency ghost、两跳 halo、p2p migration；仅 NEP |
+| 全量复制模式（replicated-full） | 位置/类型等全量复制，逻辑 slab 所有权；P=1 与 fallback 路径 |
+| 局部域分解模式（local-domain） | owned/dependency ghost、两跳 halo、p2p migration；仅 NEP |
+| 分阶段中间场交换方案（staged-field exchange） | 分阶段交换 Fp/partial 字段的后续方案 |
+| 单 rank 基线 | 单 MPI rank 的计算基线 |
 | owned / ghost | 当前 rank 拥有/仅用于依赖的原子；温度/KE 只计 owned，输出按所有权规则 |
 | NHC | Nosé–Hoover 链恒温器；确定性、严格正则（在遍历/参数合适前提下） |
 | BDP | Bussi–Donadio–Parrinello 随机速度重标定；严格正则、随机 |
 | SCR | Stochastic Cell Rescaling；BDP 温度 + 随机盒缩放的 NPT |
 | Berendsen | 一阶松弛恒温/控压；兼容 GPUMD，但涨落不是严格系综 |
-| NPT | 恒温恒压；v1 仅各向同性、正交全周期、M1 |
+| NPT | 恒温恒压；v1 仅各向同性、正交全周期、全量复制模式 |
 | Tdamp / tau_p | 输入单位是**步数**；NHC 质量使用 `dt_internal * Tdamp`，其他步尺度公式不额外乘 dt |
 | P / B | NPT 目标压力/体积模量，输入 GPa；内部换算为 eV/Å³ |
 | 内部压力 | `(virial+kinetic)/V`，自然单位 eV/Å³；输出才乘 160.2177 得 GPa |
@@ -1523,6 +1340,6 @@ python3 tests/long_nve/run_long_nve.py --candidate ./build/dmg-md --devices 0 --
 
 ---
 
-> 本计划的状态是 **IN PROGRESS**。维护者已于 2026-10-30 确认第 5 节 Gate 0 决策；A0、A1、A2 已完成，
-> 当前唯一下一步为 B0（压力 oracle）。每个 Gate 的证据入库并通过后，才进入下一阶段。计划本身不替代代码审查、法务复核或
+> 本计划的状态是 **IN PROGRESS**。维护者已于 2026-10-30 确认第 5 节 Gate 0 决策；A0–A6/G-A 与 B0–B4/G-B 已完成。
+> C/D 尚未启动，v1.0 尚未发布；后续按本计划逐 Step 授权推进。每个 Gate 的证据入库并通过后，才进入下一阶段。计划本身不替代代码审查、法务复核或
 > 真实的 GPU/MPI 验收。

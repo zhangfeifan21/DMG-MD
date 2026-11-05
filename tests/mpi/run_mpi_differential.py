@@ -148,9 +148,9 @@ def validate_runtime_record(
                 f"{stage_dir}: center proof {key}={fields.get(key)}, expected {value}"
             )
 
-    # The short differential suite passes the default M1 expectation for its
+    # The short differential suite passes the default replicated-full expectation for its
     # 24 A fixtures.  Long-NVE callers pass an explicit per-fixture expectation
-    # so an accidental fallback can never be mistaken for M2a coverage.
+    # so an accidental fallback can never be mistaken for local-domain coverage.
     domain = [
         line for line in stdout.splitlines() if line.startswith("DMGMD_DOMAIN ")
     ]
@@ -164,7 +164,7 @@ def validate_runtime_record(
         )
 
     global_count = int(fields["global_count"])
-    # M1 spatial ownership: one owned-count record per rank (the M0 contiguous
+    # replicated-full spatial ownership: one owned-count record per rank (the single-rank baseline contiguous
     # begin/end ranges no longer exist). The partition must cover every atom
     # exactly once, but individual ranks may own zero atoms.
     ownership = [

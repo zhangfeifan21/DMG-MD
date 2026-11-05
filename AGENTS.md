@@ -15,11 +15,11 @@ v1.0 的 P0 发布目标：
 
 - 普通经典 MD，单 bead；NEP4/5/NEP-ZBL、LJ、EAM/alloy；
 - `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp`、`npt_ber`、`npt_scr`；
-- M1 覆盖上述势与六种系综；NPT 限各向同性、正交全周期盒；M2a 限 NEP 的 NVE 与三种 NVT；
+- 全量复制模式覆盖上述势与六种系综；NPT 限各向同性、正交全周期盒；局部域分解模式限 NEP 的 NVE 与三种 NVT；
 - 版本/CLI、错误与 restart 合同、用户文档、许可证与第三方声明、性能回归、打包和发布验收。
 
 Tersoff 1989、Langevin/BAOAB、NPT 三个对角分量与可选 restart sidecar 属于 P1（v1.1 候选）。
-M2a NPT/非 NEP、NPH、MTTK、Parrinello–Rahman、三斜 NPT、多势混合、变盒命令与
+局部域分解模式 NPT/非 NEP、NPH、MTTK、Parrinello–Rahman、三斜 NPT、多势混合、变盒命令与
 minimize、PLUMED/长程静电等暂缓；PIMD、MC、phonon、deposition 和完整 measurement
 系统不在本轮 v1.0 范围。详细优先级与边界以开发流程 §1 为准。
 
@@ -27,47 +27,49 @@ minimize、PLUMED/长程静电等暂缓；PIMD、MC、phonon、deposition 和完
 
 ## v1.0 当前阶段与实施顺序
 
-截至 2026-11-03，Gate 0 默认决策已确认，A0–A6 已完成，G-A 在所列 NEP/单节点范围通过；
-下一步是 **B0：压力 oracle 与单位/布局验收**，B/C 阶段尚未启动，v1.0 尚未发布。
-后续按流程推进 B0/B1/G-B、C0–C3/C5 与 D 阶段；A7/C4 为独立 P1 可选项，不阻塞 P0。
+截至 2026-11-04，Gate 0 默认决策已确认，A0–A6 与 G-A 在所列 NEP/单节点范围通过；
+B0–B4 与 G-B 已通过。B3 原注册18个 formal looks 的总体 INCONCLUSIVE 结论保持不变；独立确认在新冻结的160条完整链上通过，B4 的测试维护与文档收口也已通过。C/D 尚未启动，v1.0 尚未发布。
+后续按流程推进 C0–C3/C5 与 D 阶段；A7/C4 为独立 P1 可选项，不阻塞 P0。
 执行开发任务时一次只推进获派的 Step，按任务卡完成依赖、停止条件、回归和证据记录；
 文档维护不自动授权启动后续开发 Step。
 
 当前已实现能力与边界：
 
-- 势仍为 NEP4/5 与 NEP-ZBL；系综为 `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp`。
-  NHC/BDP 已覆盖 M1 P1/P2/P4、M2a P2/P4 与所列双后端验收；NPT、LJ、EAM 尚未实现。
-- M1/M2a 共用 `EnsembleController`；NHC 链与 BDP RNG 只由 rank 0 持有，速度缩放只作用于 owned。
+- 势仍为 NEP4/5 与 NEP-ZBL；已验收系综为 `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp` 和 全量复制模式的 `npt_ber`。`npt_scr` 的 G-B 已通过，但统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点 全量复制模式各向同性正交全周期盒：base 为 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅为 P1/HostStaged。NEP5/ZBL 仅有另行记录的短程合同证据，不能外推到 NPT 统计支持；LJ/EAM 尚未实现。
+- 全量复制模式/局部域分解模式共用 `EnsembleController`；NHC 链与 BDP RNG 只由 rank 0 持有，速度缩放只作用于 owned。
   三种 NVT 沿用 `3N` 温度自由度和步数型 Tdamp；NHC 质量使用 `dt_internal * Tdamp`。
 - NHC/BDP 要求固定正步长，拒绝 `correct_velocity`、自适应步长及非默认实验分区/重叠选项。
   BDP 默认 seed 为 `12345678`，`DMGMD_ENSEMBLE_SEED` 的设置状态和原始字符串须在各 rank 一致。
 - 每段 `run` 重建链/RNG/cache；`restart.xyz` 不保存这些隐藏状态，跨 rank 恢复是新作业，
   不承诺 NHC/BDP 轨迹连续。详细合同见[系综标准](docs/standards/ensembles.md)与
   [兼容矩阵](docs/standards/compatibility-matrix.md)。
+- NPT 仅限各向同性、正交全周期盒与全量复制模式；P>1 强制 全量复制模式，局部域分解模式不提供 NPT。`npt_scr` 的最终统计支持只覆盖上述冻结 NEP-C 单节点矩阵，不代表跨节点、RDMA、普遍严格 NPT 或遍历性。
+  结论与证据见[最终确认](docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)、[机器索引](docs/status/validation/npt-scr-n3-confirmation-index.json)、[控压器标准](docs/standards/barostat.md)与
+  [NPT 矩阵报告](docs/status/validation/npt-validation.md#npt-matrix-20261104)。原18-look INCONCLUSIVE 结论不变。
 - 统计结论限于验收体系；额外 harmonic 诊断总 K 通过、轴向均值 INCONCLUSIVE，
   不作普遍遍历性承诺。性能门仍为 PENDING-D4，跨节点与 release 长程未完成。
 
-## 当前并行基线：M1/M2a
+## 当前并行基线：全量复制模式/局部域分解模式
 
-当前已实施的代码基线是 M2a：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
+当前已实施的代码基线采用局部域分解模式：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
 调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
 eligibility 后在两条数据面之间分派：
 
-- **M1 replicated-full**（P=1 恒定，及不满足 M2a 判据的 P>1 输入）：每 rank 持有
+- **全量复制模式（replicated-full）**（P=1 恒定，及不满足局部域分解模式判据的 P>1 输入）：每 rank 持有
   全部 N 个槽位，积分/thermo/输出权威按空间 slab 所有权（global_id 逻辑归属 +
-  indexed collectives）迁移；P=1 与 M0 逐字节一致；小盒（如 24 Å fixture）因
+  indexed collectives）迁移；P=1 与单 MPI rank 基线逐字节一致；小盒（如 24 Å fixture）因
   `slab_width < d_coord` 自动走此路径，行为不变；
-- **M2a local-domain**（P>1、正交全周期、NEP large-box 判据、
+- **局部域分解模式（local-domain）**（P>1、正交全周期、NEP large-box 判据、
   `slab_width >= d_coord`）：rank-local owned/ghost 布局（owned | dependency
   ghosts | coordinate-only ghosts，local_count 唯一 stride）、保守两跳位置 halo
   （`d_dep = max R_force + skin`、`d_coord = max(R_force+R_dep) + 2*skin`，按
   kernel 实际消费路径枚举，无法证明上界 fail closed）、p2p halo/迁移
   （HostStaged/CudaAware 双后端、独立方向 tag、CudaAware 需通过 device-buffer
   p2p 自检）、NEP 力中心 `[0, owned)` / 依赖中心 `[0, owned+dep)` / 候选
-  `[0, local_count)` 分片（global-ID 行排序，legacy P1/M1 路径不变）；
+  `[0, local_count)` 分片（global-ID 行排序，legacy P1/全量复制模式路径不变）；
 - rank 0 输出 `DMGMD_DOMAIN mode=m2a|m1-fallback ...` 机器可读记录；triclinic/
-  非周期在 P>1 下保持 M1 的 unsupported 错误。P1/M1 保留单次 wrap 调整；
-  M2a 在 halo/force 前拒绝不受支持的 multi-box 单步位移，不靠 MIC 消去位移；
+  非周期在 P>1 下保持 全量复制模式的 unsupported 错误。P1/全量复制模式保留单次 wrap 调整；
+  局部域分解模式在 halo/force 前拒绝不受支持的 multi-box 单步位移，不靠 MIC 消去位移；
 - 所有用户可见文件只由 rank 0 写；不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
 - 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
 
@@ -81,10 +83,10 @@ eligibility 后在两条数据面之间分派：
 - `docs/status/current.md`：当前状态；`status/validation/` 和 `status/performance/` 按测试目标维护稳定主题报告，每次执行追加带日期的结果节；
 - `docs/plans/`：剩余方案、风险和待办。
 
-M2a 已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
+局部域分解模式已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
 nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026-09-26 单节点
-多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。M2b（Fp/partial 分阶段交换）、3D 分解、
-triclinic/非周期 local-domain 仍待后续审批。
+多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。分阶段中间场交换方案（Fp/partial 分阶段交换）、3D 分解、
+triclinic/非周期局部域分解模式仍待后续审批。
 
 ## 独立性能主线：O1–O9 + O11 限定复验；O10 暂缓
 
@@ -125,7 +127,7 @@ water/P4 有探索支持，carbon_1m/高重建/空 early 限制外推。见
 `docs/status/performance/nep-candidate-validation.md#o9-results-20261029-report`。结论为 CONFIRMED_SCOPED_CANDIDATE，
 后续 O11 于 2026-10-30 完成限定范围复验：800 个正式 trial（一次预定追加）、
 80 个短程科学对照、48 个 CPU 诊断及 31,293 项封存文件离线复算通过。
-仅建议 carbon_200k/P2 两后端手动 B-wait，相对 HostStaged/full 为 1.0210×/1.0199×；
+基于公共共享服务器历史测量，当时仅建议 carbon_200k/P2 两后端手动 B-wait，相对 HostStaged/full 为 1.0210×/1.0199×；这是历史探索，不作为专用性能服务器参考。后续性能参考与采用判断以专用服务器 benchmark 为准；
 water/P8/HostStaged 区间仍跨 1，本轮不建议采用；water/P8/CudaAware 也未胜默认路径。
 water/P4 仍为探索支持，未覆盖的完整矩阵不作外推。见
 `docs/status/performance/nep-candidate-validation.md#o11-results-20261030-report`。O10 为条件性 PROPOSED、暂缓；
@@ -141,7 +143,7 @@ O1 时间线、O2 默认关闭的串行分区、O3 halo 生命周期已实施并
 finish，再计算 NEP；O4 已接入默认关闭的普通步实际 overlap，已验收、仍默认关闭；
 O5 本机正式矩阵、四阶段归因和独立采用验证于 2026-10-21 完成；仍默认 off，
 限定收益与默认后端比较的范围见 docs/status/current.md，
-M2b 不是当前下一实施切口。
+分阶段中间场交换方案不是当前下一实施切口。
 
 ## GPUMD 复现边界（强制）
 
@@ -175,9 +177,9 @@ LAMMPS 锁定 `stable_22Jul2025_update4`（commit
 `611ca3b7f8525ba802373b04f9e3d632d515f7e3`），MatPL 锁定 commit
 `21fabf34eadc57a717f4c7fbce9bb80aad5fd991`。2026-10-09 从原位安装迁出的
 MatPL 补丁源码、CMake 修改和逐文件 SHA-256 保存在
-`third_party/lammps-matpl-overlay/`；当时的构建产物保存在忽略版本控制的
-`build-lammps-nep-kk-preserved/`。后者的 CMake cache 包含旧绝对路径，只用于保留
-已验证的可执行文件，不能直接当作可迁移的重建目录。
+`third_party/lammps-matpl-overlay/`；当前仅在忽略版本控制的
+`build-lammps-nep-kk-preserved/lmp` 保留已验证的可执行文件，CMake cache 和对象文件已清理；
+该目录不是可迁移的重建目录。第三方 overlay 仍保留。
 
 如需修改或重建 LAMMPS，先从只读 `../lammps-reference` 在 `newmd` 内生成独立工作源码
 （例如 `build-lammps-matpl-src/`），再应用上述 overlay 或新的本地补丁；构建目录也必须在
@@ -192,7 +194,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 - 不重新实现 NEP 数学公式。NEP 数学子集由 `src/gpumd_compat/` 的复现内核提供
   （复制自 GPUMD 锁定 commit），在其上只做小范围参数化；重写公式前必须先建立
   golden test 并获得维护者确认。
-- 一 MPI rank 只控制一张 GPU。M1 每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；已实现的 M2a 使用 rank-local owned/ghost 布局和明确通信工作区。
+- 一 MPI rank 只控制一张 GPU。全量复制模式每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；已实现的局部域分解模式使用 rank-local owned/ghost 布局和明确通信工作区。
 - owned atoms 与 ghost atoms 必须有不同的生命周期和写权限；ghost 不得被积分、重复计入 thermo 或直接输出。
 - 必须有跨迁移保持稳定的全局原子 ID；本地数组下标不能承担持久身份。
 - 不假设 NEP halo 等于某一个 cutoff。位置、descriptor/导数、directed partial force 和最终 force 的每一层依赖都必须有 kernel 证据。
@@ -219,7 +221,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 ## 语言与工具链
 
 - C++17、CUDA、CMake；
-- Open MPI+UCX 是 M1/M2a runtime 的固定依赖；允许使用 Open MPI 的 `mpi-ext.h`/
+- Open MPI+UCX 是全量复制模式/局部域分解模式 runtime 的固定依赖；允许使用 Open MPI 的 `mpi-ext.h`/
   `MPIX_*`，不再维护 MPICH、MVAPICH 或其他 MPI 实现兼容性；
 - Python 只用于测试、验证和分析脚本，核心 runtime 不依赖 Python；
 - GPU 常驻数据只在初始化、通信、输出或验证需要时传回主机。
@@ -295,8 +297,15 @@ GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，
 - `docs/status/` 只记录实际状态或验证结果。通过声明必须包含执行日期、代码 revision、环境、
   精确命令和结果；“测试已定义”不得写成“当前已通过”。同一测试目标的重复执行应追加到稳定主题文件的
   独立日期节，保留每次执行的实际日期与时间；仅在测试目标不同或证据结构确实独立时新建报告。
-  汇总和索引须链接到对应日期节，不能把不同执行合并成一个无日期结论。产物目录、日志、命令及原始
-  证据中实际使用的日期路径属于证据身份，文档整合时不得改写。
+  汇总和索引须链接到对应日期节，不能把不同执行合并成一个无日期结论。记录应说明原始证据保留范围；
+  用户明确授权的结果保留型清理属于例外。2026-11-05 公共共享服务器历史 overlap 原始目录已清理，
+  对应报告只保留历史结果、方法摘要和限制；旧路径/命令仅作历史记录，不得称原始文件仍在或可离线复算。
+  NPT/G-B 迁移归档按用户 2026-11-05 授权仅保留最终 paired-analysis、注册文件和原18-look索引；
+  文档保留迁移验证、160链执行、一次分析、最终审计与 CPU 测试的结论摘要，不保留逐作业日志、locator、
+  源/输入快照或中间审计收据。不得将这些过程记录描述为额外科学结果或声称仍可从已删除快照完整复现。
+  后续性能参考与采用判断以专用服务器 benchmark 为准，生产默认不因历史结果改变。
+  英文报告文件名使用稳定主题 slug，不含执行日期；重复执行与历史版本写入同一报告的日期节并使用稳定锚点区分。Git 历史保留旧快照，不在工作树另建 archive 副本。当前状态入口、标准和计划须随事实同步。机器索引与数据文件遵循各自合同，不受报告文件名规则限制。
+  运行模式的正文、标题和注释使用全量复制模式、局部域分解模式、分阶段中间场交换方案；真实机器字段、代码符号及按 SHA 冻结的历史注册证据保留原文，术语解释见 MPI 标准。
 - `docs/plans/` 必须标明 `PROPOSED`、`APPROVED` 或 `IN PROGRESS`，不得被 README 或标准描述为
   已实现。计划完成后，将最终合同迁入 standards、实测结果写入 status，并删除已完成的重复步骤。
 - 新文档必须从 `docs/README.md` 按主题归类和链接。文档移动或报告整合后，使用 `rg` 检查全部旧路径引用、

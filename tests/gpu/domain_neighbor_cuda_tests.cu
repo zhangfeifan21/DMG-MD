@@ -1,4 +1,4 @@
-// CUDA regression for the M2a Neighbor center-range API.  In particular,
+// CUDA regression for the local-domain Neighbor center-range API.  In particular,
 // center_begin is deliberately non-zero so ELL row selection must use
 // slot * stride + center rather than stride * center_begin.
 #include "gpumd_compat/box.cuh"

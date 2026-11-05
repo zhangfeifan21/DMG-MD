@@ -1,6 +1,6 @@
 # 架构决策
 
-类别：现行标准。核对日期：2026-10-16。
+类别：现行标准。核对日期：2026-11-05。
 
 ## D-001：仓库内复现数值核心
 
@@ -16,8 +16,8 @@ GPU_Vector、Neighbor、Potential、NEP loader/kernels 在 `src/gpumd_compat/` �
 ## D-002：身份、计数和权限分离
 
 稳定 global_id 源自输入行号；global_count 只作元数据，local_count 是 SoA/ELL stride，
-capacity 仅为物理存储。M1 reader owned_count=N，不代表 MPI 权威 owner；后者由 slab
-槽位集合决定。M2a 以 local owned 前缀与 ghost 后缀表示权限，manager 可在 epoch 内暂时
+capacity 仅为物理存储。全量复制reader owned_count=N，不代表 MPI 权威 owner；后者由 slab
+槽位集合决定。局部域分解以 local owned 前缀与 ghost 后缀表示权限，manager 可在 epoch 内暂时
 不同于 geometric owner。详见[布局](data-layout.md)与[缓存](cache-validity.md)。
 
 ## D-003：先解析再执行
@@ -26,11 +26,12 @@ capacity 仅为物理存储。M1 reader owned_count=N，不代表 MPI 权威 own
 run/model/potential fingerprint 检查一致；当前不是 root-only parse/broadcast。
 未支持或未知命令在科学输出前报错，不增加 MPI 专用 run.in token。
 
-## D-004 / D-009：M1 保留完整 NEP scratch
+<a id="d-004--d-009-m1-保留完整-nep-scratch"></a>
+## D-004 / D-009：全量复制模式保留完整 NEP scratch
 
-M1 入口要求完整无 ghost 输入，每 rank 对全部 N 中心计算 ordinary NEP，只承认 owned
+全量复制入口要求完整无 ghost 输入，每 rank 对全部 N 中心计算 ordinary NEP，只承认 owned
 积分/thermo/输出。仅设置 NEP N1/N2 为 owned 会缺邻居 Fp/反向 partial，不能据覆盖证明
-推导其数值完整。M2a 用深位置 halo 重算依赖中心，独立提供 ghost-aware domain 入口。
+推导其数值完整。局部域分解用深位置 halo 重算依赖中心，独立提供 ghost-aware domain 入口。
 
 ## D-005：唯一物理贡献和兼容 I/O
 
@@ -40,8 +41,7 @@ restart 只承诺保存字段及跨 rank 重建，不承诺未序列化 time/RNG
 
 ## D-006：显式支持白名单
 
-只支持普通 NEP4/5、NEP-ZBL、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp` 和支持矩阵列出的
-输入/输出命令；新 NVT 的组合限制与状态语义见[系综标准](ensembles.md)。未知与已知
+当前验收支持普通 NEP4/5、NEP-ZBL、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`、各向同性正交全周期盒下的 `npt_ber`，以及有限统计范围内通过 G-B 的 `npt_scr`。NPT 仅走全量复制路径；SCR 统计限于 216 原子 NEP-C、300 K/0 GPa、单节点冻结矩阵，不外推到非 NEP、跨节点或普遍严格采样。其余白名单与输入/输出命令见[兼容矩阵](compatibility-matrix.md)；系综组合限制与状态语义见[系综标准](ensembles.md)及[NPT 验收矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)。未知与已知
 未支持项均明确 unsupported；多 potential 与 potential 方向参数拒绝，不能静默忽略。
 
 ## D-007：单一数据与几何模型
@@ -56,16 +56,17 @@ Atom/Box/neighbor。新增分布式编排围绕现有 compat kernel 做有证据
 collective 和 p2p 数值自检才启用，数值自检不符回退。每 rank 一 GPU，以 UUID 去重；
 不能把 NEP_MULTIGPU 的单进程多设备编排当 MPI 层。
 
-## D-010：M1/M2a 模式分派
+<a id="d-010-m1m2a-模式分派"></a>
+<a id="d-010-m1-m2a-模式分派"></a>
+## D-010：全量复制与局部域分解分派
 
-potential 参数仅加载一次、workspace 延迟分配。P1 恒 M1；P>1 满足正交全周期、large-box
-和 slab_width≥d_coord 时 M2a，否则在现有支持范围内回退 M1。P>1 triclinic/非周期仍拒绝。
-M2a 采用保守两跳位置 halo，dependency 域重算 Fp/partial，最终 force 只写 owned；
+potential 参数仅加载一次、workspace 延迟分配。P1 恒走全量复制路径；P>1 的 NPT 输入优先强制走全量复制路径，不受几何 eligibility 影响。其他输入只有满足正交全周期、large-box 和 slab_width≥d_coord 条件才走局部域分解路径，否则在现有支持范围内回退到全量复制路径。P>1 triclinic/非周期仍拒绝。
+局部域分解采用保守两跳位置 halo，dependency 域重算 Fp/partial，最终 force 只写 owned；
 邻居行和反边按 gid，logical local_count 独立传入，空 rank 不访问 padding。
 
 两跳深度由实际 typewise 消费路径证明，不能用一个 nominal cutoff 猜测。初始 wrap 用共享
 device kernel，unwrapped 从 raw 输入播种；默认保留 kernel 算术和每中心顺序。
-实际协议见[MPI runtime](mpi-runtime.md)，M2b 等剩余工作见[扩展计划](../plans/domain-decomposition.md)。
+实际协议见[MPI runtime](mpi-runtime.md)，分阶段中间场交换方案的剩余工作见[扩展计划](../plans/domain-decomposition.md)。
 
 ## D-011：通信按明确口径记账
 

@@ -200,7 +200,7 @@ class PinnedBuffer {
   bool leased_ = false;
 };
 
-// M1 indexed pack: item = atom-major AoS position of one owned slot's
+// replicated-full indexed pack: item = atom-major AoS position of one owned slot's
 // component. The owned index list is sorted by global_id and identical in
 // plan order on every rank, so the gathered stream is deterministic.
 __global__ void pack_indexed_soa(
@@ -219,7 +219,7 @@ __global__ void pack_indexed_soa(
   packed[item] = soa[component * stride + owned_indices[atom]];
 }
 
-// M1 indexed unpack: item = atom-major AoS position of one gathered atom's
+// replicated-full indexed unpack: item = atom-major AoS position of one gathered atom's
 // component; scatter_slots[item's atom] restores the replicated slot so the
 // SoA is rebuilt in slot order rather than rank concatenation order.
 __global__ void unpack_indexed_soa(
@@ -238,7 +238,7 @@ __global__ void unpack_indexed_soa(
   soa[component * stride + scatter_slots[atom]] = packed[item];
 }
 
-// M2a prefix pack: the owned prefix [0, owned_count) of a local SoA into an
+// local-domain prefix pack: the owned prefix [0, owned_count) of a local SoA into an
 // atom-major AoS stream (identity version of pack_indexed_soa; the owned
 // section of the local layout is contiguous and global_id ordered).
 __global__ void pack_prefix_soa(
@@ -256,7 +256,7 @@ __global__ void pack_prefix_soa(
   packed[item] = soa[component * stride + atom];
 }
 
-// M2a prefix unpack: an atom-major AoS stream onto the owned prefix of a
+// local-domain prefix unpack: an atom-major AoS stream onto the owned prefix of a
 // local SoA (used by the correct_velocity scatter).
 __global__ void unpack_prefix_soa(
     int owned_count,
@@ -273,7 +273,7 @@ __global__ void unpack_prefix_soa(
   soa[component * stride + atom] = packed[item];
 }
 
-// M2a point-to-point tags. Directions are independent so P=2's identical
+// local-domain point-to-point tags. Directions are independent so P=2's identical
 // left/right peer can never mismatch messages. Startup self-test finishes
 // before any production exchange uses the same direction tags.
 constexpr int kTagSendLeft = 1101;
@@ -575,7 +575,7 @@ class MpiRuntime::Impl {
                             cudaMemcpyDeviceToHost) == cudaSuccess;
     local_pass = local_pass && broadcast_result == 1.0;
 
-    // M2a gate: a real device-buffer point-to-point Send/Recv pair with the
+    // local-domain gate: a real device-buffer point-to-point Send/Recv pair with the
     // production tag scheme (independent left/right tags, which also covers
     // P=2's identical peer and P=1's self-message). Each rank sends its rank
     // index to the left peer and rank+1000 to the right peer, then verifies
@@ -881,7 +881,7 @@ class MpiRuntime::Impl {
   DeviceBuffer<double> device_receive;
   PinnedBuffer<double> host_send;
   PinnedBuffer<double> host_receive;
-  // Dedicated M2a staging so a halo exchange interleaved with the collectives
+  // Dedicated local-domain staging so a halo exchange interleaved with the collectives
   // can never clobber the collective buffers.
   DeviceBuffer<double> device_p2p_send;
   DeviceBuffer<double> device_p2p_receive;

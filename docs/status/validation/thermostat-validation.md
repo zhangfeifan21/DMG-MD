@@ -24,7 +24,7 @@
 ### 结论
 
 **A3 DONE，限本报告已验收的 NEP 产品路径。** 四节 NHC 链、owned 动能归约和 root
-因子协议已接入 M1/M2a。P1 GPUMD 200-step 对照、同二进制重复、全部 11 个 NEP KE
+因子协议已接入 全量复制与局部域分解。P1 GPUMD 200-step 对照、同二进制重复、全部 11 个 NEP KE
 统计组及实际 NEP 速度分量检查通过。G-A 的整体结论见
 [A5 矩阵](thermostat-validation.md#thermostat-matrix-20261102)。额外无相互作用谐振子的轴向均值仍为
 **INCONCLUSIVE**，详见下文；不宣称普遍遍历性。
@@ -44,7 +44,7 @@ A3 开工时 21 tracked dirty、7 untracked，253 文件的初始哈希与副本
   `tau=dt_internal*Tdamp`，`Q_i=kB*T1*tau²`、`Q0*=3N`，ramp 质量固定于 T1。
   非 root 不分配隐藏状态，NVE/Berendsen 保持无链/RNG 分配。
 - `src/runtime.cu`、`src/domain_runtime.cu` 在 VV1 **之前**调用现有 thermo kernel 的
-  quantity-0 block；M1 仅 owned 索引、M2a 仅 owned prefix，归约一个 double。
+  quantity-0 block；全量复制仅 owned 索引、局部域分解仅 owned prefix，归约一个 double。
   root 前半步 → 广播 → owned 缩放；VV2/thermo 后 root 后半步 → 广播 → owned 缩放。
   两处旧速度缩放 kernel 保持原样；未修改 NEP 数学、布局、所有权或通信半径。
 - `src/runtime_internal.hpp` 捕获 root 更新错误，先广播状态，再分发错误并统一退出。
@@ -94,7 +94,7 @@ virial 最大绝对差为 0；velocity 最大 `1.734723475976807e-18 Å/fs`；XY
 `a5-nhc-final-short/results.json` 的两个 `*-gpumd` 比较中，未改容差。
 
 每步相对 Berendsen 的账本增量为 calls +3、MPI input `32+8P`、output `40P` B；
-HostStaged staging D2H/H2D 各 +8P B，CudaAware staging +0。M2a p2p 字段无额外变化。
+HostStaged staging D2H/H2D 各 +8P B，CudaAware staging +0。局部域分解p2p 字段无额外变化。
 额外 host 标量读取不计作 MPI staging，计数含义见[MPI 合同](../../standards/mpi-runtime.md)。
 
 <a id="nhc-20261102--预注册-nep-统计"></a>
@@ -146,7 +146,7 @@ variance=`2(kBT)²/N`。20k 轮 x variance CI 偏宽，按原预算延长后全�
 ### 额外可解谐振子诊断与限制
 
 这部分为独立 CPU harmonic sampler，对 24 个无约束、无相互作用模式检查可解正则矩，
-不是生产 NEP 势组合或 M1/M2a 矩阵项。pilot 为 8 seed × 200k，确认轮在新 manifest
+不是生产 NEP 势组合或全量复制模式/局部域分解矩阵项。pilot 为 8 seed × 200k，确认轮在新 manifest
 `harmonic-confirmation.json` 中固定为同 8 seed × 2M、burn 200k、99% CI，不替换 seed。
 确认 manifest SHA `013561edaca8d52b0c9bca8e994ea70c8752e5a9dec194e1ab3a3a88b943e590`。
 | campaign | K mean / CI (eV)，target=0.31022435 | K variance ratio / CI | 轴向 mean |
@@ -267,7 +267,7 @@ NVE/Berendsen 的无状态分支、公式和通信不变；精确回归见 A5。
 | NEP4 短矩阵 | 11 配置，P1/P2/P4、fallback/domain、两后端；各两次 byte-identical，跨 rank 原 golden 容差通过；`a4-mpi-short-negative/` 的 short 记录 |
 | seed 合同 | 19 检查，18 个普通作业加 4 个 rank-wrapper 作业，全部通过；`a4-seed-contract/bdp-contract-results.json` |
 | 失败关闭 | 18 个基本负例，加 A5 trace 3 个；120 s 内 launcher 返回、非零退出、无最终快照；`a4-negative-fixed-fixture/`、`a5-trace-guard/` |
-| 广播/账本 | 12 组合、24 stage、每 rank 每步仅一次相同因子位模式；calls+1、input+16 B、output+16P B；staging 和 M2a p2p 不增；`a4-protocol/protocol-results.json` |
+| 广播/账本 | 12 组合、24 stage、每 rank 每步仅一次相同因子位模式；calls+1、input+16 B、output+16P B；staging 和 局部域分解p2p 不增；`a4-protocol/protocol-results.json` |
 | 多段/restart | 两段各 3 step 与新作业通过；A5 再完成各 variant/backend/rank 的新作业 smoke 与 P1→P4，均不作连续轨迹比较 |
 
 seed 合同验证 unset 与显式默认值的 thermo/trajectory/restart 哈希一致；seed1/2 首个
@@ -413,14 +413,14 @@ affinity在 `affinity-adjustments.jsonl`；没有性能 trial/采用结论，D4�
 <a id="thermostat-matrix-20261102--输入与路由"></a>
 ### 输入与路由
 
-NEP4：2016-C（24.99×21.42×21.42 Å）用于自然 M1 fallback；5184-C
-（64.26×21.42×21.42 Å）用于 M2a。`d_dep=8`、`d_coord=16`，P2/P4 大盒 slab 分别
-32.13/16.065 Å，小盒不满足 M2a。每条日志必须有 `DMGMD_DOMAIN mode`、实际 backend、
+NEP4：2016-C（24.99×21.42×21.42 Å）用于自然 全量复制回退路径；5184-C
+（64.26×21.42×21.42 Å）用于局部域分解路径。`d_dep=8`、`d_coord=16`，P2/P4 大盒 slab 分别
+32.13/16.065 Å，小盒不满足局部域分解资格条件。每条日志必须有 `DMGMD_DOMAIN mode`、实际 backend、
 GPU绑定和 layout 证明，没有强制路由测试开关。
 
 NEP5 使用 long-NVE 锁定的 NEP4→5 等价转换（势 SHA
 `685fcc` 前缀，完整值在 `a5-variants/results.json`），小盒复用既有 carbon_crystal，
-大盒复用锁定5184-C输入。BaTiO3-ZBL复用现有5000原子fixture，P2为M2a、P4为fallback，
+大盒复用锁定5184-C输入。BaTiO3-ZBL复用现有5000原子fixture，P2使用局部域分解模式，P4回退到全量复制路径，
 据实际判据记录；并非所有P>1均算域分解。NEP5/ZBL补充矩阵的P1采用HostStaged，
 P2/P4覆盖双后端；本轮没有将其扩写为所有变体/参数的完整 C5 联合门。
 输入/势SHA由 thermostat、baseline、long-NVE manifest锁定，既有golden与容差不变。
@@ -494,7 +494,7 @@ NHC两组NEP4 P1和一组NEP5 P1另与独立GPUMD短轨迹比较；BDP随机轨�
 ### 统计、错误和 restart 门
 | 类别 | 结果 | 证据 |
 | --- | --- | --- |
-| NHC KE | 11组最终PASS：P1、M1 P2/P4、M2a P2/P4双后端+half-dt；3初始条件；预定20k/40k/80k | A3统计表及 `a3-statistics-conservative-final.json`、两个continuation目录 |
+| NHC KE | 11组最终PASS：P1、全量复制P2/P4、局部域分解P2/P4双后端+half-dt；3初始条件；预定20k/40k/80k | A3统计表及 `a3-statistics-conservative-final.json`、两个continuation目录 |
 | BDP KE | 12组最终PASS：同矩阵+half-dt+GPUMD；每组8seed，最少20k | A4统计表、`a4-statistics/results.json` |
 | velocity moments | NHC/BDP均8seed×40k，x/y/z mean与variance CI全部PASS | `a3-velocity-continuation/`、`a4-velocity/` |
 | 基本负例 | 各18：CV/adaptive/partition/overlap/schedule/zeroKE ×P1/2/4；全rank有界退出、无最终快照 | `a3-negative/`、`a4-negative-fixed-fixture/` |
@@ -519,7 +519,7 @@ double位模式；NHC每步2次、BDP1次，状态均成功且因子一致。
 | BDP | +1 | +16 | +16P | 0 |
 
 CudaAware对应额外device collective staging为0；新host scalar读取不算MPI staging，
-详见[MPI合同](../../standards/mpi-runtime.md)。M2a逐rank p2p、halo/migration/control无
+详见[MPI合同](../../standards/mpi-runtime.md)。局部域分解逐 rank p2p、halo/migration/control无
 额外差异。seed一致性是启动控制通信；成功步不广播RNG/链状态。
 这套探针独立观察Bcast，账本仍是生产API buffer字节，不冒充物理网络流量或独立全量PMPI。
 
@@ -527,13 +527,13 @@ CudaAware对应额外device collective staging为0；新host scalar读取不算M
 | 回归 | 实际结果 |
 | --- | --- |
 | 单卡committed golden | 四case全PASS；相对A2的20个科学文件SHA全同 |
-| M1 differential | P1/P2/P4、HostStaged/CudaAware全PASS；NVE max excursion=1.746927e-6 eV/atom，slope=3.238564e-6 eV/(atom fs) |
-| M2a selected regression | lattice/crossings/partition_nvt ×P2/P4×两后端12主配置，加runner固定P1/错误/缓存/计时检查；全PASS |
+| 全量复制differential | P1/P2/P4、HostStaged/CudaAware全PASS；NVE max excursion=1.746927e-6 eV/atom，slope=3.238564e-6 eV/(atom fs) |
+| 局部域分解selected regression | lattice/crossings/partition_nvt ×P2/P4×两后端12主配置，加runner固定P1/错误/缓存/计时检查；全PASS |
 | A2/最终精确A/B | 50stage、181科学文件、231全局逐步、160rank逐步、30段摘要全同；同输入/同rank，无排除项 |
 | long-NVE smoke | 七配置、70stage，实际sections=short,long,replay,restart,nvt；兼容势按manifest仅static/short，三主物理势执行适用全部section；不是nightly/release通过声明 |
 
 精确比较结果为 `legacy-golden-a2-final-bitwise.json`、`legacy-mpi-a2-final-bitwise.json`；
-M1 work=`/tmp/dmgmd-mpi-differential-ucse0cw2`，golden work=`/tmp/dmgmd-gpumd-baseline-c9pbm__j`，
+replicated-full work=`/tmp/dmgmd-mpi-differential-ucse0cw2`，golden work=`/tmp/dmgmd-gpumd-baseline-c9pbm__j`，
 domain work=`a5-legacy-domain-final/`，long-NVE work=`/tmp/dmgmd-long-nve-smoke-3eznhowi`。
 两个新增host compat模块已与独立上游提取oracle重算一致；未触碰既有NEP kernel。
 
@@ -606,7 +606,7 @@ revision `f06284408f12b6d89ed5a19434c44c958307af7b`、main dirty；未提交、�
 | 文件 | 固定的现行语义 |
 | --- | --- |
 | [ensembles.md](../../standards/ensembles.md) | 四种系综语法；T1/T2 K、Tdamp步数；先算fraction再乘温差；3N；NHC质量固定于T1；BDP seed/cache/root；输出时点、分段和restart |
-| [compatibility-matrix.md](../../standards/compatibility-matrix.md) | NHC/BDP移入支持白名单；正固定步长、CV/自适应/实验选项限制；M2a不支持NPT/非NEP；restart明确非连续 |
+| [compatibility-matrix.md](../../standards/compatibility-matrix.md) | NHC/BDP移入支持白名单；正固定步长、CV/自适应/实验选项限制；局部域分解不支持 NPT 或非 NEP 势；restart明确非连续 |
 | [mpi-runtime.md](../../standards/mpi-runtime.md) | NHC前置owned KE及两次root因子广播、BDP一次广播；成功步载荷/启动seed/错误路径分别说明 |
 | [thermo-demand.md](../../standards/thermo-demand.md) | 非NVE每步反馈；NHC额外前置KE不属于可跳过的8-double post-force thermo |
 | [architecture-decisions.md](../../standards/architecture-decisions.md) | 同步显式系综白名单，保留原用户修改和其他架构合同 |
@@ -791,7 +791,7 @@ NHC 确认轮的轴向均值除以 kBT（括号为原 99% CI），允许带为 `
 
 - LAMMPS 的 `run 1; install fix print; run N-1` 只解决初始输出时刻；两种 thermostat 均与单段 1000-step 连续运行的全部观测量逐值相同，见 `lammps/split-validation/results.json`。
 
-- focused CTest：EnsembleController、NHC/SVR fixture、统计器 4/4 PASS；host MPI/CUDA 环境门 PASS。没有以这次测试工具变更声称重新完成完整 M1/M2a 发布矩阵。
+- focused CTest：EnsembleController、NHC/SVR fixture、统计器 4/4 PASS；host MPI/CUDA 环境门 PASS。没有以这次测试工具变更声称重新完成完整全量复制模式/局部域分解发布矩阵。
 
 - GPUMD 原先的 source driver 曾有链初始化/Tdamp 设置错误及 NHC 温度往返顺序遗漏；这些测试 driver 已修正，旧 pilot/v1–v7 和原 CSV 保留，不进入有效结果。有效轮为 `gpumd/pilot-v8/run.json`、`gpumd/confirmation-v2/run.json`。实际顶层命令/exit 1 来自原工具事件并保存在 `gpumd/effective-top-level-commands.json`；旧工具 f6d993d 的精确源码已按哈希保存。真实 GPUMD 往返顺序下，NHC seed102 短程首差约 8.33e-17（3 ULP），不能把 200-step 相近误说为长轨迹逐位一致。BDP 八组短程逐位一致。
 

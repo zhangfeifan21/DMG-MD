@@ -16,7 +16,7 @@ enum class CommunicationBackend {
   cuda_aware,
 };
 
-// Payload class for the M2a point-to-point and count exchanges. The three
+// Payload class for the local-domain point-to-point and count exchanges. The three
 // classes are recorded separately in every DMGMD_COMM / DMGMD_DOMAIN_COMM
 // line: halo payload (position refresh + membership records), migration
 // payload (Alltoallv atom records), topology/count control (face count
@@ -28,7 +28,7 @@ enum class ByteClass {
 };
 
 // Keep this public boundary synchronized with docs/standards/mpi-runtime.md: callers
-// supply replicated input buffers plus an M1 indexed ownership plan, while
+// supply replicated input buffers plus an replicated-full indexed ownership plan, while
 // MpiRuntime owns backend selection, staging, collective calls, and byte
 // accounting.
 // Collective-buffer volume, not an estimate of physical network traffic.
@@ -36,7 +36,7 @@ enum class ByteClass {
 // bytes are deliberately not claimed by this counter.
 //
 // The collective fields are GLOBAL aggregates (summed over all ranks, exactly
-// like the M1 records). The p2p fields below are LOCAL values of the logging
+// like the replicated-full records). The p2p fields below are LOCAL values of the logging
 // rank only -- its own p2p payload bytes -- and are named _local to make the
 // scope explicit; per-rank DMGMD_DOMAIN_COMM records expose every rank's
 // values so tests can verify them exactly.
@@ -47,7 +47,7 @@ struct CommunicationVolume {
   std::uint64_t device_to_host_bytes_global = 0;
   std::uint64_t host_to_device_bytes_global = 0;
   std::uint64_t output_download_bytes = 0;
-  // M2a point-to-point accounting (local scope, see above).
+  // local-domain point-to-point accounting (local scope, see above).
   std::uint64_t p2p_calls = 0;
   std::uint64_t halo_send_bytes_local = 0;
   std::uint64_t halo_recv_bytes_local = 0;
@@ -129,9 +129,9 @@ struct HaloExchangeState {
   bool reusable = true;              // both MPI sides AND unpack complete
 };
 
-// Communication plan for the M1 indexed collectives. M1 spatial ownership is
+// Communication plan for the replicated-full indexed collectives. replicated-full spatial ownership is
 // a non-contiguous subset of the replicated slots, so an Allgatherv/Gatherv
-// can no longer be described by a contiguous OwnedRange (M0). The plan is
+// can no longer be described by a contiguous OwnedRange (single-rank baseline). The plan is
 // rebuilt by the runtime whenever the ownership epoch changes and reused
 // verbatim while it does not; MpiRuntime itself is stateless with respect to
 // the plan.
@@ -278,7 +278,7 @@ class MpiRuntime {
   // exception paths must use report_error instead (see its comment for why).
   [[nodiscard]] std::vector<std::string> gather_strings(const std::string& value) const;
 
-  // M1 indexed Allgatherv: each rank packs the slots in
+  // replicated-full indexed Allgatherv: each rank packs the slots in
   // plan.device_owned_indices from a replicated SoA into AoS order, exchanges
   // per-rank variable counts (including zero), and scatters the gathered
   // stream back onto the replicated SoA through device_scatter_slots.
@@ -291,7 +291,7 @@ class MpiRuntime {
       const IndexedOwnershipPlan& plan,
       CommunicationVolume& volume) const;
 
-  // M1 indexed Gatherv to rank 0: same packing, root-only receive, and a
+  // replicated-full indexed Gatherv to rank 0: same packing, root-only receive, and a
   // host-side scatter through host_scatter_slots so the returned N-sized
   // global SoA is in replicated slot order, never in rank concatenation
   // order.
@@ -324,7 +324,7 @@ class MpiRuntime {
       int count) const;
 
   // -----------------------------------------------------------------------
-  // M2a local-domain exchanges (docs/standards/mpi-runtime.md). Point-to-point
+  // local-domain exchanges (docs/standards/mpi-runtime.md). Point-to-point
   // directions use independent tags and buffers so the
   // identical left/right peer at P=2 can never mismatch, and every zero
   // count (empty face, empty rank) is a legal no-op.
@@ -419,7 +419,7 @@ class MpiRuntime {
   // Gathers the owned prefix [0, owned_count) of a local SoA to rank 0 as a
   // per-rank-concatenated atom-major stream (AoS). `owned_counts` must be
   // identical on every rank (e.g. from allgather_int). Empty on non-root.
-  // Collective accounting follows the M1 gather convention: input and output
+  // Collective accounting follows the replicated-full gather convention: input and output
   // are the global totals.
   [[nodiscard]] std::vector<double> gather_prefix_device_soa_to_root(
       const double* device_values,
@@ -453,10 +453,10 @@ class MpiRuntime {
 
   void log_step_communication(std::uint64_t step, const CommunicationVolume& volume) const;
 
-  // Per-rank M2a record: every rank reports its own LOCAL p2p byte classes
+  // Per-rank local-domain record: every rank reports its own LOCAL p2p byte classes
   // for the sampled steps, so tests can verify each rank's halo/migration/
   // control bytes exactly (rank 0's DMGMD_COMM line only shows its own local
-  // values). Not emitted by the M1 fallback path.
+  // values). Not emitted by the replicated-full fallback path.
   void log_step_domain_communication(
       std::uint64_t step,
       const CommunicationVolume& volume) const;

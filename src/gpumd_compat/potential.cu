@@ -44,7 +44,7 @@ forces) used by the NEP angular force path.
 
 Adaptations for this replica are listed at the bottom of this header block.
 
-DMG-MD domain additions (M2a): gpu_find_force_many_body_domain and its wrapper
+DMG-MD domain additions (local-domain): gpu_find_force_many_body_domain and its wrapper
 find_properties_many_body_domain replicate the gather with a global-ID
 reverse-edge binary-search key for the local-domain NEP path; the legacy
 kernel and wrapper above are untouched.
@@ -210,7 +210,7 @@ static __global__ void gpu_find_force_many_body(
   }
 }
 
-// M2a domain variant of the same gather (docs/standards/mpi-runtime.md):
+// local-domain variant of the same gather (docs/standards/mpi-runtime.md):
 // the per-row sort key is the candidate's global ID instead of
 // the local index, so the reverse-edge binary search compares global IDs.
 // Slot indices stored in NL remain local. The arithmetic (force and virial

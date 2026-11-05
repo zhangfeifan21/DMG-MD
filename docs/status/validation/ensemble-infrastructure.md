@@ -395,7 +395,7 @@ manifest SHA-256：`1818ad68d5543492ca439340298696d230212dc8aa68725d9e0be77bb45c
 **统筹者于 2026-11-02 独立审核通过，A2 状态为 DONE。** 本轮唯一 Step 为 A2。
 源码和构建完成于 2026-10-30；经续跑前报告审核后，于 2026-11-02 顺序完成剩余宿主机验收。
 revision 为 `f06284408f12b6d89ed5a19434c44c958307af7b`，工作区 dirty；未提交、未推送。
-M1/M2a 共用纯 host 控制器，现有 NVE/`nvt_ber` 的科学输出与通信记录保持一致。
+全量复制模式/局部域分解共用纯 host 控制器，现有 NVE/`nvt_ber` 的科学输出与通信记录保持一致。
 NHC/BDP 动力学仍由 A1 两处预检拒绝；没有开始 A3/A4。
 
 全部原始证据位于 `/tmp/dmgmd-a2-20261030/`；下文使用该目录内的相对文件名。
@@ -410,9 +410,9 @@ NHC/BDP 动力学仍由 A1 两处预检拒绝；没有开始 A3/A4。
 | A2 host 环境门 | PASS，Open MPI/UCX/CudaAware P2 | `environment-after-host-resume-20261102.*` |
 | 宿主机完整 CTest | **20/20 passed，0 failed，0 skipped** | `ctest-host-resume-20261102.*`、同名 `-detail.log` |
 | A1/A2 单 rank golden | 各 4 case / 5 stage 通过；另比较 20 对科学文件 SHA，全相等 | `golden-*-host-resume-20261102.*`、`golden-ab-results.json` |
-| M1 双后端 P1/P2 | 各候选 20 stage；80 对科学文件 SHA、76 对全局逐步记录相等 | `mpi-*-host-resume-20261102.*`、`m1-ab-results.json` |
-| M2a runner（含固定附加检查） | 各候选 30 stage；101 对科学文件 SHA、155 对全局记录、160 对 rank 记录、30 对 segment summary 相等 | `domain-*-host-resume-20261102.*`、`ab-results.json` |
-| M1+M2a 总比较 | **50 stage、181 对科学文件、231 对全局逐步记录、160 对 rank 记录完全一致** | `compare-ab-resume-20261102.*`、`ab-results.json` |
+| 全量复制双后端 P1/P2 | 各候选 20 stage；80 对科学文件 SHA、76 对全局逐步记录相等 | `mpi-*-host-resume-20261102.*`、`m1-ab-results.json` |
+| 局部域分解runner（含固定附加检查） | 各候选 30 stage；101 对科学文件 SHA、155 对全局记录、160 对 rank 记录、30 对 segment summary 相等 | `domain-*-host-resume-20261102.*`、`ab-results.json` |
+|全量复制模式+局部域分解总比较 | **50 stage、181 对科学文件、231 对全局逐步记录、160 对 rank 记录完全一致** | `compare-ab-resume-20261102.*`、`ab-results.json` |
 | 文件保护及最终 diff | PASS；A2 源码与实际构建快照一致 | `final-before-report.json`、`final-ownership.json`、`a2-source.diff` |
 
 沙箱 CUDA 测试按现有 `SKIP_RETURN_CODE 77` 报无设备；宿主机同一测试输出
@@ -445,7 +445,7 @@ thermo 文件仍使用缩放前 thermo；XYZ/restart 中的速度仍为缩放后
 
 `coupling = 1.0/TAU`，只有 `coupling > 1.0e-5` 才计算
 `sqrt(1.0 + coupling*(target/T - 1.0))` 并执行原 kernel。活动因子恰好 1 仍发起原缩放；
-弱耦合返回无动作，但 M2a NVT 的 thermo consumer 仍在。kernel 的参数、launch、写范围和
+弱耦合返回无动作，但 局部域分解NVT 的 thermo consumer 仍在。kernel 的参数、launch、写范围和
 迁移后的 ownership/stride 查询不变。ghost 不积分、不重复计入 thermo，rank 0 文件输出规则不变。
 
 A1 的 IR/parser、两个 `validate_runtime_ensembles(program)` guard、`runtime_internal.hpp`、
@@ -498,35 +498,35 @@ host gate/CTest/golden/MPI 命令均使用获准的 `sandbox_permissions=require
 以及每个 stage 的 `run.in`、`model.xyz`、`nep.txt` 输入哈希。以下是六个要求的 NVT 路由代表：
 | 路由 | backend | 输出文件 | A1 SHA-256 = A2 SHA-256 |
 | --- | --- | --- | --- |
-| M1 P1 | HostStaged | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
-| M1 P1 | HostStaged | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
-| M1 P1 | HostStaged | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
-| M1 P2 | HostStaged | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
-| M1 P2 | HostStaged | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
-| M1 P2 | HostStaged | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
-| M2a P2 | HostStaged | `thermo.out` | `3d8908c7b05fdec54018a507fa48018a32b48faa30541ffb7263bf61409d1af8` |
-| M2a P2 | HostStaged | `static.xyz` | `ee0ddab091a7103ab97c0cd40909248ba94f67f8194327afa94c92e7a39b5f4c` |
-| M2a P2 | HostStaged | `restart.xyz` | `c22cd99f31daba4aa4c6a9453cad76241d1b9f56de7eb87d207eb16d7d4c25ae` |
-| M1 P1 | CudaAware | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
-| M1 P1 | CudaAware | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
-| M1 P1 | CudaAware | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
-| M1 P2 | CudaAware | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
-| M1 P2 | CudaAware | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
-| M1 P2 | CudaAware | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
-| M2a P2 | CudaAware | `thermo.out` | `3d8908c7b05fdec54018a507fa48018a32b48faa30541ffb7263bf61409d1af8` |
-| M2a P2 | CudaAware | `static.xyz` | `ee0ddab091a7103ab97c0cd40909248ba94f67f8194327afa94c92e7a39b5f4c` |
-| M2a P2 | CudaAware | `restart.xyz` | `c22cd99f31daba4aa4c6a9453cad76241d1b9f56de7eb87d207eb16d7d4c25ae` |
+| replicated-full P1 | HostStaged | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
+| replicated-full P1 | HostStaged | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
+| replicated-full P1 | HostStaged | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
+| replicated-full P2 | HostStaged | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
+| replicated-full P2 | HostStaged | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
+| replicated-full P2 | HostStaged | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
+| local-domain P2 | HostStaged | `thermo.out` | `3d8908c7b05fdec54018a507fa48018a32b48faa30541ffb7263bf61409d1af8` |
+| local-domain P2 | HostStaged | `static.xyz` | `ee0ddab091a7103ab97c0cd40909248ba94f67f8194327afa94c92e7a39b5f4c` |
+| local-domain P2 | HostStaged | `restart.xyz` | `c22cd99f31daba4aa4c6a9453cad76241d1b9f56de7eb87d207eb16d7d4c25ae` |
+| replicated-full P1 | CudaAware | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
+| replicated-full P1 | CudaAware | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
+| replicated-full P1 | CudaAware | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
+| replicated-full P2 | CudaAware | `thermo.out` | `243ca728dc4f810f4b46975c6ba009e81a27e18f85a3d68487c5377c3a491887` |
+| replicated-full P2 | CudaAware | `trajectory.xyz` | `582aef33397e5ce4bc8f263d0783c1b9cefb09f55882a84f6cc15adaf2ae5524` |
+| replicated-full P2 | CudaAware | `restart.xyz` | `729265fb52f7a9c0cebe92efc75327fabc48c7b408c261df3942c035a6fe3247` |
+| local-domain P2 | CudaAware | `thermo.out` | `3d8908c7b05fdec54018a507fa48018a32b48faa30541ffb7263bf61409d1af8` |
+| local-domain P2 | CudaAware | `static.xyz` | `ee0ddab091a7103ab97c0cd40909248ba94f67f8194327afa94c92e7a39b5f4c` |
+| local-domain P2 | CudaAware | `restart.xyz` | `c22cd99f31daba4aa4c6a9453cad76241d1b9f56de7eb87d207eb16d7d4c25ae` |
 
-M1 用 `multi_nvt_restart/initial`：包含 NVE 初始化与两个 Berendsen 分段，另有 resume 对照。
+全量复制用 `multi_nvt_restart/initial`：包含 NVE 初始化与两个 Berendsen 分段，另有 resume 对照。
 P1 日志为 `mode=m1-fallback reason=p1`；P2 为
 `mode=m1-fallback axis=y d_dep=7 d_coord=14 reason=slab-width-below-d-coord`。
-M2a 用 `partition_nvt`：`mode=m2a axis=x d_dep=8 d_coord=16 axis_thickness=64 slab_width=32 ranks=2 reason=eligible`。
+局部域分解用 `partition_nvt`：`mode=m2a axis=x d_dep=8 d_coord=16 axis_thickness=64 slab_width=32 ranks=2 reason=eligible`。
 该例 12 步，输出集合严格为 `thermo.out/static.xyz/restart.xyz/neighbor.out`，两后端均检查实际路由。
 `lattice` 覆盖 NVE；`crossings` 覆盖多段 NVT/NVE、迁移及输出。保留 runner 原有 mode proof、
 layout/transition、oracle differential、精确 byte accounting 与负例检查。
 
 本次 domain runner 的 30 个实际 stage 包括 17 个 P1 reference-oracle stage、6 个所选 P2 stage、
-2 个 M1 partition fallback，以及 quiet、crossings-timing、continuous timing off/on、unroutable。
+2 个 全量复制partition fallback，以及 quiet、crossings-timing、continuous timing off/on、unroutable。
 这里的 P1 oracle 均执行对应 DMG-MD 候选，没有运行或改写外部 reference 程序。
 `unroutable` 是 runner 预期 fatal 的通过负例；不将其解释成成功轨迹。
 
@@ -543,17 +543,17 @@ MPI 输入/输出字节、D2H/H2D/output-download、halo/migration/control 字�
 修正、输出与其它 collective，不是额外控制器开销，也不是物理网络传输量。
 | 路由 | backend | 记录步数 | collective_calls 总和 | MPI input bytes 总和 | MPI output bytes 总和 |
 | --- | --- | --- | --- | --- | --- |
-| M1 P1 | HostStaged | 8 | 46 | 10448 | 10448 |
-| M1 P2 | HostStaged | 8 | 54 | 11216 | 12944 |
-| M2a P2 | HostStaged | 12 | 104 | 18272 | 18272 |
-| M1 P1 | CudaAware | 8 | 46 | 10448 | 10448 |
-| M1 P2 | CudaAware | 8 | 54 | 11216 | 12944 |
-| M2a P2 | CudaAware | 12 | 104 | 18272 | 18272 |
+| replicated-full P1 | HostStaged | 8 | 46 | 10448 | 10448 |
+| replicated-full P2 | HostStaged | 8 | 54 | 11216 | 12944 |
+| local-domain P2 | HostStaged | 12 | 104 | 18272 | 18272 |
+| replicated-full P1 | CudaAware | 8 | 46 | 10448 | 10448 |
+| replicated-full P2 | CudaAware | 8 | 54 | 11216 | 12944 |
+| local-domain P2 | CudaAware | 12 | 104 | 18272 | 18272 |
 
-所选 NVT stage 每步记录（interval=1）；M1+M2a 共比较 231 对全局、160 对 rank 逐步记录及
+所选 NVT stage 每步记录（interval=1）；全量复制模式+局部域分解共比较 231 对全局、160 对 rank 逐步记录及
 30 对 segment summary。`default-quiet` 按其既有默认日志间隔没有逐步记录，`unroutable`
 在完整积分前按预期拒绝；两者不计作逐步账本覆盖。其它已记录 NVE/NVT 步及静态调用审查均相符。
-M1 保留每步 thermo；M2a NVE 的 consumer 判定和 NVT 每步反馈未变，没有新增 KE 归约或广播。
+全量复制保留每步 thermo；局部域分解NVE 的 consumer 判定和 NVT 每步反馈未变，没有新增 KE 归约或广播。
 
 <a id="ensemble-control-20261102--revision已有修改及文件保护"></a>
 ### Revision、已有修改及文件保护
@@ -787,16 +787,16 @@ python3 /tmp/dmgmd-a2-20261030/seal_evidence.py
 ### A2 DoD 对照与限制
 | A2 要求 | 证据及结果 |
 | --- | --- |
-| M1/M2a 共享目标调度及 Berendsen 控制 | 单一纯 host 库、两 runtime 调用；`a2-source.diff` |
+|全量复制模式/局部域分解共享目标调度及 Berendsen 控制 | 单一纯 host 库、两 runtime 调用；`a2-source.diff` |
 | 段内 0 基调度、阈值、表达式和缩放位置不变 | 位模式 128 案例；kernel 静态一致；A/B 哈希完全相等 |
 | NVE 无链/RNG 分配，每段独立初始化 | 无分配及大小/trivial 静态断言；多段测试及 `multi_nvt_restart` |
 | 全局 thermo / atom ownership / MPI 次序保持 | 原归一化及 owned kernel 保留；无新 MPI 方法调用；完整生产账本对照 |
 | 同工具链/选项 A/B | 22 条共同编译命令和关键 cache 相同；两独立候选 SHA 固定 |
-| M1 P1、P2 fallback、M2a P2 `nvt_ber` | 两后端六个实际路由均通过；thermo/XYZ/restart SHA 相同 |
+| 全量复制P1、P2 fallback、局部域分解P2 `nvt_ber` | 两后端六个实际路由均通过；thermo/XYZ/restart SHA 相同 |
 | 既有功能回归 | focused + host full CTest、两候选 golden/MPI runner 均通过 |
 | 不改 compat / golden / 容差 / A1 guard / 用户文件 | 全文件 SHA 保护与最终 diff 审查通过 |
 
-统筹者独立复算全部 50 个 M1/M2a stage 的输入、科学输出哈希、route、global/local 通信记录与
+统筹者独立复算全部 50 个全量复制模式/局部域分解stage 的输入、科学输出哈希、route、global/local 通信记录与
 segment summary，结果均与 A/B 记录相同；另核对 20 对 golden SHA、20 条捕获命令返回码、1123 项
 证据哈希、A1 420 个 build 文件以及初始 dirty 工作区保护。diff、测试和 A2 DoD 均通过。
 进度、主计划和 `docs/README.md` 已更新；这三处启动前均为已有 dirty 文档，统筹者只更新进度、A2/A3 状态和验收索引，其他用户修改均保留。本轮没有启动 A3。

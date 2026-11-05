@@ -1,6 +1,6 @@
-// CPU unit tests for the M2a local-domain layout logic
+// CPU unit tests for the local-domain layout logic
 // (include/dmgmd/domain_layout.hpp). Everything here is pure host code: no
-// MPI, no CUDA. The cases mirror the M2a plan checklist: typewise radii,
+// MPI, no CUDA. The cases mirror the local-domain plan checklist: typewise radii,
 // eligibility and fallback reasons, slab boundary rules, ghost classification
 // (s=0 / s=1 / exactly at the slab boundary), P=2 same-peer de-duplication,
 // empty ranks and N < P, deterministic slot order, malformed plan rejection,
@@ -136,7 +136,7 @@ void check_eligibility_reasons()
   cutoffs.rc_angular = {4.0};
   const DomainRadii radii = compute_domain_radii(cutoffs);
 
-  // P=1 never enters M2a.
+  // P=1 never enters local-domain.
   DomainEligibility single = evaluate_domain_eligibility(1, kBox64x24x24, radii, 7.0);
   require(!single.eligible && single.reason == "p1", "P=1 must stay on the M1 path");
 
@@ -173,7 +173,7 @@ void check_eligibility_reasons()
   DomainEligibility cube_case = evaluate_domain_eligibility(2, cube, radii, 7.0);
   require(cube_case.eligible && cube_case.axis == 1, "cube picks axis y");
 
-  // Unproven radii fail closed to M1 for any box.
+  // Unproven radii fail closed to replicated-full for any box.
   const DomainRadii unproven{};
   DomainEligibility closed = evaluate_domain_eligibility(4, kBox64x24x24, unproven, 7.0);
   require(!closed.eligible && closed.reason == "unproven-radii",
@@ -272,7 +272,7 @@ void check_boundary_classification()
     rejected = true;
   }
   require(rejected, "beyond the d_coord band must be rejected");
-  // s=0 and s=1 ownership edges (M1 equal-width fractional rules reused).
+  // s=0 and s=1 ownership edges (replicated-full equal-width fractional rules reused).
   require(migration_owner(0.0, 4) == 0, "s=0 belongs to slab 0");
   require(migration_owner(1.0, 4) == 3, "exact s=1 belongs to the last slab");
   require(migration_owner(0.25, 4) == 1, "interior boundary belongs to the right slab");

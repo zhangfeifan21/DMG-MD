@@ -108,12 +108,12 @@ cgroup v1、不可读/逃逸路径保留原因，CPU ticks 仍可用。
 process_start_ticks/clock_domain_id/clock_id/t_ns/sequence/phase/edge(begin|end)，可带
 global_step/epoch。按身份+sequence+phase配对；缺端、重复begin、非正窗口、时钟错误记 issue。
 只纳入两端读取区间完全在窗内的样本，不按比例切割边界区间。嵌套阶段可以重叠，不能相加。
-无 marker 则 phase/sequence/run_cpu_utilization=null。M2a 的 O1 trace 模式现在由
+无 marker 则 phase/sequence/run_cpu_utilization=null。局部域分解模式的 O1 trace 模式现在由
 `DMGMD_DOMAIN_TRACE=1` 发射 `CLOCK_MONOTONIC` 整数纳秒；benchmark runner 校验
 rank/PID/start ticks/clock domain 后把 raw stdout 转成 `cpu/markers.jsonl`，再传给现有
 `analyze_cpu`。它给 run-loop 与逐步 ordinary/rebuild 窗口；短步没有完整采样区间时
 CPU 值仍为 null。默认关闭，`DMGMD_TIMING`/`DMGMD_DOMAIN_TIMING` 的相对耗时
-本身仍不能替代绝对 marker；具体 trace 范围见 [M2a 合同](mpi-runtime.md)。
+本身仍不能替代绝对 marker；具体 trace 范围见 [局部域分解合同](mpi-runtime.md)。
 
 正常结束、timeout、KeyboardInterrupt/SIGTERM 均回收本次 launcher 后代与 collector。
 launcher 沿已有 ancestry+PID/starttime 清理；collector/诊断工具只通过本次 Popen handle 回收，

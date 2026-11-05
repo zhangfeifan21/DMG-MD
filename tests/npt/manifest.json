@@ -1,0 +1,272 @@
+{
+  "schema": "dmgmd.npt-preregistration.v1",
+  "status": "APPROVED_PREREGISTRATION_PENDING_B3_EXECUTION_FREEZE",
+  "created_at": "2026-11-03 (Asia/Shanghai), before NPT result collection",
+  "scope": ["B2", "B3", "B4/G-B"],
+  "sampling_authorized": true,
+  "implementation_gate": "B2 has passed. B3 formal SCR sampling may begin only after candidate build-b3 identity, exact generated run.in/model.xyz hashes, GPUMD identity and release RNG binary evidence, analysis/test code hashes, and reference checkout states are frozen; short controls and route/negative gates must pass first.",
+  "source_contract": {
+    "development_plan": "docs/plans/dmg-md-v1.0-development-workflow.md §§0.5, 7/B2-B4",
+    "potential_path": "tests/baseline/inputs/potentials/nep_C.txt",
+    "potential_sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
+    "potential_format": "NEP4 C",
+    "units": {
+      "length": "angstrom",
+      "time": "fs; Tdamp and tau_p inputs are step counts",
+      "temperature": "K",
+      "pressure": "GPa at input/output; internal eV/angstrom^3",
+      "pressure_conversion": 160.2177,
+      "boltzmann_eV_per_K": 8.617343e-5
+    }
+  },
+  "fixtures": {
+    "statistics": {
+      "description": "Stable periodic NEP diamond, 3x3x3 conventional cells, 216 atoms; lattice and coordinates both scaled from a=3.57 angstrom by 1.0023 for the B0 near-zero-pressure reference state.",
+      "cells": [3, 3, 3],
+      "atoms": 216,
+      "lattice_constant_angstrom": 3.578211,
+      "pbc": [true, true, true],
+      "target_temperature_K": 300,
+      "target_pressure_GPa": 0.0,
+      "initial_velocity": "Independent explicit Gaussian components; Python random.Random(seed).gauss; mass=12.011; kB=8.617343e-5 eV/K; velocity conversion=10.18051; no COM removal or constraints.",
+      "seeds": [101, 102, 103, 104, 105, 106, 107, 108],
+      "model_xyz_sha256_by_seed": {
+        "101": "127124305704235915fb9953c51feb71323136a3304e6eb617972c255e735b82",
+        "102": "639455060a13472edc79f7108e0d0f2ec4614c5aa8dccde2226b9ba1187e4a84",
+        "103": "bf323d1aa0965de5d1685c671b7d3b6181ae598206352ab36a23e8b1b35cb5b3",
+        "104": "7c7d93850b25bcf38461b5401a32b1244b8df4154070fcdaf5f4efbe6d3d33d1",
+        "105": "f805179c9df126b71eba0b61aad4ce25540beb789a7ce1f3f0233d7b74a1bf21",
+        "106": "1013c5c75596c07d4473c21a8f831984421b4256e2d2cdbd75a80ac0cdd3ed65",
+        "107": "f1ce13b1f53fe4bdfa205b3b2ccd338f95d24d8c3b69752495f954754e27abce",
+        "108": "9521f2532d2b0e80465ff35247156fb3bee7a97af61e120203d3f00c490e3713"
+      },
+      "run_input": {
+        "time_step_fs": 0.25,
+        "ensemble_line": "ensemble npt_scr 300 300 40 0 425 200",
+        "dump_thermo_every_steps": 1,
+        "dump_xyz": false,
+        "dump_restart_every_steps": 0,
+        "steps_by_look": [20000, 40000, 80000]
+      }
+    },
+    "ber_golden_small": {
+      "description": "Same near-zero periodic diamond and explicit-velocity generation as statistics fixture, 216 atoms; 200-step Ber golden.",
+      "reuse_statistics_models": true
+    },
+    "ber_golden_large": {
+      "description": "Periodic diamond 7x6x6, 2016 atoms, same 1.0023 scale and explicit velocity seeds; one 200-step Ber case to exercise new cache invalidation at larger size.",
+      "cells": [7, 6, 6],
+      "atoms": 2016,
+      "lattice_constant_angstrom": 3.578211,
+      "seeds": [101],
+      "model_xyz_sha256_by_seed": {
+        "101": "48e8029e9b2d8dc8aaef8a996d69cb1e64b381f0b670c40c17b7c8040b699366"
+      }
+    },
+    "compressed": {
+      "description": "Near-zero diamond reference state compressed isotropically by 0.5%; registered by B0 to raise mean diagonal pressure about +6.49 GPa.",
+      "cells": [3, 3, 3],
+      "atoms": 216,
+      "relative_scale_from_reference": 0.995,
+      "seeds": [101],
+      "model_xyz_sha256_by_seed": {
+        "101": "72392f9580a03054c41b283dd23512f500495860115c8a4b442dc7e8184044db"
+      }
+    },
+    "expanded": {
+      "description": "Near-zero diamond reference state expanded isotropically by 0.5%; registered by B0 to lower mean diagonal pressure about -6.25 GPa.",
+      "cells": [3, 3, 3],
+      "atoms": 216,
+      "relative_scale_from_reference": 1.005,
+      "seeds": [101],
+      "model_xyz_sha256_by_seed": {
+        "101": "2899d9dd8a7d6eec88e1c2cf1a724bdcabfb4fb84a882d24dff92c69daa8eff4"
+      }
+    },
+    "m2a_eligible": {
+      "description": "Existing 18x6x6 periodic diamond, 5184 atoms; use only to prove explicit M2a-eligible NPT request remains routed to M1, not for statistical sampling.",
+      "cells": [18, 6, 6],
+      "atoms": 5184,
+      "existing_fixture_reference": "tests/thermostats/manifest.json geometries.domain",
+      "model_xyz_sha256_by_seed": {
+        "101": "09fea7014025db1251ecc032c0349ab5cb3112aa3184214d477f345a477eb8e9"
+      }
+    },
+    "negative_models": {
+      "negative-nonperiodic": {
+        "description": "216-atom diamond changed to pbc T T F for explicit NPT unsupported-box rejection.",
+        "atoms": 216,
+        "model_xyz_sha256": "86ffbf2e433d88c113e24875ad2a4920df85207bc5b7024ca3d6ca4c914eb8f9"
+      },
+      "negative-triclinic": {
+        "description": "216-atom diamond with xy tilt 0.1 angstrom for explicit nonorthogonal NPT rejection.",
+        "atoms": 216,
+        "model_xyz_sha256": "8ea1b2641ca9ccf3b0aa2916bc8096d35b86a930390c2cc1fda3dd838d249e35"
+      },
+      "zero-ke": {
+        "description": "Two noninteracting stationary carbon atoms in a 30 angstrom periodic cube; exercises zero kinetic energy guard without force or periodic-contact ambiguity.",
+        "atoms": 2,
+        "model_xyz_sha256": "94c0af44df24ea4d011809ce7a9fac4e41476dcc36baba9fc67611b98a29f613"
+      }
+    }
+  },
+  "b2_berendsen": {
+    "run_tokens": 8,
+    "run_line": "ensemble npt_ber 300 300 40 0 425 200",
+    "profiles": {
+      "golden": {
+        "steps": 200,
+        "dt_fs": 0.25,
+        "thermo_interval_steps": 1,
+        "trajectory_interval_steps": 20,
+        "restart_interval_steps": 200,
+        "explicit_velocities": true,
+        "fixtures": ["ber_golden_small", "ber_golden_large"]
+      },
+      "route_smoke": {
+      "steps": 20,
+      "dt_fs": 0.25,
+      "target_pressure_GPa": 5.0,
+      "thermo_interval_steps": 1,
+      "trajectory_interval_steps": 5,
+      "restart_interval_steps": 20,
+      "fixtures": ["statistics", "m2a_eligible"],
+      "ranks": [1, 2, 4],
+      "backends": ["HostStaged", "CudaAware when environment gate passes"]
+      },
+      "pressure_direction": {
+        "steps": 20,
+        "dt_fs": 0.25,
+        "thermo_interval_steps": 1,
+        "trajectory_interval_steps": 1,
+        "run_line": "ensemble npt_ber 300 300 40 0 425 200",
+        "controlled_initial_pressure_sign_cases": ["P_inst > P_target", "P_inst < P_target"],
+        "assertion": "Assert first deterministic box response direction, not monotonic instantaneous pressure relaxation."
+      }
+    },
+    "golden_acceptance": "Compare GPUMD thermo temperature, six stress columns, box columns and XYZ positions/velocities at registered frames with pre-existing golden tolerance; report exact max error by file/column/frame and first out-of-tolerance item. Do not update existing golden or tolerance.",
+    "restart_contract": "Separately classify one long run, same-process split run and file restart at T1=T2; record first divergence and precision. Assert restart Lattice/positions are post-scale and thermo stress is pre-scale. Do not presume trajectory continuity."
+  },
+  "b3_scr_statistics": {
+    "ensemble": "npt_scr",
+    "configuration": {
+      "temperature_K": 300,
+      "target_pressure_GPa": 0.0,
+      "bulk_modulus_control_GPa": 425.0,
+      "dt_fs": 0.25,
+      "Tdamp_steps": 40,
+      "tau_p_steps": 200,
+      "communication_backend": "HostStaged",
+      "ranks": 1,
+      "thermo_interval_steps": 1,
+      "trajectory_interval_steps": null,
+      "box_control_B_is_not_material_bulk_modulus": true
+    },
+    "seeds": [101, 102, 103, 104, 105, 106, 107, 108],
+    "candidate_conditions_base_dt": [
+      {"ranks": 1, "backend": "HostStaged"},
+      {"ranks": 2, "backend": "HostStaged"},
+      {"ranks": 2, "backend": "CudaAware"},
+      {"ranks": 4, "backend": "HostStaged"},
+      {"ranks": 4, "backend": "CudaAware"}
+    ],
+    "candidate_conditions_half_dt": [{"ranks": 1, "backend": "HostStaged"}],
+    "candidate_seed_environment": "DMGMD_ENSEMBLE_SEED=<registered initial-model seed>",
+    "reference_rng_source": "std::chrono::system_clock::now().time_since_epoch().count() in release initialize_rng; verify pinned executable disassembly calls system_clock::now",
+    "reference_job_launch_policy": "one process at a time; distinct recorded UTC start seconds are conservative isolation only and do not observe internal seed",
+    "budget_steps_per_seed": [20000, 40000, 80000],
+    "half_dt": {
+      "enabled": true,
+      "dt_fs": 0.125,
+      "Tdamp_steps": 80,
+      "tau_p_steps": 400,
+      "budget_steps_per_seed": [40000, 80000, 160000],
+      "same_physical_damping_and_sampling_duration": true
+    },
+    "burn_in": "Discard first 10% of each fixed budget prefix, independently at each preregistered look.",
+    "block_length_steps": {
+      "dt_0.25_fs": 500,
+      "dt_0.125_fs": 1000,
+      "physical_block_length_fs": 125
+    },
+    "minimum_complete_blocks_per_seed": 32,
+    "minimum_pooled_effective_samples_per_engine_and_metric": 1000,
+    "effective_sample_metrics": ["mean", "squared_deviation/variance"],
+    "statistics": {
+      "temperature_mean": "Candidate-vs-GPUMD mean difference must be within 2% of 300 K; compare with the registered CI. Also report each engine's absolute offset from 300 K separately. Canonical K variance oracle is Var(K)=3N*(kB*T)^2/2 for 3N unconstrained momentum degrees of freedom. Temperature is reported using product's 3N definition; do not invent an instantaneous target-temperature variance.",
+      "pressure_mean": "Candidate-vs-GPUMD mean difference CI must lie within +/-0.1 GPa using independent-seed estimates; also report each engine's offset from Ptarget separately.",
+      "volume_mean": "Candidate-vs-GPUMD mean difference CI must lie within +/-0.25% of the GPUMD reference mean; report each engine's mean and absolute target-theory diagnostics separately.",
+      "variance": "For T, P and V compare candidate/reference variance ratios; allowed interval [0.85,1.15].",
+      "distribution": "For T, P, V report empirical CDF sup-distance and 5th/50th/95th quantiles. V CDF sup-distance must be <=0.15 as an auxiliary equivalence criterion; provide block/seed uncertainty intervals and normalized quantile differences. Do not report an iid KS p-value.",
+      "reference_comparison": "Run GPUMD SCR release as independent jobs with identical explicit model.xyz/run.in/potential bytes; pinned release initialize_rng uses std::chrono::system_clock::now().time_since_epoch().count() (binary branch verified by nm/objdump). Serialize launches with distinct UTC start seconds as conservative isolation and record UTC start/end, PID, and source+binary RNG evidence; this does not observe or prove distinct internal seeds. Never compare stochastic trajectories or reuse a GPUMD random stream. Candidate deterministic seed is explicitly DMGMD_ENSEMBLE_SEED=101..108.",
+      "same_condition_gate": "All registered candidate-vs-GPUMD equivalence CIs must lie entirely within their fixed bounds, and block/ESS criteria must pass. A common target-theory deviation is separately reported as THEORY_TARGET_INCONCLUSIVE and does not negate same-condition compatibility; do not claim universal strict sampling or ergodicity.",
+      "confidence": "Use existing sample_statistics.py Geyer initial-positive paired autocorrelation, block and between-chain Student-t intervals, taking the wider interval; three planned looks use z=2.394. Coverage is per registered metric/look family as implemented, not a joint 95% guarantee over the complete matrix. Equivalence passes only when the full CI lies within the bound; a precise disjoint CI fails; insufficient precision is INCONCLUSIVE.",
+      "no_posthoc_changes": "Do not change seeds, burn-in, budgets, thresholds, fixture, statistical method, or add looks after seeing formal results. Preserve all failures and inconclusive results."
+    },
+    "formula_fixture": {
+      "separate_from_sampling": true,
+      "gaussian_source": "Fixed registered scalar(s), injected directly into pure host formula fixture; never use GPUMD release RNG or production RNG for this test.",
+      "volume_factor": "1 - pc*(P_target-P_inst) + sqrt((2/3)*pc*kB*T/V)*gaussian",
+      "pc_definition": "PRESSURE_UNIT_CONVERSION/(3*tau_p_steps*B_GPa)",
+      "assertions": ["formula value and operation order", "units and conversion applied once", "finite positive factor guard", "BDP velocity factor independently checked", "zero-noise branch when B_GPa>2000 per compatibility rule"]
+    },
+    "independent_physics": {
+      "EOS_control_parameter": "425 GPa is only the input barostat control modulus.",
+      "separate_response_evidence": "Measure a static pressure-volume EOS slope on the same NEP potential/diamond around the chosen state; report fitted range, slope, uncertainty and input hashes independently of control B.",
+      "independent_NPT_oracle": "If candidate and GPUMD agree but disagree with independently verified target theory, preserve both results and classify theory check INCONCLUSIVE; use LAMMPS or a solvable independent sampler only if needed to diagnose a reproducible discrepancy."
+    }
+  },
+  "b4_route_and_negative_matrix": {
+    "rank_counts": [1, 2, 4],
+    "backends": ["HostStaged", "CudaAware when environment gate passes"],
+    "npt_forces_m1": "Every NPT request prints mode=m1 reason=npt-m1-only; directly entering M2a NPT path fails closed.",
+    "m2a_eligible_fixture_atoms": 5184,
+    "short_smoke": {
+      "steps": 20,
+      "dt_fs": 0.25,
+      "thermo_interval_steps": 1,
+      "include_box_change": true,
+      "restart": "Write and launch a separate restart job; assert post-scale box/position consistency, no trajectory continuity claim for SCR."
+    },
+    "negative_cases": [
+      "12-token and 18-token anisotropic syntax rejected with explicit v1-isotropic-only diagnostic",
+      "non-finite or invalid T/B/tau_p rejected before dynamics",
+      "negative target pressure accepted",
+      "B_GPa>2000 accepted and fixed-box branch verified",
+      "nonorthogonal or nonperiodic M1 box rejected",
+      "NPT with correct_velocity, adaptive timestep or experimental DMGMD_DOMAIN/overlap options rejected unless explicitly covered",
+      "invalid seed syntax/rank disagreement and nonpositive/nonfinite scale fail collectively without MPI hang",
+      "M2a-eligible NEP input still routes M1; direct local-domain NPT entry rejected"
+    ],
+    "negative_test_requirements": "Use timeout; collect all-rank exit/error evidence; assert no successful final thermo/trajectory/restart artifact after preflight failures."
+  },
+  "budget": {
+    "candidate_and_reference_maximum": "For each engine, 8 seeds * (80000 base steps + 160000 half-dt steps) = 1,920,000 system steps; 3,840,000 total engine-steps over both engines, each at 216 atoms.",
+    "staged_execution": "At each look analyze fixed prefixes for all eight seeds. Candidate longer budgets are complete deterministic reruns from the same initial state and fixed candidate seed; verify prior prefix outputs byte-for-byte before reusing earlier looks. Never resume from restart or stitch segments. GPUMD reference uses one single-segment maximum-budget run per seed, shared by registered conditions and prefix looks. No same-second reference launches.",
+    "ber_and_route": "200-step GPUMD Ber golden at 216 atoms plus one 2016-atom case; 20-step route/restart smoke at P1/P2/P4 and enabled backends; 5184 atoms only for M2a eligibility routing."
+  },
+  "input_locking": {
+    "files_to_hash_before_sampling": ["manifest.json", "all model.xyz", "run.in per profile/look", "potential", "candidate binary", "GPUMD reference binary", "analysis runner and statistics code"],
+    "manifest_self_hash_recorded_in_results": true,
+    "input_generator": "Reproduce the deterministic conventional diamond basis and Python random.Random(seed).gauss procedure used by tests/thermostats/run_thermostats.py::model_text; apply scale 1.0023 to both lattice and coordinates; use 1+scaled fractional Cartesian coordinates and .17g serialization. Verify each generated model hash against fixture map above before running.",
+    "run_in_sha256": {
+      "ber-golden-200": "5efdb56e05e109ebc3f686cec88251ed7351ccf82ffeaae859415651750250b4",
+      "ber-pressure-track-20": "a2031df204664f2d39ba652db98f02fc3f5f4a34aea23f871ad2aa92ed1e6abc",
+      "ber-route-20-target5": "1368bf5a067440566c6174fd89dee668dc881d854aa5fbfbe3039f8e66a2e977",
+      "ber-negative-pressure-20-target-minus1": "4ce40315fc32d31686dfe362040fffa92892f179b156a8368c29741f500e84d0",
+      "ber-fixed-box-20-B2001": "ea841a23863753bc7e90acb65efaff03da5ac7d54c41e363c923de3353c00325",
+      "ber-restart-resume-3": "ae0e203ee7c4cc77dc6adf6aa468ce2b06dbcff0e228330585afa541eb0c8ebf",
+      "ber-unsafe-scale-1": "9a454d5b3c7245207f29cf67db03b0b430b1827f71e8c62cb0dd78ac940afda2",
+      "ber-invalid-t-nan": "834c19cc8894ee1cc57fa4d487677704db8e6e163ed92ee59d462da659404b2c",
+      "ber-invalid-b-zero": "6a79ea3fec9da60a69c108505b0a9a727bda4eff955cbd63d1a1575f1fbd9439",
+      "ber-invalid-tau-zero": "aca29bae1ba29ab4dc3e547e0fcb3f17cd615d1c83ef785c174430ab32d8c038",
+      "ber-invalid-token-12": "edc3df4228ad9bbd74181204df3ce04d385e07be15ed1cd5ea2c5a9c96f334a7",
+      "ber-invalid-token-18": "b22bf9e04f67a7f03ac7e65addf216220282490279d7bfcaa913aa87c45656fe",
+      "ber-zero-ke-1": "a21c91983507bdbaf3a9a11f852167f4098cc9416e00dee693ce8d37fe2deb39"
+    },
+    "baseline_tolerances_source": "tests/baseline/manifest.json; immutable for this comparison",
+    "remaining_hashes_to_finalize_before_any_B2_result": ["candidate build-b2 binary SHA-256", "reference GPUMD binary SHA-256", "runner/generator/comparator script hashes", "exact B2 input hashes emitted by generator; verify against fixture maps above"],
+    "statistics_xyz_policy": "No trajectory.xyz/dump_xyz during SCR statistics. Per-step thermo.out records T/P/V; only sparse restart/output diagnostics are run as separate B2/B4 tests.",
+    "b2_execution_identity_pending": true
+  }
+}

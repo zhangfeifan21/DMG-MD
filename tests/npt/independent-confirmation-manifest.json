@@ -1,0 +1,759 @@
+{
+  "schema": "dmgmd.npt-scr-independent-confirmation.preregistration.v1",
+  "status": "APPROVED_INDEPENDENT_CONFIRMATION",
+  "created_at": "2026-11-03 (Asia/Shanghai), prepared before independent confirmation sampling",
+  "scope": [
+    "Independent SCR confirmation after completion of the original B3/G-B matrix; only confirmation_registration cohorts are sampled."
+  ],
+  "sampling_authorized": true,
+  "implementation_gate": "Registration approved by root on 2026-11-03 approximately 07:33 UTC. GPU execution may start only after b0 creates the formal plan/ledger, b1 creates the formal execution freeze, and root verifies that freeze.",
+  "source_contract": {
+    "development_plan": "docs/plans/dmg-md-v1.0-development-workflow.md §§0.5, 7/B2-B4",
+    "potential_path": "tests/baseline/inputs/potentials/nep_C.txt",
+    "potential_sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
+    "potential_format": "NEP4 C",
+    "units": {
+      "length": "angstrom",
+      "time": "fs; Tdamp and tau_p inputs are step counts",
+      "temperature": "K",
+      "pressure": "GPa at input/output; internal eV/angstrom^3",
+      "pressure_conversion": 160.2177,
+      "boltzmann_eV_per_K": 8.617343e-05
+    }
+  },
+  "fixtures": {
+    "statistics": {
+      "description": "Stable periodic NEP diamond, 3x3x3 conventional cells, 216 atoms; lattice and coordinates both scaled from a=3.57 angstrom by 1.0023 for the B0 near-zero-pressure reference state.",
+      "cells": [
+        3,
+        3,
+        3
+      ],
+      "atoms": 216,
+      "lattice_constant_angstrom": 3.578211,
+      "pbc": [
+        true,
+        true,
+        true
+      ],
+      "target_temperature_K": 300,
+      "target_pressure_GPa": 0.0,
+      "initial_velocity": "Independent explicit Gaussian components; Python random.Random(seed).gauss; mass=12.011; kB=8.617343e-5 eV/K; velocity conversion=10.18051; no COM removal or constraints.",
+      "seeds": [
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223,
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232
+      ],
+      "model_xyz_sha256_by_seed": {
+        "201": "91a7c56e4902720ed286f7bca76c1918b1907eedb14579610b65f7e73dda561e",
+        "202": "bbb21076d6c304199718548d12ba1c5757220b011be178ab38591cac203cacb6",
+        "203": "d215c06a77e89538efe7ea9667e93ddaa2d8f0d867124f0d55052ab16df16bed",
+        "204": "48d4453f89dce1d036b3069d3c782eec503939c52299e1beb41b4adfe3a3f21a",
+        "205": "8702e00a4201dc491e22c042c5ea89d2858d4225f2c2b34ac05cf0b896a055a7",
+        "206": "6a47d74ce3f7a180a85c30c1b9978737b2d568ea21b2fa184045b01ef17c8145",
+        "207": "5b7de9917148de9af9bd5b7454349684e51847e82ce6027ccec84d3c26ff981a",
+        "208": "3217c670bec30057ed344502504d6e83ef8cf2f76964d50185cc9b49d7f5bcdf",
+        "209": "42b8339a11a563a3d96e194f85a722b041ded5f04c02bfddc06a5749ac895d27",
+        "210": "09fd352c33118450a370526fe596621c0dae12efad946ffc08112d2636b2db48",
+        "211": "46d9eb9308ee4463fa1b801bc3eacdfdf34ab0bb038ef33b159b1b9d157687d6",
+        "212": "8af37b05f5d99b2c8ae33fd8aacb8b14cc8901f4a89feff7169e3061213419c1",
+        "213": "e1d161b51bd79a7295af54699de3dc46d6ee0a79f7cd2e5d793ff4f64ad88437",
+        "214": "e6c4def3f107040a24968852f6e07a5c75a420ad984066bc16eeab7c05afbefc",
+        "215": "5c04710eebb08fa7c2dca3f1611ad75c23d46d26141d52bc8ca1054e9d0ba505",
+        "216": "2b23fe00c7231cebb89aa9217ae5081161350c5872c4018b7dcce9ee5fddb94a",
+        "217": "902ae17f48daea4c70dab47203062d69487059afb13a0f94700bffc5a0205d28",
+        "218": "b1cf91e5cef2586cea14182c5022a0ebf33f6870363c5735830c0c9d88151864",
+        "219": "fd737b05ab03c06cfd967eb2670354e224f4d10088c23a77338851c62cb8c9c2",
+        "220": "654f37333df5a6435571cc6f25e58134998ed5845f11053ab7bda940bcdd3640",
+        "221": "c9947af881b8cca1ce1bd552b619f0177fce361cbfa7d107d2405029cc32037c",
+        "222": "343fdf4b04fbaa69097c6ca2ddc16c7abdca7d698e18a9777ea09b1b78822701",
+        "223": "857ffb010639af6c0a066f6b9ae7d8907c79802ceb4ef8ead9b26ad001cf22bc",
+        "224": "ea84f22515b578fabf938c3c6cbff0dad4953a2e1582bfdd63376dbe88c07bee",
+        "225": "9f1d4bbe58427da9265f232ce8534486375f38978280b7b9b779481c5a0db9c6",
+        "226": "f28b5394b28dab16b33e5be76a9f67887d9c6bc40830929dc4f40c23603af1b5",
+        "227": "599e8aa0013c6377e46c0301125d6ed8931b3d5bd26f0f4b624e2926e3ea474d",
+        "228": "1377cf3ae7a699cf36bdb6d079ff096152487fcde497277d103a0af0cce8bbc0",
+        "229": "be035a4713d478b67e08227896a1355df04cee390a242858b4ab1ae4319339d4",
+        "230": "9d843fa664f82dc08733916e3802e5659cbc157fbfb47c0bc80dd2108326e615",
+        "231": "1f63852a33a1360b07c081136a749e8059e7c9e552037aaf616de464cec5d769",
+        "232": "95de659883b1fd98d40cf86cbb47b11240fd7c6380dafa043c4c8930925b19f5"
+      },
+      "run_input": {
+        "time_step_fs": 0.25,
+        "ensemble_line": "ensemble npt_scr 300 300 40 0 425 200",
+        "dump_thermo_every_steps": 1,
+        "dump_xyz": false,
+        "dump_restart_every_steps": 0,
+        "steps_by_look": [
+          160000
+        ]
+      }
+    },
+    "ber_golden_small": {
+      "description": "Same near-zero periodic diamond and explicit-velocity generation as statistics fixture, 216 atoms; 200-step Ber golden.",
+      "reuse_statistics_models": true
+    },
+    "ber_golden_large": {
+      "description": "Periodic diamond 7x6x6, 2016 atoms, same 1.0023 scale and explicit velocity seeds; one 200-step Ber case to exercise new cache invalidation at larger size.",
+      "cells": [
+        7,
+        6,
+        6
+      ],
+      "atoms": 2016,
+      "lattice_constant_angstrom": 3.578211,
+      "seeds": [
+        101
+      ],
+      "model_xyz_sha256_by_seed": {
+        "101": "48e8029e9b2d8dc8aaef8a996d69cb1e64b381f0b670c40c17b7c8040b699366"
+      }
+    },
+    "compressed": {
+      "description": "Near-zero diamond reference state compressed isotropically by 0.5%; registered by B0 to raise mean diagonal pressure about +6.49 GPa.",
+      "cells": [
+        3,
+        3,
+        3
+      ],
+      "atoms": 216,
+      "relative_scale_from_reference": 0.995,
+      "seeds": [
+        101
+      ],
+      "model_xyz_sha256_by_seed": {
+        "101": "72392f9580a03054c41b283dd23512f500495860115c8a4b442dc7e8184044db"
+      }
+    },
+    "expanded": {
+      "description": "Near-zero diamond reference state expanded isotropically by 0.5%; registered by B0 to lower mean diagonal pressure about -6.25 GPa.",
+      "cells": [
+        3,
+        3,
+        3
+      ],
+      "atoms": 216,
+      "relative_scale_from_reference": 1.005,
+      "seeds": [
+        101
+      ],
+      "model_xyz_sha256_by_seed": {
+        "101": "2899d9dd8a7d6eec88e1c2cf1a724bdcabfb4fb84a882d24dff92c69daa8eff4"
+      }
+    },
+    "m2a_eligible": {
+      "description": "Existing 18x6x6 periodic diamond, 5184 atoms; use only to prove explicit M2a-eligible NPT request remains routed to M1, not for statistical sampling.",
+      "cells": [
+        18,
+        6,
+        6
+      ],
+      "atoms": 5184,
+      "existing_fixture_reference": "tests/thermostats/manifest.json geometries.domain",
+      "model_xyz_sha256_by_seed": {
+        "101": "09fea7014025db1251ecc032c0349ab5cb3112aa3184214d477f345a477eb8e9"
+      }
+    },
+    "negative_models": {
+      "negative-nonperiodic": {
+        "description": "216-atom diamond changed to pbc T T F for explicit NPT unsupported-box rejection.",
+        "atoms": 216,
+        "model_xyz_sha256": "86ffbf2e433d88c113e24875ad2a4920df85207bc5b7024ca3d6ca4c914eb8f9"
+      },
+      "negative-triclinic": {
+        "description": "216-atom diamond with xy tilt 0.1 angstrom for explicit nonorthogonal NPT rejection.",
+        "atoms": 216,
+        "model_xyz_sha256": "8ea1b2641ca9ccf3b0aa2916bc8096d35b86a930390c2cc1fda3dd838d249e35"
+      },
+      "zero-ke": {
+        "description": "Two noninteracting stationary carbon atoms in a 30 angstrom periodic cube; exercises zero kinetic energy guard without force or periodic-contact ambiguity.",
+        "atoms": 2,
+        "model_xyz_sha256": "94c0af44df24ea4d011809ce7a9fac4e41476dcc36baba9fc67611b98a29f613"
+      }
+    }
+  },
+  "b3_scr_statistics": {
+    "ensemble": "npt_scr",
+    "configuration": {
+      "temperature_K": 300,
+      "target_pressure_GPa": 0.0,
+      "bulk_modulus_control_GPa": 425.0,
+      "dt_fs": 0.25,
+      "Tdamp_steps": 40,
+      "tau_p_steps": 200,
+      "communication_backend": "HostStaged",
+      "ranks": 1,
+      "thermo_interval_steps": 1,
+      "trajectory_interval_steps": null,
+      "box_control_B_is_not_material_bulk_modulus": true
+    },
+    "seeds": [
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      210,
+      211,
+      212,
+      213,
+      214,
+      215,
+      216,
+      217,
+      218,
+      219,
+      220,
+      221,
+      222,
+      223,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232
+    ],
+    "candidate_conditions_base_dt": [
+      {
+        "ranks": 1,
+        "backend": "HostStaged"
+      }
+    ],
+    "candidate_conditions_half_dt": [
+      {
+        "ranks": 1,
+        "backend": "HostStaged"
+      }
+    ],
+    "candidate_seed_environment": "DMGMD_ENSEMBLE_SEED=<registered initial-model seed>",
+    "reference_rng_source": "std::chrono::system_clock::now().time_since_epoch().count() in release initialize_rng; verify pinned executable disassembly calls system_clock::now",
+    "reference_job_launch_policy": "Launch each reference job as an independent process; serialize job starts and require distinct recorded UTC start seconds as conservative isolation evidence. Sampling jobs may run concurrently after launch. UTC/PID do not observe or establish GPUMD internal RNG seeds.",
+    "budget_steps_per_seed": [
+      160000
+    ],
+    "half_dt": {
+      "enabled": true,
+      "dt_fs": 0.125,
+      "Tdamp_steps": 80,
+      "tau_p_steps": 400,
+      "budget_steps_per_seed": [
+        320000
+      ],
+      "same_physical_damping_and_sampling_duration": true
+    },
+    "burn_in": "Discard first 10% of each single full-budget chain once for its one final look; there are no interim or prefix looks in this independent confirmation.",
+    "block_length_steps": {
+      "dt_0.25_fs": 500,
+      "dt_0.125_fs": 1000,
+      "physical_block_length_fs": 125
+    },
+    "minimum_complete_blocks_per_seed": 32,
+    "minimum_pooled_effective_samples_per_engine_and_metric": 1000,
+    "effective_sample_metrics": [
+      "mean",
+      "squared_deviation/variance"
+    ],
+    "statistics": {
+      "temperature_mean": "Candidate-vs-GPUMD mean difference must be within 2% of 300 K; compare with the registered CI. Also report each engine's absolute offset from 300 K separately. Canonical K variance oracle is Var(K)=3N*(kB*T)^2/2 for 3N unconstrained momentum degrees of freedom. Temperature is reported using product's 3N definition; do not invent an instantaneous target-temperature variance.",
+      "pressure_mean": "Candidate-vs-GPUMD mean difference CI must lie within +/-0.1 GPa using independent-seed estimates; also report each engine's offset from Ptarget separately.",
+      "volume_mean": "Candidate-vs-GPUMD mean difference CI must lie within +/-0.25% of the GPUMD reference mean; report each engine's mean and absolute target-theory diagnostics separately.",
+      "variance": "For T, P and V compare candidate/reference variance ratios; allowed interval [0.85,1.15].",
+      "distribution": "For T, P, V report empirical CDF sup-distance and 5th/50th/95th quantiles. V CDF sup-distance must be <=0.15 as an auxiliary equivalence criterion; provide block/seed uncertainty intervals and normalized quantile differences. Do not report an iid KS p-value.",
+      "reference_comparison": "New GPUMD reference jobs are independent SCR release runs, one per seed/profile, identical explicit model.xyz/run.in/potential bytes; system_clock release RNG is not seeded by registered model seed and is never assumed stepwise paired. Candidate runs use DMGMD_ENSEMBLE_SEED=<registered seed>. The same seed pairs initial model only for P1-GPUMD; MPI-P1 bridge additionally requires same DMGMD binary, model, run, potential, timestep, seed, root-owned RNG initialization/draw call order and shared Gaussian stream, evidenced from locked source and records. If source/build audit cannot prove this, bridge conclusions are disabled and no PASS may be inferred by this protocol.",
+      "same_condition_gate": "Only one final look per registered condition. P1-vs-GPUMD direct primary and MPI-vs-P1 paired bridge combined by registered equations; all final combined mean and variance-ratio CIs must be wholly inside original bounds. Volume empirical CDF triangle sum must be <=0.15. A precise interval disjoint from bounds is FAIL; otherwise insufficient precision is INCONCLUSIVE. No new data may be pooled with original matrix.",
+      "confidence": "Each primary/bridge component uses z=2.64 (two-sided nominal alpha=0.0082906027). Endpoint composition uses Bonferroni; nominal composite coverage is at least 1-2*alpha=0.9834188 only if the component Student-t/bootstrap intervals attain their nominal coverage. The intervals are approximate; this is not a finite-sample unconditional guarantee and not a joint guarantee over the full matrix.",
+      "no_posthoc_changes": "Seeds, sample budgets, look count, input hashes, z, thresholds, bootstrap, block sizes, bridge equations and bridge eligibility are frozen before sampling. Preserve failures/inconclusive. Do not alter or pool the original preregistered study."
+    },
+    "formula_fixture": {
+      "separate_from_sampling": true,
+      "gaussian_source": "Fixed registered scalar(s), injected directly into pure host formula fixture; never use GPUMD release RNG or production RNG for this test.",
+      "volume_factor": "1 - pc*(P_target-P_inst) + sqrt((2/3)*pc*kB*T/V)*gaussian",
+      "pc_definition": "PRESSURE_UNIT_CONVERSION/(3*tau_p_steps*B_GPa)",
+      "assertions": [
+        "formula value and operation order",
+        "units and conversion applied once",
+        "finite positive factor guard",
+        "BDP velocity factor independently checked",
+        "zero-noise branch when B_GPa>2000 per compatibility rule"
+      ]
+    },
+    "independent_physics": {
+      "EOS_control_parameter": "425 GPa is only the input barostat control modulus.",
+      "separate_response_evidence": "Measure a static pressure-volume EOS slope on the same NEP potential/diamond around the chosen state; report fitted range, slope, uncertainty and input hashes independently of control B.",
+      "independent_NPT_oracle": "If candidate and GPUMD agree but disagree with independently verified target theory, preserve both results and classify theory check INCONCLUSIVE; use LAMMPS or a solvable independent sampler only if needed to diagnose a reproducible discrepancy."
+    },
+    "bridge_conditions_base_dt": {
+      "seed_set": [
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208
+      ],
+      "conditions": [
+        {
+          "ranks": 2,
+          "backend": "HostStaged"
+        },
+        {
+          "ranks": 2,
+          "backend": "CudaAware"
+        },
+        {
+          "ranks": 4,
+          "backend": "HostStaged"
+        },
+        {
+          "ranks": 4,
+          "backend": "CudaAware"
+        }
+      ],
+      "scope": "Only confirmation_registration.bridge_profile; not a 32-seed primary condition."
+    },
+    "scope_note": "This copied statistical contract is consumed by the frozen primary analyzer for thresholds/helpers only. The actual condition matrix and budgets are defined solely by confirmation_registration; unrelated original B2/B4 fixture and runner sections were omitted from this independent manifest."
+  },
+  "budget": {
+    "primary_base_engine_steps_each_engine": 5120000,
+    "primary_half_engine_steps_each_engine": 10240000,
+    "bridge_mpi_engine_steps": 5120000,
+    "candidate_engine_steps_total": 20480000,
+    "gpumd_reference_engine_steps_total": 15360000,
+    "all_engine_steps_total": 35840000,
+    "planned_jobs": {
+      "p1_candidate": 64,
+      "gpumd_reference": 64,
+      "mpi_bridge_candidate": 32,
+      "total": 160
+    },
+    "scope": "Single-run full budgets: P1 HostStaged primary base and half profiles for seeds 201–232; P2/P4 HostStaged/CudaAware bridge at base dt for seeds 201–208. GPUMD reference chains are shared within each timestep profile. No original-matrix trajectory is repeated or pooled.",
+    "total_independent_full_chains": 160,
+    "chain_count_equation": "32 seeds × 2 engines × 2 primary profiles + 8 bridge seeds × 4 MPI conditions = 160 chains; bridge reuses the 8 P1 base anchor chains."
+  },
+  "input_locking": {
+    "files_to_hash_before_sampling": [
+      "tests/npt/manifest.json (original preregistration; read-only provenance)",
+      "all confirmation model.xyz files for seeds 201–232",
+      "base and half run.in files",
+      "tests/baseline/inputs/potentials/nep_C.txt",
+      "candidate binary and source digest",
+      "preserved GPUMD release binary and RNG evidence",
+      "independent-confirmation-manifest.json",
+      "independent-confirmation-protocol.md",
+      "primary analyzer, shared statistics helper, native ACF helper",
+      "paired analyzer, paired math, and all integration/semantic tests"
+    ],
+    "manifest_self_hash_recorded_in_results": true,
+    "input_generator": "Reproduce the deterministic conventional diamond basis and Python random.Random(seed).gauss procedure used by tests/thermostats/run_thermostats.py::model_text; apply scale 1.0023 to both lattice and coordinates; use 1+scaled fractional Cartesian coordinates and .17g serialization. Verify each generated model hash against fixture map above before running.",
+    "baseline_tolerances_source": "tests/baseline/manifest.json; immutable for this comparison",
+    "statistics_xyz_policy": "No trajectory.xyz/dump_xyz during registered SCR chains. The analysis consumes thermo.out only; B2/B4 output/restart diagnostics are outside this independent confirmation.",
+    "confirmation_model_xyz_sha256_by_seed": {
+      "201": "91a7c56e4902720ed286f7bca76c1918b1907eedb14579610b65f7e73dda561e",
+      "202": "bbb21076d6c304199718548d12ba1c5757220b011be178ab38591cac203cacb6",
+      "203": "d215c06a77e89538efe7ea9667e93ddaa2d8f0d867124f0d55052ab16df16bed",
+      "204": "48d4453f89dce1d036b3069d3c782eec503939c52299e1beb41b4adfe3a3f21a",
+      "205": "8702e00a4201dc491e22c042c5ea89d2858d4225f2c2b34ac05cf0b896a055a7",
+      "206": "6a47d74ce3f7a180a85c30c1b9978737b2d568ea21b2fa184045b01ef17c8145",
+      "207": "5b7de9917148de9af9bd5b7454349684e51847e82ce6027ccec84d3c26ff981a",
+      "208": "3217c670bec30057ed344502504d6e83ef8cf2f76964d50185cc9b49d7f5bcdf",
+      "209": "42b8339a11a563a3d96e194f85a722b041ded5f04c02bfddc06a5749ac895d27",
+      "210": "09fd352c33118450a370526fe596621c0dae12efad946ffc08112d2636b2db48",
+      "211": "46d9eb9308ee4463fa1b801bc3eacdfdf34ab0bb038ef33b159b1b9d157687d6",
+      "212": "8af37b05f5d99b2c8ae33fd8aacb8b14cc8901f4a89feff7169e3061213419c1",
+      "213": "e1d161b51bd79a7295af54699de3dc46d6ee0a79f7cd2e5d793ff4f64ad88437",
+      "214": "e6c4def3f107040a24968852f6e07a5c75a420ad984066bc16eeab7c05afbefc",
+      "215": "5c04710eebb08fa7c2dca3f1611ad75c23d46d26141d52bc8ca1054e9d0ba505",
+      "216": "2b23fe00c7231cebb89aa9217ae5081161350c5872c4018b7dcce9ee5fddb94a",
+      "217": "902ae17f48daea4c70dab47203062d69487059afb13a0f94700bffc5a0205d28",
+      "218": "b1cf91e5cef2586cea14182c5022a0ebf33f6870363c5735830c0c9d88151864",
+      "219": "fd737b05ab03c06cfd967eb2670354e224f4d10088c23a77338851c62cb8c9c2",
+      "220": "654f37333df5a6435571cc6f25e58134998ed5845f11053ab7bda940bcdd3640",
+      "221": "c9947af881b8cca1ce1bd552b619f0177fce361cbfa7d107d2405029cc32037c",
+      "222": "343fdf4b04fbaa69097c6ca2ddc16c7abdca7d698e18a9777ea09b1b78822701",
+      "223": "857ffb010639af6c0a066f6b9ae7d8907c79802ceb4ef8ead9b26ad001cf22bc",
+      "224": "ea84f22515b578fabf938c3c6cbff0dad4953a2e1582bfdd63376dbe88c07bee",
+      "225": "9f1d4bbe58427da9265f232ce8534486375f38978280b7b9b779481c5a0db9c6",
+      "226": "f28b5394b28dab16b33e5be76a9f67887d9c6bc40830929dc4f40c23603af1b5",
+      "227": "599e8aa0013c6377e46c0301125d6ed8931b3d5bd26f0f4b624e2926e3ea474d",
+      "228": "1377cf3ae7a699cf36bdb6d079ff096152487fcde497277d103a0af0cce8bbc0",
+      "229": "be035a4713d478b67e08227896a1355df04cee390a242858b4ab1ae4319339d4",
+      "230": "9d843fa664f82dc08733916e3802e5659cbc157fbfb47c0bc80dd2108326e615",
+      "231": "1f63852a33a1360b07c081136a749e8059e7c9e552037aaf616de464cec5d769",
+      "232": "95de659883b1fd98d40cf86cbb47b11240fd7c6380dafa043c4c8930925b19f5"
+    },
+    "confirmation_run_in_sha256": {
+      "base_dt_0.25_160000": "8e628517e5ad6997fd6548cecaeb5d4d0fd79fea36ce4df024cd363e171dab29",
+      "half_dt_0.125_320000": "b30e193eef65c963d5b5a3f7be4b0d6291416a7f7260fc700e471dadfbdd45fa"
+    }
+  },
+  "confirmation_registration": {
+    "status": "APPROVED_INDEPENDENT_CONFIRMATION",
+    "independent_of_original_matrix": true,
+    "original_results_policy": "Retain all original registered results and execution deviations unchanged; no observations from original matrix are pooled into confirmation estimators.",
+    "seed_population": {
+      "seeds": [
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223,
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232
+      ],
+      "assumption": "The 32 preregistered initial-model seeds are exchangeable independent clusters from the generator-defined initial-condition population. Primary cohorts use all 32. Bridge cohort uses the preselected subset 201–208; it shares P1 observations with primary, so all composite coverage relies on Bonferroni and does not assume component independence."
+    },
+    "primary_profiles": [
+      {
+        "cohort": "primary_base",
+        "dt_fs": 0.25,
+        "steps": 160000,
+        "tdamp_steps": 40,
+        "tau_p_steps": 200,
+        "seed_set": [
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          207,
+          208,
+          209,
+          210,
+          211,
+          212,
+          213,
+          214,
+          215,
+          216,
+          217,
+          218,
+          219,
+          220,
+          221,
+          222,
+          223,
+          224,
+          225,
+          226,
+          227,
+          228,
+          229,
+          230,
+          231,
+          232
+        ],
+        "candidate": {
+          "ranks": 1,
+          "backend": "HostStaged"
+        },
+        "reference": "GPUMD SCR, same seed-specific initial model, independent random stream",
+        "one_final_look": true,
+        "burn_fraction": 0.1,
+        "block_steps": 500,
+        "block_fs": 125
+      },
+      {
+        "cohort": "primary_half",
+        "dt_fs": 0.125,
+        "steps": 320000,
+        "tdamp_steps": 80,
+        "tau_p_steps": 400,
+        "seed_set": [
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          207,
+          208,
+          209,
+          210,
+          211,
+          212,
+          213,
+          214,
+          215,
+          216,
+          217,
+          218,
+          219,
+          220,
+          221,
+          222,
+          223,
+          224,
+          225,
+          226,
+          227,
+          228,
+          229,
+          230,
+          231,
+          232
+        ],
+        "candidate": {
+          "ranks": 1,
+          "backend": "HostStaged"
+        },
+        "reference": "GPUMD SCR, same seed-specific initial model, independent random stream",
+        "one_final_look": true,
+        "burn_fraction": 0.1,
+        "block_steps": 1000,
+        "block_fs": 125
+      }
+    ],
+    "bridge_profile": {
+      "cohort": "bridge_base",
+      "dt_fs": 0.25,
+      "steps": 160000,
+      "tdamp_steps": 40,
+      "tau_p_steps": 200,
+      "seed_set": [
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208
+      ],
+      "candidate_conditions": [
+        {
+          "ranks": 2,
+          "backend": "HostStaged"
+        },
+        {
+          "ranks": 2,
+          "backend": "CudaAware"
+        },
+        {
+          "ranks": 4,
+          "backend": "HostStaged"
+        },
+        {
+          "ranks": 4,
+          "backend": "CudaAware"
+        }
+      ],
+      "anchor": "Reuse the identical P1 HostStaged candidate full base chains for seeds 201–208 from primary_base; do not rerun them. No half-dt MPI bridge.",
+      "pairing_prerequisites": [
+        "same executable SHA",
+        "same per-seed model.xyz/run.in/nep.txt SHA",
+        "same timestep and full time grid",
+        "same registered ensemble seed on every rank",
+        "source audit proves rank-0 owns the same initialized RNG and every profile consumes identical Gaussian calls; one shared factor is broadcast to ranks",
+        "records preserve input/executable hashes, rank/backend, seed, thermo hash and RNG evidence"
+      ],
+      "if_prerequisites_fail": "Do not use bridge data to infer a pass. Require a newly reviewed direct MPI-vs-GPUMD confirmation design before sampling.",
+      "burn_fraction": 0.1,
+      "block_steps": 500,
+      "block_fs": 125,
+      "scope_note": "Base timestep uses the same 500-step/125-fs blocks and 10% burn as primary_base."
+    },
+    "confidence_composition": {
+      "old_reference_z": 2.394,
+      "old_two_sided_alpha": 0.016665748791226766,
+      "component_z": 2.64,
+      "component_two_sided_alpha": 0.008290602722072082,
+      "bonferroni_sum_alpha": 0.016581205444144164,
+      "minimum_component_composite_coverage": 0.9834187945558558,
+      "coverage_claim": "Nominal per metric/profile/bridge comparison, conditional on the component Student-t/bootstrap intervals attaining their nominal coverage. Bonferroni union bound does not require component independence. The component intervals are approximate; no unconditional finite-sample coverage guarantee or full-matrix joint 95% claim.",
+      "mean": "combined point estimate = primary P1−GPUMD + bridge MPI−P1; combined CI = [Lprimary+Lbridge, Uprimary+Ubridge].",
+      "variance_ratio": "combined point estimate = (Var(P1)/Var(GPUMD))*(Var(MPI)/Var(P1)); combined CI = [Lprimary*Lbridge,Uprimary*Ubridge] for positive component ratio intervals. Each marginal component interval uses the same global unbiased variance estimator and frozen hierarchical seed/block bootstrap estimator; bridge resamples seed clusters then matched within-seed time-block indices.",
+      "cdf": "Use exact empirical ECDF triangle bound D(MPI8,P1_same8)+D(P1_same8,P1_full32)+D(P1_full32,GPUMD_full32) <= 0.15. P1_same8 is literally the corresponding subset of P1_full32; do not omit the subset-to-full empirical term. This is a deterministic bound on these pooled empirical ECDFs, not a population-sup confidence interval."
+    },
+    "unchanged_final_bounds": {
+      "temperature_mean_K": [
+        -6,
+        6
+      ],
+      "pressure_mean_GPa": [
+        -0.1,
+        0.1
+      ],
+      "volume_mean": "±0.25% of GPUMD full-32 reference mean",
+      "variance_ratio": [
+        0.85,
+        1.15
+      ],
+      "volume_ecdf_triangle_sum_max": 0.15,
+      "volume_mean_relative": 0.0025,
+      "cdf_triangle_interpretation": "If the empirical triangle sum is <=0.15, the registered finite-sample upper bound passes. If it exceeds 0.15, this bound has not established the criterion: classify INCONCLUSIVE, not FAIL; do not infer the direct empirical MPI-vs-GPUMD distance exceeds 0.15."
+    },
+    "precision_gates": {
+      "pooled_ess_per_engine_metric_mean": 1000,
+      "pooled_ess_per_engine_metric_squared_deviation": 1000,
+      "complete_blocks_per_seed": 32,
+      "tail_policy": "Every burn-trimmed series length must be an exact multiple of block length; reject unregistered remainder."
+    },
+    "pilot_power_simulation": {
+      "pilot_only": true,
+      "source_records": [
+        "records-base-p1-hoststaged-look80k.json",
+        "records-half-p1-hoststaged-look160k.json"
+      ],
+      "new_data_used": false,
+      "simulation_seed": 2026110303,
+      "replicates": 50000,
+      "method": "Reproducible script reads and SHA-checks only the original eight-seed pilot thermo records, uses the registered thermo column mapping, centers the eight seed-level full-series differences at true zero, resamples 32 clusters 50,000 times using fixed seed, and takes the larger of the df=31 seed t half-width and projected block t half-width. Variance log-width uses the old analyzer percentile CI at z=2.394, scales it by 2.64/2.394 for the new component confidence, then divides by sqrt(8) exposure. This is a precision projection, not a bootstrap coverage or PASS guarantee; CDF power is not simulated.",
+      "reproducible_script_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/pilot_power_simulation.py",
+      "reproducible_script_sha256": "fb2afa470ebbbbfb0c5cd055b9627e39a956ca1369e899e7d12b100d4698b86f",
+      "output_json_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/pilot-power-simulation.json",
+      "output_json_sha256": "bdea5d0f1990f03d3c17527b6c05507674366a86789c6c5349a05692a4594a53",
+      "stdout_log_path": "/tmp/dmgmd-b0-b4-20261103/npt-b3/pilot-power-simulation.log",
+      "stdout_log_sha256": "bdea5d0f1990f03d3c17527b6c05507674366a86789c6c5349a05692a4594a53"
+    },
+    "power_estimates_at_true_zero": {
+      "base": {
+        "temperature_mean_pass": 1.0,
+        "pressure_mean_pass": 0.95798,
+        "volume_mean_pass": 1.0,
+        "variance_ratio_log_ci_halfwidth_pressure_projected": 0.04176247925788065,
+        "variance_ratio_log_ci_halfwidth_volume_projected": 0.04148164824290027,
+        "interpretation": "50,000 replicates from the frozen pilot-only script; conditional on true mean difference zero and pilot-like dispersion."
+      },
+      "half": {
+        "temperature_mean_pass": 1.0,
+        "pressure_mean_pass": 0.93828,
+        "volume_mean_pass": 1.0,
+        "variance_ratio_log_ci_halfwidth_pressure_projected": 0.045835172994492614,
+        "variance_ratio_log_ci_halfwidth_volume_projected": 0.045236982703139784,
+        "interpretation": "50,000 replicates from the frozen pilot-only script; conditional on true mean difference zero and pilot-like dispersion."
+      },
+      "limitation": "Only eight old pilot seed clusters inform dispersion; approximate conditional design power under a true-zero equivalence scenario, not a prediction or guarantee for observed nonzero effects. It does not simulate the CDF triangle criterion."
+    },
+    "analysis_software_identity": {
+      "status": "APPROVED_INDEPENDENT_CONFIRMATION; approved implementation/source identities were independently reviewed; formal execution freeze remains required before launch.",
+      "primary_analyzer": {
+        "path": "tests/npt/analyze_statistics.py",
+        "sha256": "da0b26270c5c9330deec1b30c96179d516a5b0c2f95b973e6431cd2e77520496"
+      },
+      "shared_statistics_primitives": {
+        "path": "tests/thermostats/sample_statistics.py",
+        "sha256": "0b85ecee1b7ec7aee19d5b350ec5bdc7a5e23d635874843e68a50aa5faee6b67"
+      },
+      "native_acf_helper": {
+        "path": "tests/thermostats/autocorrelation.cpp",
+        "sha256": "3453c32097ae4e80e8bbcd20fb805159614802bf694a6a32d24ce9cb1c2ac1b9"
+      },
+      "paired_math_draft": {
+        "path": "tests/npt/paired_confirmation_math.py",
+        "sha256": "1653e4151195bdf7ca92e5f7612823a2270563b9f21b22fe2ea144d7ad43dd1a"
+      },
+      "paired_math_tests_draft": {
+        "path": "tests/npt/test_paired_confirmation_math.py",
+        "sha256": "dc9da757bd4173478ffcec8c30b02571c2a433ff603ae82a3f982cb182cbcf2c"
+      },
+      "candidate_binary": {
+        "path": "/tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md",
+        "sha256": "c3c9cd0b81a3f18ebbd8f4379dfbd3dbf929785eb5aa883fa4730b025d70bcdf"
+      },
+      "reference_binary": {
+        "path": "/data/home/zhangyifei/fdata/zhangyifei/newmd/gpumd-reference/src/gpumd",
+        "sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414"
+      },
+      "candidate_source_digest": {
+        "path": "/tmp/dmgmd-b0-b4-20261103/b3-source-digest.sha256",
+        "sha256": "52069b5aca1dc5d3d7b9a674041e814ef3898eb9a6f93d15d6c38653ff5b1c18"
+      },
+      "potential": {
+        "path": "tests/baseline/inputs/potentials/nep_C.txt",
+        "sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623"
+      },
+      "bridge_rng_source_audit": {
+        "path": "tests/npt/bridge-rng-source-audit.json",
+        "sha256": "44d80eae0a60cf52ef72ad0f1f396a598129b6d4dd8f6c38ac459025442c8d4e",
+        "source_digest_sha256": "52069b5aca1dc5d3d7b9a674041e814ef3898eb9a6f93d15d6c38653ff5b1c18"
+      },
+      "bridge_rng_source_audit_status": "Root reviewed and accepted the source-level call-stream premise on 2026-11-03 06:51 UTC; the overall independent confirmation registration was separately approved on 2026-11-03 approximately 07:33 UTC.",
+      "paired_cli": {
+        "path": "tests/npt/analyze_paired_confirmation.py",
+        "sha256": "d6aa17720652673428cf0d2d3f00b00124a43cbdf9beb8258dda95b8ade3efb0"
+      },
+      "paired_integration_tests": {
+        "path": "tests/npt/test_paired_confirmation_integration.py",
+        "sha256": "3ad03fe2a5ba9546e93ce50039069d76ed03b687528e645f14f5c66dda1e2ee5"
+      },
+      "paired_integration_tests_status": "Root-reviewed; 14 CPU semantic/integration tests PASS (log hash recorded in cpu_validation).",
+      "native_acf_helper_executable": {
+        "path": "/tmp/dmgmd-b0-b4-20261103/build-b3/tests/dmgmd_autocorrelation",
+        "sha256": "ffa85c62195c6886c40510024ffd60ecea30531fc0851242208f0fc796db9761"
+      },
+      "native_acf_helper_executable_status": "Exact registered source and executable hashes verified in the approved outer preflight; include them in the final execution freeze.",
+      "cpu_validation": {
+        "test_count": 14,
+        "result": "PASS",
+        "log_path": "/tmp/paired-confirmation-cpu-tests.log",
+        "log_sha256": "fbde680e1301f93910ee988745a12a7f66acab9c1f32404faaf51d188afb6298"
+      }
+    }
+  },
+  "original_preregistration_sha256": "2c39011cf9cab192a801ef95cec427a78933b4ce6b29eb50b618b3f80617da60"
+}

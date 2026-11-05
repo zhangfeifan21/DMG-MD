@@ -6,7 +6,7 @@
 
 参考版本：`../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e`。
 下文 src/force、src/integrate 等路径和行号均指该参考 commit。数值子集在
-src/gpumd_compat 内复现并标 Origin；DMG-MD 的 M2a 域、gid 排序、缓存和 O2/O3 编排
+src/gpumd_compat 内复现并标 Origin；DMG-MD 的 局部域分解域、gid 排序、缓存和 O2/O3 编排
 与参考不同，现行合同见[MPI](../standards/mpi-runtime.md)、[分区](../standards/domain-partition.md)。
 不得把参考全 N launch 当作 DMG-MD 当前行为，构建不使用 reference 源码。
 
@@ -15,8 +15,8 @@ src/gpumd_compat 内复现并标 Origin；DMG-MD 的 M2a 域、gid 排序、缓�
 记号：
 
 - `N`：GPUMD 当前完整体系原子数，也是大多数 SoA/ELL 的 stride。
-- `Nc`：DMG-MD 最终力中心数，M2a 为 owned_count。
-- `Nl`：M2a owned+ghost 可寻址原子数，即 local_count。
+- `Nc`：DMG-MD 最终力中心数，局部域分解为 owned_count。
+- `Nl`：局部域分解owned+ghost 可寻址原子数，即 local_count。
 - ELL 邻居索引：`NL[neighbor_ordinal * N + center]`。
 - 向量 SoA：`x[0:N], y[0:N], z[0:N]`；virial SoA 为 9 个 `N` 分量块。
 - `Rr(a,b)=(rc_radial[a]+rc_radial[b])/2`，`Ra(a,b)` 类似。
@@ -185,7 +185,7 @@ descriptor/partial: [N4, N5)       （owned 两侧各 2 cells ≈ rc）
 - `M2`：owned slab 的全局终点/右段起点；最后 GPU 用 `0` 表示周期 wrap 到数组开头。
 - `M0`：左侧 4-cell 坐标窗口在全局排序数组的起点；第一 GPU 指向数组末端以实现周期 wrap。
 
-`distribute_position` 用 `M0/M1/M2` 从 GPU0 的全局 type/position 和全局 `cell_contents` 打包 local `[0,N3)` (`1249-1280`)；`collect_properties` 用 `M1` 把 local owned 结果散回 GPU0 的全局数组 (`1283-1310`)。
+此处 `M0`/`M1`/`M2` 为参考代码的数组边界，不是运行模式名称。`distribute_position` 用 `M0/M1/M2` 从 GPU0 的全局 type/position 和全局 `cell_contents` 打包 local `[0,N3)` (`1249-1280`)；`collect_properties` 用 `M1` 把 local owned 结果散回 GPU0 的全局数组 (`1283-1310`)。
 
 可映射到 MPI 的仅是概念：
 
@@ -227,19 +227,19 @@ PBC
 → optional dump reduction/copies
 ```
 
-方括号只在 rebuild 时执行。每 1000 次 large-box 计算还会把所有 neighbor counts D2H 并 append `neighbor.out` (`nep.cu:1007-1025`)，产生同步和非显式用户输出；DMG-MD 保留该副作用；M2a 在本次 filter 后经 MAX 只由 root 写，
+方括号只在 rebuild 时执行。每 1000 次 large-box 计算还会把所有 neighbor counts D2H 并 append `neighbor.out` (`nep.cu:1007-1025`)，产生同步和非显式用户输出；DMG-MD 保留该副作用；局部域分解在本次 filter 后经 MAX 只由 root 写，
 具体 call 计数/字节见[MPI 合同](../standards/mpi-runtime.md)。
 
 MPI/CUDA 流必须显式建立以下 happens-before：owned migration 完成 → position halo 到达 → descriptor 完成 → `Fp`/partial 通信完成 → final force → thermo all-reduce → thermostat/measurement。不能依赖默认 stream 和阻塞 D2H 恰好提供的全局同步。
 
 ## 9. 当前复现与后续边界
 
-NEP 数学 helper 与 large-box kernel 已在 compat 复现；M2a 已分离中心/候选域，按 gid
-排序反边，以深位置 halo 闭合依赖。small-box 仍为 P1/M1 路径，未分布式化；NEP_MULTIGPU
+NEP 数学 helper 与 large-box kernel 已在 compat 复现；局部域分解已分离中心/候选域，按 gid
+排序反边，以深位置 halo 闭合依赖。small-box 仍为 P1/全量复制路径，未分布式化；NEP_MULTIGPU
 只作依赖证据，不复用 GPU0 分发/回收编排。
 
 O2 默认关闭的 mask 分区保持 L stride 与每中心顺序；O4 可显式在 O3 begin/finish 之间执行独立 early，
 详见[分区](../standards/domain-partition.md)、[halo 生命周期](../standards/halo-lifecycle.md)。
-M2b 中间场交换仍见[扩展](../plans/domain-decomposition.md)；O4 当前验收见
+分阶段中间场交换仍见[扩展](../plans/domain-decomposition.md)；O4 当前验收见
 [报告](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)，O5 见[重叠计划](../plans/communication-computation-overlap.md)。
 这些是 DMG-MD 的调度扩展，不是锁定 GPUMD reference 的行为。

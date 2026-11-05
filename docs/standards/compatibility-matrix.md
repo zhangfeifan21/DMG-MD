@@ -1,6 +1,6 @@
 # 输入/输出兼容矩阵
 
-类别：现行标准。核对日期：2026-11-02。
+类别：现行标准。核对日期：2026-11-04。NPT 范围以[控压器标准](barostat.md)与[NPT/G-B 验收矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)的已验收状态为准。
 
 GPUMD 参考 commit 为 `9d23496e41319b9e2af5221a7df6285387401d1e`。本页声明 DMG-MD 当前
 支持范围；标为参考证据的 `src/force`、`src/measure` 等路径均在锁定 GPUMD 树中，行号只
@@ -9,11 +9,11 @@ GPUMD 参考 commit 为 `9d23496e41319b9e2af5221a7df6285387401d1e`。本页声�
 
 ## 1. 产品与并行范围
 
-支持普通 NEP4/5 与 NEP-ZBL、单 bead 经典 MD、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`
+支持普通 NEP4/5 与 NEP-ZBL、单 bead 经典 MD、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`，以及已验收的各向同性 `npt_ber`
 及下表命令。恒温器的状态、随机数与统计限制见[系综标准](ensembles.md)。
-P1 恒走 M1；P>1 只支持正交全周期，满足 large-box/slab 半径条件才走 M2a，否则在已支持
-范围内 M1 fallback。详细条件见[MPI runtime](mpi-runtime.md)。
-M2a 支持上述三种 NVT；NPT 和非 NEP 势仍不支持，不能从 NVT 支持外推。
+P1 恒走全量复制模式；P>1 只支持正交全周期，满足 large-box/slab 半径条件才走局部域分解模式，否则在已支持
+范围内 全量复制回退路径。详细条件见[MPI runtime](mpi-runtime.md)。
+局部域分解支持上述三种 NVT；NPT 只支持全量复制路径。`npt_scr` 的 G-B 已通过，但统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点各向同性正交全周期矩阵：base 为 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅 P1/HostStaged。NEP5/ZBL 只有另行记录的短程合同证据；NPT 与非 NEP 势的组合不支持。原注册18个 formal look 的总体 INCONCLUSIVE 历史结论保留；本次有限矩阵不证明普遍严格 NPT 采样、遍历性、RDMA 或跨节点支持。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)及[机器索引](../status/validation/npt-scr-n3-confirmation-index.json)。
 
 每作业恰好一个 potential。GPUMD 的多 potential 追加及方向参数不在 DMG-MD 范围；
 NEP3、temperature/dipole/polarizability/charge 模型均拒绝。白名单以外的命令/ensemble
@@ -115,14 +115,16 @@ ANN num_neurons 0
 | --- | --- | --- |
 | potential | `potential FILE` | 必须在 run 前；第二条 potential 或第三方向参数拒绝 |
 | velocity | `velocity T [ANY_TOKEN SEED]` | T>0 K；四 token 形式读取最后的 int seed，第三 token 不校验 |
-| time_step | `time_step DT [MAX_DISTANCE]` | DT 为有限实数 fs，默认 1 fs；可选最大距离>0 Å，按全局 owned 最大速度限步。NHC/BDP 要求 DT>0 且不接受 MAX_DISTANCE；旧系综负 DT 边界未验收 |
+| time_step | `time_step DT [MAX_DISTANCE]` | DT 为有限实数 fs，默认 1 fs；可选最大距离>0 Å，按全局 owned 最大速度限步。NHC/BDP/NPT 要求固定有限正步长且不接受 MAX_DISTANCE；旧系综负 DT 边界未验收 |
 | ensemble | `ensemble nve` / `ensemble nvt_ber T1 T2 TAU` | T1/T2>0 K，TAU≥1；目标按 step/steps 插值；run 必须已有 ensemble |
 | ensemble | `ensemble nvt_nhc T1 T2 Tdamp` / `ensemble nvt_bdp T1 T2 Tdamp` | 温度有限且>0 K，Tdamp 有限且≥1，单位步数；目标同上。root 链/RNG、段首重置、默认 seed 见[系综标准](ensembles.md) |
+| ensemble | `ensemble npt_ber T1 T2 Tdamp P B tau_p` | 8-token 各向同性；T 为 K，Tdamp/tau_p 为步数，P/B 为 GPa；P 可负、B 有限且>0；仅 NEP/NEP-ZBL、正交全周期全量复制模式，P>1 固定走全量复制回退路径。B2 已验收，见[控压器标准](barostat.md) |
+| ensemble | `ensemble npt_scr T1 T2 Tdamp P B tau_p` | G-B PASS；统计支持仅限上述 NEP-C 单节点冻结矩阵。18个原注册 formal look 的总体 INCONCLUSIVE 历史保留；不外推至其他势、RDMA、跨节点或普遍严格 NPT；见[最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)与[NPT矩阵](../status/validation/npt-validation.md#npt-matrix-20261104) |
 | run | `run STEPS` | int；0/负步数 parser 未拒绝，未作为验证过的动力学兼容行为 |
 | dump_thermo | `dump_thermo INTERVAL` | int>0；thermo.out append |
 | dump_xyz | `dump_xyz INTERVAL FILE [OPTIONS/QUANTITIES]` | interval>0；见下表；同段可多条 |
 | dump_restart | `dump_restart INTERVAL` | int>0；restart.xyz 覆盖 |
-| correct_velocity | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval≥10，method 有效；step%interval==0，含段内 step0；与 NHC/BDP 组合明确拒绝 |
+| correct_velocity | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval≥10，method 有效；step%interval==0，含段内 step0；与 NHC/BDP/NPT 组合明确拒绝 |
 
 无输入 vel 时 root 默认以 300 K 初始化并广播；无 seed 的随机初速不保证重复运行相同。
 显式 velocity 按全局输入顺序生成并做全局动量修正，不是每 rank 独立 RNG。
@@ -152,12 +154,12 @@ NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全�
 
 | 状态 | DMG-MD 后续 run |
 | --- | --- |
-| position/velocity/type/mass/group、box、global_time | 保留；当前不支持动态变盒 |
+| position/velocity/type/mass/group、box、global_time | 保留；NPT 在步末同步更新盒与 wrapped position |
 | potential | 保留同一实例，不支持参考程序的多势追加 |
 | timestep / ensemble | 保留最近配置，直到覆盖 |
-| NHC 链 / BDP RNG 和 Gaussian cache | 每段新建；NHC 质量固定于该段 T1；BDP 相同 seed 重复使用同一随机流 |
+| NHC 链 / BDP 与 SCR RNG、Gaussian cache | 每段新建；NHC 质量固定于该段 T1；固定 seed 的 BDP/SCR 在新段重新开始注册流 |
 | dump / correct_velocity / maximum_distance | 段末清空，后段须重新声明 |
-| ownership/cache | M1 owner 与 M2a epoch 延续；M2a 段首 force 不强制 rebuild |
+| ownership/cache | 全量复制模式的 owner 与局部域分解的 epoch 延续；局部域分解段首 force 不强制 rebuild |
 | 文件 | thermo/单文件 XYZ append，restart 覆盖 |
 
 参考原程序的 fix/move/deform 状态不属于当前支持合同，见[GPUMD 审计](../reference/gpumd-runtime-audit.md)。
@@ -186,8 +188,7 @@ NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全�
 | `sxx syy szz syz sxz sxy` | GPa，virial+kinetic stress / volume 后乘160.2177 |
 | `a,b,c` 9列 | Å，晶格向量逐个输出 |
 
-NVT 的 thermo 是 VV2 后、末次恒温缩放前的值；同一步 XYZ/restart 的速度已经缩放。
-温度定义保持 3N，与采样 fixture 的有效自由度限制分别说明。
+thermo 量在 VV2 后、thermostat/barostat 缩放前采样；NPT 同一步 thermo 压力/virial 是缩放前值，而 box 列与 XYZ/restart 的晶格和 wrapped positions 是缩放后状态。速度只由 thermostat 缩放，barostat 不缩放速度；`unwrapped_position` 不随盒缩放。温度定义保持 3N，与采样 fixture 的有效自由度限制分别说明。精确时点和限制见[控压器标准](barostat.md)。
 
 ### 6.2 `dump_xyz`
 
@@ -208,16 +209,15 @@ NVT 的 thermo 是 VV2 后、末次恒温缩放前的值；同一步 XYZ/restart
 - 无group时：`species:S:1:pos:R:3:mass:R:1:vel:R:3`。
 - 有group时追加 `:group:I:M` 并输出每种 grouping method label。
 - velocity由内部单位除10.18051为 Å/fs。
-- 不保存 time、force、PE、virial、RNG、thermostat state或global ID。
+- 不保存 time、force、PE、virial、RNG、thermostat/barostat state或global ID。
 
 因此它能作为新的 `model.xyz` 状态输入，但代码不会自动重命名/读取。不同 rank 数恢复承诺
-状态字段兼容；NHC/BDP 重建链/RNG，**不提供轨迹连续 restart**。多段 `run` 也重新初始化这些
-隐藏状态；Berendsen/NVE 的既有 snapshot 语义不变，详见[系综标准](ensembles.md#分段输出与-restart)。
+状态字段兼容；NHC/BDP/SCR 重建链/RNG，**不提供轨迹连续 restart**。NPT Berendsen 同样不承诺单长 run、分段 run 和文件 restart 逐步连续，B2 实测差异见[报告](../status/validation/npt-validation.md#npt-ber-20261103)。详见[系综标准](ensembles.md#分段输出与-restart)与[控压器标准](barostat.md)。
 
 ### 6.4 隐式 neighbor.out
 
 ordinary large-box NEP 每 1000 次 force 调用（含 call0）append 一条邻居统计。
-M1 保留 root 副作用，非 root 写本机私有 scratch。M2a 在本次 typewise 表生成后对
+全量复制保留 root 副作用，非 root 写本机私有 scratch。局部域分解在本次 typewise 表生成后对
 各 dependency 域 local max 做两个 MPI_MAX，仅 root 写；空域贡献零。O2 replay 不重复记录。
 完整隔离/记账见[MPI runtime](mpi-runtime.md#io-与-nep_multigpu)。
 

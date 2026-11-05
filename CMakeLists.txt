@@ -169,6 +169,7 @@ add_library(dmgmd_ensemble_control STATIC
   src/ensemble_control.cpp
   src/gpumd_compat/thermostat_nhc.cpp
   src/gpumd_compat/thermostat_svr.cpp
+  src/gpumd_compat/npt_scr.cpp
 )
 target_include_directories(dmgmd_ensemble_control PUBLIC
   ${PROJECT_SOURCE_DIR}/include
@@ -176,6 +177,8 @@ target_include_directories(dmgmd_ensemble_control PUBLIC
 )
 
 add_library(dmgmd_runtime STATIC
+  src/box_control.cpp
+  src/box_control.cu
   src/domain_runtime.cu
   src/mpi_runtime.cu
   src/runtime.cu

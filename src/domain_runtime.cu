@@ -1,4 +1,4 @@
-// M2a local-domain runtime (docs/standards/mpi-runtime.md).
+// local-domain runtime (docs/standards/mpi-runtime.md).
 //
 // Owns the rank-local owned/ghost data plane on top of the pure-CPU layout
 // module (include/dmgmd/domain_layout.hpp) and the p2p MpiRuntime extension:
@@ -10,7 +10,7 @@
 //   * direct migration to the final owner (Alltoall count handshake +
 //     Alltoallv), one step may cross any number of slabs including the
 //     periodic ends;
-//   * the M2a per-step order in docs/standards/mpi-runtime.md:
+//   * the local-domain per-step order in docs/standards/mpi-runtime.md:
 //     correct_velocity -> adaptive dt -> VV1 -> wrap -> unified cache decision
 //     -> refresh or rebuild/migrate -> domain NEP -> VV2 -> thermo ->
 //     thermostat -> output;
@@ -52,7 +52,7 @@ using gpumd_compat::TIME_UNIT_CONVERSION;
 
 // ---------------------------------------------------------------------------
 // Device kernels over the contiguous owned prefix [0, owned_count) with the
-// local stride. Same arithmetic as the M1 list-driven kernels; empty ranges
+// local stride. Same arithmetic as the replicated-full list-driven kernels; empty ranges
 // are short-circuited before launch.
 // ---------------------------------------------------------------------------
 
@@ -329,9 +329,9 @@ struct DomainState {
   std::uint64_t last_layout_gpu_allocations = 0;
   std::uint64_t allocation_origin = 0;
   // Steps executed so far. An unwrapped-tracking enable before the first run
-  // keeps the raw input coordinates as the seed (the M1 path seeds unwrapped
+  // keeps the raw input coordinates as the seed (the replicated-full path seeds unwrapped
   // from its still-unwrapped device copy at that point); a later enable
-  // seeds from the current wrapped positions, exactly like M1.
+  // seeds from the current wrapped positions, exactly like replicated-full.
   std::uint64_t executed_steps = 0;
   // Communication volume of the current step, or null outside the step loop
   // (startup-time records then land in the uncounted volume).
@@ -1634,7 +1634,7 @@ void run_domain_segment(
   const EnsembleController controller(
       ensemble, checked_int(identity.counts.global_count, "global_count"),
       base_time_step, mpi.is_root(),
-      ensemble.kind == EnsembleKind::nvt_bdp
+      (ensemble.kind == EnsembleKind::nvt_bdp || ensemble.kind == EnsembleKind::npt_scr)
           ? parse_ensemble_seed(std::getenv("DMGMD_ENSEMBLE_SEED"))
           : kDefaultEnsembleSeed);
   const auto scale_velocity = [&](double factor) {
@@ -2170,6 +2170,9 @@ void run_local_domain(
 {
   using gpumd_compat::NEP;
   validate_runtime_ensembles(program);
+  if (program_uses_npt(program)) {
+    throw std::runtime_error("run_local_domain rejects NPT ensembles; NPT is M1-only");
+  }
   detail::validate_ensemble_environment(program, mpi);
   const auto total_started = std::chrono::steady_clock::now();
   HostAtoms& identity = model.atoms;  // full replicated host model (static
@@ -2220,7 +2223,7 @@ void run_local_domain(
 
   // Ownership is computed from the raw input coordinates (slab ownership
   // applies the same single wrap adjustment as the wrap kernel, exactly like
-  // the M1 RuntimeOwnership constructor). The owned positions are then
+  // the replicated-full RuntimeOwnership constructor). The owned positions are then
   // wrapped ON DEVICE with the shared wrap_positions kernel so the very
   // first force sees bit-identical coordinates on every path (a host-side
   // wrap can differ by one ULP because nvcc contracts the fractional
@@ -2264,8 +2267,8 @@ void run_local_domain(
                 return a.global_id < b.global_id;
               });
     // Device-side wrap of the owned positions (bit-identical to the wrap the
-    // M1 path performs inside its first force). The unwrapped seed keeps the
-    // raw coordinate, matching M1's enable_unwrapped timing.
+    // replicated-full path performs inside its first force). The unwrapped seed keeps the
+    // raw coordinate, matching replicated-full's enable_unwrapped timing.
     const std::size_t owned_count = owned.size();
     if (owned_count != 0) {
       std::vector<double> host(3 * owned_count);
@@ -2294,7 +2297,7 @@ void run_local_domain(
     }
   }
 
-  // Random velocity initialization is identical to the M1/P1 path: the root
+  // Random velocity initialization is identical to the replicated-full/P1 path: the root
   // fills the full model with the same rand() sequence, the host broadcast
   // replicates it, and every rank extracts its owned slice.
   if (!identity.has_input_velocity) {
@@ -2437,7 +2440,7 @@ void run_local_domain(
         measurements.emplace_back(*dump);
       } else if (const auto* dump = std::get_if<DumpXyzCommand>(&command.data)) {
         if (dump->quantities.unwrapped_position && !state.track_unwrapped) {
-          // Same semantics as M1: unwrapped tracking starts from the current
+          // Same semantics as replicated-full: unwrapped tracking starts from the current
           // wrapped positions of the owned atoms. The device arrays must be
           // sized before the dynamics download reads them.
           state.track_unwrapped = true;
@@ -2445,11 +2448,11 @@ void run_local_domain(
             state.device.unwrapped.resize_reuse(3 * state.local_count());
             state.device.previous_position.resize_reuse(3 * state.local_count());
           }
-          // The raw input coordinates are the pre-run seed (the M1 path
+          // The raw input coordinates are the pre-run seed (the replicated-full path
           // enables unwrapped tracking before its first wrap); capture them
           // before the dynamics download, whose freshly-resized device
           // unwrapped buffer holds no data yet. After steps have run, the
-          // seed is the current wrapped position, exactly like M1.
+          // seed is the current wrapped position, exactly like replicated-full.
           std::vector<std::array<double, 3>> seed;
           seed.reserve(state.layout.owned.size());
           for (const DomainAtomRecord& record : state.layout.owned) {

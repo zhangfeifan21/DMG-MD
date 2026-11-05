@@ -204,6 +204,35 @@ CommandData parse_command(
       require_size(tokens, 2, source, "ensemble nve should have 0 parameters");
       return EnsembleCommand{EnsembleKind::nve, 0.0, 0.0, 0.0};
     }
+    if (tokens[1] == "npt_ber" || tokens[1] == "npt_scr") {
+      const std::string& name = tokens[1];
+      if (tokens.size() > 8) {
+        fail(source, name + ": v1 supports isotropic 8-token syntax only");
+      }
+      require_size(tokens, 8, source,
+                   "ensemble " + name + " should have 6 parameters (isotropic 8-token syntax)");
+      EnsembleCommand command;
+      command.kind = name == "npt_ber" ? EnsembleKind::npt_ber : EnsembleKind::npt_scr;
+      command.initial_temperature = parse_real(tokens[2], source, "initial temperature");
+      command.final_temperature = parse_real(tokens[3], source, "final temperature");
+      command.temperature_coupling = parse_real(tokens[4], source, "temperature coupling");
+      command.target_pressure_gpa = parse_real(tokens[5], source, "target pressure (GPa)");
+      command.bulk_modulus_gpa = parse_real(tokens[6], source, "bulk modulus (GPa)");
+      command.pressure_coupling = parse_real(tokens[7], source, "pressure coupling time");
+      if (command.initial_temperature <= 0.0 || command.final_temperature <= 0.0) {
+        fail(source, "initial and final temperatures should be > 0");
+      }
+      if (command.temperature_coupling < 1.0) {
+        fail(source, "temperature coupling should be >= 1");
+      }
+      if (command.bulk_modulus_gpa <= 0.0) {
+        fail(source, "bulk modulus should be > 0");
+      }
+      if (command.pressure_coupling < 1.0) {
+        fail(source, "pressure coupling time should be >= 1");
+      }
+      return command;
+    }
     if (tokens[1] == "nvt_ber" || tokens[1] == "nvt_nhc" || tokens[1] == "nvt_bdp") {
       require_size(tokens, 5, source, "ensemble " + tokens[1] + " should have 3 parameters");
       EnsembleCommand command;
@@ -327,6 +356,18 @@ void validate_runtime_ensembles(const RunProgram& program)
     }
     if (std::holds_alternative<CorrectVelocityCommand>(command.data)) correction = true;
     if (std::holds_alternative<RunCommand>(command.data)) {
+      const bool npt = selected == EnsembleKind::npt_ber || selected == EnsembleKind::npt_scr;
+      const char* npt_name = selected == EnsembleKind::npt_ber ? "npt_ber" : "npt_scr";
+      if (npt && correction) {
+        fail(command.source, std::string("ensemble ") + npt_name + " does not support correct_velocity");
+      }
+      if (npt && adaptive) {
+        fail(command.source, std::string("ensemble ") + npt_name + " does not support adaptive time_step");
+      }
+      if (npt &&
+          (!std::isfinite(base_time_step) || base_time_step <= 0.0)) {
+        fail(command.source, std::string("ensemble ") + npt_name + " requires a finite positive time_step");
+      }
       if (selected == EnsembleKind::nvt_nhc || selected == EnsembleKind::nvt_bdp) {
         const std::string name = selected == EnsembleKind::nvt_nhc ? "nvt_nhc" : "nvt_bdp";
         if (correction) fail(command.source, "ensemble " + name + " does not support correct_velocity");
@@ -347,15 +388,23 @@ void validate_runtime_ensembles(const RunProgram& program)
       case EnsembleKind::nvt_ber:
       case EnsembleKind::nvt_nhc:
       case EnsembleKind::nvt_bdp:
-        break;
       case EnsembleKind::npt_ber:
-        fail(command.source, "unsupported command 'ensemble npt_ber' in the current version");
       case EnsembleKind::npt_scr:
-        fail(command.source, "unsupported command 'ensemble npt_scr' in the current version");
+        break;
       default:
         fail(command.source, "unsupported ensemble kind in the current version");
     }
   }
+}
+
+bool program_uses_npt(const RunProgram& program) noexcept
+{
+  for (const Command& command : program.commands) {
+    const auto* ensemble = std::get_if<EnsembleCommand>(&command.data);
+    if (ensemble && (ensemble->kind == EnsembleKind::npt_ber ||
+                     ensemble->kind == EnsembleKind::npt_scr)) return true;
+  }
+  return false;
 }
 
 }  // namespace dmgmd

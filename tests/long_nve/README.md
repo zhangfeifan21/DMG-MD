@@ -75,18 +75,18 @@ profile 已固定默认后端：smoke 为 HostStaged，nightly/release 为 HostS
 
 每个 profile/fixture/rank 的预期数据面由 `manifest.json` 的 profile 几何
 `domain_mode_by_rank` 锁定。批量运行器在
-每个 backend 内按 profile 的 rank 顺序执行，并按配置分别校验 M1/M2a；M1 必须报告 `replicated-full`，M2a 必须报告
+每个 backend 内按 profile 的 rank 顺序执行，并按配置分别校验全量复制模式与局部域分解模式；全量复制必须报告 `replicated-full`，局部域分解必须报告
 `local-domain-force-centers`、完整的 step-0 local layout 和无缺失/重叠的 owned 分区。运行时若
-意外 fallback，不能按 M2a 通过。当前模式矩阵为：
+意外 fallback，不能按局部域分解通过。当前模式矩阵为：
 
 | profile | r1 | r2 | r4 | r8 |
 | --- | --- | --- | --- | --- |
-| smoke/base | M1 | 未执行 | 未执行 | 未执行 |
-| nightly（全部体系） | M1 | M2a | M2a | 未执行 |
-| release（全部体系） | M1 | M2a | M2a | M2a |
+| smoke/base | 全量复制模式 | 未执行 | 未执行 | 未执行 |
+| nightly（全部体系） | 全量复制模式 | 局部域分解模式 | 局部域分解模式 | 未执行 |
+| release（全部体系） | 全量复制模式 | 局部域分解模式 | 局部域分解模式 | 局部域分解模式 |
 
 兼容性派生 case 继承其基础 fixture 的模式合同。`LONG_NVE_CONFIG`、config checkpoint 与最终
-JSON 报告同时记录 `domain_mode`，因此 M2a 意外 fallback 时会在对应 stage 立即失败。
+JSON 报告同时记录 `domain_mode`，因此局部域分解意外回退 时会在对应 stage 立即失败。
 
 ## 执行
 
@@ -245,7 +245,7 @@ restart 不保存 global time 且使用文本量化，本测试不要求它与�
 
 ## 运行模式与性能口径
 
-默认模式是 correctness nightly：M1 每张 GPU 执行完整 NEP，M2a 按 owned/dependency center
+默认模式是 correctness nightly：全量复制每张 GPU 执行完整 NEP，局部域分解按 owned/dependency center
 执行 local-domain NEP；验收判据仍只判断正确性，不设 speedup 或 scaling 门槛。
 `DMGMD_COMM_LOG_INTERVAL` 由 profile 设置为 10 或 100；runtime 默认值为 1000。需要逐步
 解析的短 MPI 测试显式设置为 1，不依赖默认值。默认和 `--domain-timing` 模式显式设置

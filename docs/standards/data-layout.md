@@ -5,9 +5,9 @@
 ## 计数、身份与权限
 
 `include/dmgmd/model.hpp` 的 AtomCounts 保存 global_count、owned_count、ghost_count，
-`local_count()=owned_count+ghost_count`。global_count 是元数据，不作为 M2a device stride。
+`local_count()=owned_count+ghost_count`。global_count 是元数据，不作为 局部域分解device stride。
 
-| 域 | M1 replicated-full | M2a local-domain |
+| 域 | 全量复制模式（replicated-full） | 局部域分解路径 |
 | --- | --- | --- |
 | reader HostAtoms | 每 rank 完整 N；owned=N、ghost=0 | bootstrap 从完整输入挑 owned；完整 host identity 仍保留 |
 | device local_count | N | owned + dependency ghosts + coordinate-only ghosts |
@@ -15,8 +15,8 @@
 | ghost | 无；non-owned 仍为 replicated scratch | 两个后缀按 `(source face, source rank, gid)` 排序，携带 image shift 元数据 |
 | NEP producer / final | 全 N scratch / owned 槽位权威 | `[0,owned+dep)` descriptor/partial，`[0,owned)` final force；owned=0 时 producer 为空 |
 
-global_id 为 64-bit 输入行号，跨迁移稳定；local slot 不是身份。M1 的 reader owned=N
-不能误当每 rank 都拥有 N 份物理贡献。M2a manager owner 在 cache epoch 内固定，可能
+global_id 为 64-bit 输入行号，跨迁移稳定；local slot 不是身份。全量复制模式的 reader owned=N
+不能误当每 rank 都拥有 N 份物理贡献。局部域分解manager owner 在 cache epoch 内固定，可能
 暂时不同于当前位置的 geometric owner；只在统一 rebuild 提交迁移。
 
 HostAtoms 当前为 O(N)/rank，整个作业为 O(NP)；root 输出还需 N-sized snapshot，不能据
@@ -67,10 +67,10 @@ f12{x,y,z}[angular_ordinal*L + center]
 
 ## Device 所有者与 buffer
 
-M1 的 DeviceAtoms 位于 `src/runtime.cu`，M2a 的 DomainDeviceAtoms/DomainState 位于
+全量复制模式的 DeviceAtoms 位于 `src/runtime.cu`，局部域分解模式的 DomainDeviceAtoms/DomainState 位于
 `src/domain_runtime.cu`；MPI staging 由 `src/mpi_runtime.cu` 管理。
 
-| buffer | 逻辑尺寸 | M2a 有效域 |
+| buffer | 逻辑尺寸 | 局部域分解有效域 |
 | --- | --- | --- |
 | gid/type | L | 全 local 身份/typewise filter |
 | mass/charge | L | owned 权威；ghost 不积分/thermo/输出 |
@@ -83,7 +83,7 @@ M1 的 DeviceAtoms 位于 `src/runtime.cu`，M2a 的 DomainDeviceAtoms/DomainSta
 | NEP Fp/sums/partial/count/list | L stride | producer 域 `[0,owned+dep)`，candidate `[0,L)` |
 | face send/recv index | face plan 长度 | send 指 owned、recv 指 ghost；与 mapping epoch 绑定 |
 
-M1 的 mass/type/position 为完整副本，VV/thermo 按 owned index list。普通步不再复制 velocity；
+全量复制模式的 mass/type/position 为完整副本，VV/thermo 按 owned index list。普通步不再复制 velocity；
 迁移/修速前先恢复必要复制态。NEP 写全 N scratch，只有 owned 部分用于物理输出。
 
 表中为逻辑 size。L=0 时部分 GPU_Vector capacity 至少为 1，domain API 仍显式接收 L=0，
@@ -97,7 +97,7 @@ LocalLayout、membership、face map、neighbor reference 的 epoch/身份必须�
 才分配；布局变化强制 neighbor 失效、重新取得 view，清零全部逻辑输出。
 缓存证明见[cache-validity](cache-validity.md)。
 
-M2a bootstrap 的首次 wrap 使用共享 device kernel，unwrapped 从 raw 输入播种；host 重算
+局部域分解bootstrap 的首次 wrap 使用共享 device kernel，unwrapped 从 raw 输入播种；host 重算
 wrap 可能因 FMA 差 1 ULP。XYZ/restart 只 gather owned prefix + gid，root 恢复输入顺序；
 ghost 不参与 thermo、控温或直接输出。restart 新进程重新 bootstrap，不复用 epoch。
 

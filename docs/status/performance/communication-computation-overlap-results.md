@@ -1,6 +1,6 @@
 # 通信与计算交叠性能实测
 
-目标：按执行阶段保存 O1 串行基线、O4 固定资源检查、O5 正式性能/成本归因及后续成本分析，保留各次实验的身份、原始证据和结论边界。
+目标：按执行阶段记录 O1 串行基线、O4 固定资源检查、O5 性能/成本归因及后续成本分析的身份、结果和结论边界。
 
 | 日期 | 阶段 | 结论 | 适用范围与限制 |
 | --- | --- | --- | --- |
@@ -9,7 +9,11 @@
 | 2026-10-16、10-19、10-21 | [O5 正式性能与成本归因](#o5-20261021-report) | 完成冻结矩阵、正确性/资源门槛、主性能、诊断和独立采用验证；报告 PASS（本机冻结范围）。 | 不推出自动阈值或跨节点结论；各组样本、旧阶段与误差按原节分别保留。 |
 | 2026-10-21 | [O5 后续成本分析](#o5-cost-20261021-report) | 拆解约 4.6 ms 新增成本，记录模式、kernel 实测和后续优化优先级。 | 成本拆分不能冒充纯单因果归因；时钟/完成误差与小接口成本仍 UNKNOWN/INCONCLUSIVE。 |
 
-以下各节按来源报告分别保留原始身份、环境、实际命令、统计数据、失败与未覆盖边界及原始产物路径；标题层级仅为嵌入整合文档而调整。
+以下各节按来源报告记录执行身份、环境、历史命令、统计数据、失败与未覆盖边界；标题层级仅为嵌入整合文档而调整。
+
+> **保留与适用边界（2026-11-05）：** 本文保存公共共享服务器历史测量的结果、结论和适用限制；这些数据属于历史探索，不作为专用性能服务器的基准参考。按授权清理了对应的忽略目录 `dmgmd-overlap-*`，逐 trial 输出、日志、trace、原始输入副本及重算工具均不再保留。下文残留的旧文件名、路径和命令仅记载当时执行过程，不能用来访问产物或复算。后续专用服务器 benchmark 将单独记录为性能参考；本报告的数字、结论和生产默认不变。
+
+
 
 <a id="o1-20261012-report"></a>
 
@@ -17,7 +21,7 @@
 
 ## O1 串行通信/计算基线（2026-10-12）
 
-类别：实测/实现备忘。范围只到 O1：M2a 原有串行路径的时间线、两后端 A/B 诊断编排、
+类别：实测/实现备忘。范围只到 O1：局部域分解原有串行路径的时间线、两后端 A/B 诊断编排、
 CPU 与固定资源基线；没有 interior/boundary 分区或异步计算。所有速度数字是本机样本，
 不是 O4/O5 的 overlap 收益。
 
@@ -30,7 +34,7 @@ CPU 与固定资源基线；没有 interior/boundary 分区或异步计算。所
   `src/mpi_runtime.cu`，编排/测试为 `tests/benchmark/run_benchmark.py`、
   `run_overlap_rebuild.py`、`test_benchmark.py`，文档为本页、benchmark README、
   `mpi-runtime.md`（当时名为 replicated-mpi.md）、`docs/README.md`。每个 benchmark 输出的 `metadata.json`、
-  [`source-dirty.patch`](../../../dmgmd-overlap-o1-20261012/delivery-standard-proc-20261012-163857/source-dirty.patch)
+  ``source-dirty.patch``
   与 `dirty_patch_sha256` 锁定该次运行时的 tracked diff：
   `ff19cc3d30b51f37be48d065c7d457ec5c6d0a3171ba74df6ef0babbecda9045`。
   新 runner 作为 untracked 文件由运行 metadata 的 `untracked_source_sha256` 或
@@ -87,20 +91,20 @@ unpack 等待口径，不能把本报告与 O3 transfer-wait 直接当传输加�
 ### 验证和实测
 
 环境预检在沙箱内因 UCX `cuda_copy` 不可见而失败；按照 AGENTS.md 在宿主 source
-相同脚本后 [通过](../../../dmgmd-overlap-o1-20261012/gates/preflight-delivery.txt)：
+相同脚本后 `通过`：
 Open MPI/UCX、两 GPU UUID、自检及 device-buffer collective/p2p 均 PASS。
 CPU/解析测试 15 项通过；CTest 8 项通过、沙箱中的 CUDA 专项按环境规则跳过；
-最终二进制四个单 rank [golden case](../../../dmgmd-overlap-o1-20261012/gates/golden-delivery.txt)
-PASS，M2a P=2 [HostStaged/CudaAware 正确性矩阵](../../../dmgmd-overlap-o1-20261012/gates/domain-delivery.txt)
+最终二进制四个单 rank `golden case`
+PASS，局部域分解路径 P=2 `HostStaged/CudaAware 正确性矩阵`
 PASS（含迁移、重建、精确通信字节、timing A/B、oracle）。
-两个 runner 的 [help](../../../dmgmd-overlap-o1-20261012/gates/benchmark-help-delivery.txt)、
-[dry-run](../../../dmgmd-overlap-o1-20261012/gates/benchmark-dry-run-delivery.txt)、
-[重建 help](../../../dmgmd-overlap-o1-20261012/gates/rebuild-help-delivery.txt)、
-[重建 dry-run](../../../dmgmd-overlap-o1-20261012/gates/rebuild-dry-run-delivery.txt)
+两个 runner 的 `help`、
+`dry-run`、
+`重建 help`、
+`重建 dry-run`
 均已实际执行；所有最终 smoke/pilot trial `status=ok`、
 有 C1 时 `cpu_status=ok`，off 与 trace 模式均从程序日志确认。
 最终二进制与 runner 的四个
-[smoke trial](../../../dmgmd-overlap-o1-20261012/delivery-smoke-20261012-163518/summary.json)
+`smoke trial`
 均 `ok`，其 metadata 记录交付版二进制与 runner SHA。
 
 pilot 普通步输入为 `carbon_200k`：`model.xyz`
@@ -110,13 +114,13 @@ pilot 普通步输入为 `carbon_200k`：`model.xyz`
 派生重建诊断把同一生成模型所有原子的 y 速度统一加 2 Å/fs：`model.xyz`
 `69ba9c1c92b26ef6c4edd41ba5559a25c9633a9a9c13bf698f235efa4d1473c5`、
 `run.in` `8c0611ffc34278e2097d549b837f6077ae9191e6d739cf8ccc27633fe94c159e`；
-它用于阶段成本，不作为物理正确性 oracle。另保留原 M2a crossings 小 fixture 的
+它用于阶段成本，不作为物理正确性 oracle。另保留原 局部域分解crossings 小 fixture 的
 8/8 重建步：`model.xyz` `9795b0322d4088a561a3592c11427a47234175958bab35ec913fb21c32eb8966`。
 派生重建输入的最终两后端 0.01 s C1 采样的 `thermo.out` SHA-256
 同为 `ad731e744f15488441a4af3b0e86f6977b22dcf4672cfab79c86b9565c90511d`；
 小 crossings fixture 的两后端 thermo/trajectory/NVT 输出也分别逐字节一致。
 
-下表是 [原始 trace 重算](../../../dmgmd-overlap-o1-20261012/analysis.json) 中
+下表是 `原始 trace 重算` 中
 测量段 `sequence=1` 的 **rank-step 中位数**，每后端普通步 200 个 rank-step，
 派生输入重建步每后端 66 个 rank-step；两个输入的绝对耗时不能互相当作加速比。
 
@@ -174,20 +178,11 @@ proc/off 的 HostStaged 中位比约 1.0022、CudaAware 约 1.0026；组序未�
 
 <a id="o1-20261012-原始产物与重跑命令"></a>
 
-### 原始产物与重跑命令
+### 历史产物与重跑命令
 
-全部原始产物保留在仓库内忽略版本控制的
-[`dmgmd-overlap-o1-20261012/`](../../../dmgmd-overlap-o1-20261012)；本报告和代码是 Git
-工作树中的本轮改动。每个 trial 的 `stdout.txt`、`stderr.txt`、`telemetry.jsonl`、
-`result.json` 与顶层 `metadata.json`/`source-dirty.patch` 均未过滤；启用 C1 的 trial
-还保留 `cpu/samples.jsonl`、`cpu/summary.json`，trace trial 另有
-`cpu/markers.jsonl`。代表性原始文件：
-
-- 普通步 [HostStaged trace](../../../dmgmd-overlap-o1-20261012/delivery-pilot-trace-20261012-163556/0000-carbon_200k-dmgmd-HostStaged-p2-r0-trace/stdout.txt)、[CudaAware trace](../../../dmgmd-overlap-o1-20261012/delivery-pilot-trace-20261012-163556/0001-carbon_200k-dmgmd-CudaAware-p2-r0-trace/stdout.txt)；
-- 重建步 [HostStaged trace](../../../dmgmd-overlap-o1-20261012/delivery-rebuild-drift-20261012-163815/0000-carbon-drift-HostStaged-p2-r0/stdout.txt)、[CudaAware trace](../../../dmgmd-overlap-o1-20261012/delivery-rebuild-drift-20261012-163815/0001-carbon-drift-CudaAware-p2-r0/stdout.txt)；
-- CPU [原始样本](../../../dmgmd-overlap-o1-20261012/delivery-rebuild-drift-20261012-163815/0000-carbon-drift-HostStaged-p2-r0/cpu/samples.jsonl)、[marker](../../../dmgmd-overlap-o1-20261012/delivery-rebuild-drift-20261012-163815/0000-carbon-drift-HostStaged-p2-r0/cpu/markers.jsonl)、[解析结果](../../../dmgmd-overlap-o1-20261012/delivery-rebuild-drift-20261012-163815/0000-carbon-drift-HostStaged-p2-r0/cpu/summary.json)；
-- [普通 pilot metadata](../../../dmgmd-overlap-o1-20261012/delivery-pilot-trace-20261012-163556/metadata.json)、[性能组 metadata](../../../dmgmd-overlap-o1-20261012/delivery-standard-proc-20261012-163857/metadata.json)、[重建 metadata](../../../dmgmd-overlap-o1-20261012/delivery-rebuild-drift-20261012-163815/metadata.json)、[重算脚本](../../../dmgmd-overlap-o1-20261012/compute_analysis.py)。重算脚本 SHA-256 `c51e2e7b0e2c0caaff20d217b1fa407d97e71db6caa7530fa1f751b4a2aca8e4`，其 [分析 JSON](../../../dmgmd-overlap-o1-20261012/analysis.json) SHA-256 `2deab4f4f26654e7aa58a2f87fb6ce9e2544795f497e863485d21d630a10b985`。
-- 正式 [proc 组 summary](../../../dmgmd-overlap-o1-20261012/delivery-standard-proc-20261012-163857/summary.json)、[无采样组 summary](../../../dmgmd-overlap-o1-20261012/delivery-standard-nosampler-20261012-164248/summary.json)；各顶层 metadata/result 与逐 trial stdout/stderr、原始 C1 数据同目录保留。
+O1 执行当时的逐 trial 输出、C1 数据、trace、metadata、分析脚本与汇总文件位于
+`dmgmd-overlap-o1-20261012/`。该目录已于 2026-11-05 按授权清理；本页保留 O1 的结果与限制。
+下方命令仅为历史操作记录，原始输入和分析工具已不在该目录，不能再据此重跑或复算。
 
 每个新 shell 必须从 `newmd` 仓库根目录开始：
 
@@ -283,7 +278,7 @@ O1 的 `core:PE=4` 在本机 Open MPI 5 被拒绝（mapping object 只有一个�
 
 环境为 n4、AMD EPYC 7K62、RTX 4090、driver 580.173.02、CUDA 12.9、Open MPI
 5.0.10、UCX 1.22.0；完整身份见
-[environment.json](../../../dmgmd-overlap-o4-20261016/environment.json)。P2 使用 GPU0/1，
+`environment.json`。P2 使用 GPU0/1，
 UUID 分别 `GPU-a4cdc2a3-d216-af6d-26bb-d6a5c81e2a80`、
 `GPU-d146f2b8-3d3d-4b60-b4a5-1b9ed07f2900`。
 
@@ -295,8 +290,8 @@ UUID 分别 `GPU-a4cdc2a3-d216-af6d-26bb-d6a5c81e2a80`、
 同一最终 binary、potential/model/run hash；同二进制 full 也包含共同 selection guard，
 不把它当作无 guard 的旧 O1 二进制。full、split-serial、overlap-wait、overlap-poll
 每后端各三次重复，按 seed=20261016 在每个重复块中打乱四组顺序。
-[measure_cost.py](../../../dmgmd-overlap-o4-20261016/measure_cost.py) 与
-[cost-plan.json](../../../dmgmd-overlap-o4-20261016/cost-plan.json) 保存精确命令/组序。
+`measure_cost.py` 与
+`cost-plan.json` 保存精确命令/组序。
 
 Open MPI 手工映射 `ppr:2:numa:PE=4 --bind-to core --report-bindings`，沿用 C1
 `expected-cores-per-rank=4, expected-numa-node=0` 核验实际 affinity。主墙钟详细 profiler
@@ -318,7 +313,7 @@ wait 在提交 early 后 finish；poll 同位置最多 8 次 progress，再 fini
 执行，MPI 完成观察是实际完成上界，也不是物理链路传输。独立 wrapper 的 32 个 pending
 receive/early-complete 证据只证明受控调度状态。
 
-正常生产路径另由 [profile.sh](../../../dmgmd-overlap-o4-20261016/profile.sh) 采集 Nsight
+正常生产路径另由 `profile.sh` 采集 Nsight
 Systems CUDA/MPI trace，精确 kernel 时间和 MPI API 使用该 profiler 的同一时间轴；
 最终四份 `.nsys-rep` 和 SQLite 已生成，采集日志无 dropped/error/warning 记录；
 最终采集显式设置 `--cuda-event-trace=false`，目录为 profile-noevent-*。CUPTI 将 GPU 采集时间通过插值映射到 CPU 时间，
@@ -395,11 +390,11 @@ HostStaged/wait rank0 step1 相应交集约 0.217 ms。所有 rank-step 将 C �
 
 <a id="o4-20261016-原始数据与重算"></a>
 
-### 原始数据与重算
+### 历史原始数据与重算
 
-- [cost-analysis.json](../../../dmgmd-overlap-o4-20261016/cost-analysis.json) 保留每个 trial 的路径、样本、CPU、真实模式与计数；每个目录保存 metadata/results/telemetry/C1。
-- [profile-analysis.json](../../../dmgmd-overlap-o4-20261016/profile-analysis.json) 保留逐 rank/step 原始区间与交集；最终四个 profile-noevent-*/ 下保存 `.nsys-rep`、SQLite、launch.json、输入与原始输出。
-- [diagnostic.log](../../../dmgmd-overlap-o4-20261016/diagnostic.log) 的两后端单独作业核验 O1 timing/trace 与 O4 trace 同时启用；不纳入墙钟表。
+执行当时的 `cost-analysis.json`、`profile-analysis.json`、`.nsys-rep`、SQLite、launch
+记录及诊断日志位于 `dmgmd-overlap-o4-20261016/`，现已按授权清理。O4 的结果与边界保留在本节；
+以下命令和文件名仅是历史记录，不能再用来访问原始产物或重算。
 
 ```bash
 source ../env/md-mpi.sh
@@ -407,8 +402,7 @@ python3 dmgmd-overlap-o4-20261016/cost_analysis.py
 python3 dmgmd-overlap-o4-20261016/profile_analysis.py
 ```
 
-具体采集命令由 measure_cost.py、diagnostic.sh、profile.sh 与 launch.json 保存；重复采集需
-更换输出路径，不能覆盖原产物。候选 binary SHA 与源码/dirty 身份、reference 前后状态见
+具体采集命令当时由 measure_cost.py、diagnostic.sh、profile.sh 与 launch.json 记录；候选 binary SHA、源码/dirty 身份和 reference 前后状态见
 [验收报告](../validation/communication-computation-overlap.md#overlap-o4-20261016)。所有 GPU 作业串行调度。
 
 仍未执行 O5 的 carbon_1m/water_400k、P1/2/4/8 正式矩阵、至少五重复/区间估计、统一
@@ -476,8 +470,8 @@ NOT_OBSERVED，保留为 PARTIAL 且不准入，以新目录补跑。其后保�
 本轮只补充 Python 启动、绑定、采样/分析、测试和文档；没有修改 NEP 数学、精度、布局、
 stride、原子所有权、半径、通信协议或 stream/thread 模型。没有 Git 提交或推送。
 
-[design.json](../../../dmgmd-overlap-o5-20261016/design.json) 在 pilot 前定义准入、统计和追加规则；
-[frozen-plan.json](../../../dmgmd-overlap-o5-20261016/frozen-plan.json) 在正式采集前固定步数、
+`design.json` 在 pilot 前定义准入、统计和追加规则；
+`frozen-plan.json` 在正式采集前固定步数、
 身份、映射和完整顺序。主顺序 seed=2026101606，追加 seed=2026101609；每个重复块随机化
 模式、版本、后端。所有 GPU trial 串行调度，使用 workflow/scheduler 锁支持安全续跑。
 
@@ -489,7 +483,7 @@ stride、原子所有权、半径、通信协议或 stream/thread 模型。没�
 
 同 case 固定初态、NEP、seed=0、显式初速度、0.1 fs 步长和盒形，强扩展固定 N。
 carbon_200k_drift 仅对原输入 y 速度统一加 2 Å/fs；600 正式步、200 次重建/150 次迁移。
-thin_empty 为 12288 原子、cells=8×24×8、P4，5500 正式步，M2a slab 合法但 interior 为空。
+thin_empty 为 12288 原子、cells=8×24×8、P4，5500 正式步，局部域分解slab 合法但 interior 为空。
 补充场景的 warmup、输入与完整哈希见 plan 的 degraded_configs 和 inputs。
 
 100 步 water pilot 每窗口仅 2–4 次重建，预热检查没有通过；1000 步独立窗口在全 P/后端
@@ -497,7 +491,7 @@ thin_empty 为 12288 原子、cells=8×24×8、P4，5500 正式步，M2a slab �
 留约 20 s 裕量。解决记录及原始文件哈希在 `formal-config-resolution.json`，pilot 不入统计。
 
 每 trial 保存精确 argv、显式白名单 `launch_environment`、输入/科学输出哈希、退出码、
-seconds_max/sequence/steps、实际 backend、M1/M2a、partition/overlap 和真实计数。
+seconds_max/sequence/steps、实际 backend、全量复制模式与局部域分解模式、partition/overlap 和真实计数。
 清除继承的 DMGMD 调试开关及未列入计划的 CUDA/MPI 环境；full 为 off/off，serial 为
 serial/off，wait/poll 为 serial/wait|poll。verify 只出现在科学门槛。
 所有正式科学文件与同配置 full oracle 一致，历史组 150 个 trial 的 thermo/neighbor 也逐项
@@ -606,12 +600,14 @@ bootstrap，逐配置点态 95% 区间；不把 steps、rank 或 kernel 当独�
 | water_400k | 8 | CudaAware | 5 | 1.1264 | 1.2314 | 1.0932 [1.0898, 1.0949] | 1.0937 [1.0901, 1.0958] |
 
 完整 P1、poll 增量、所有区间/离散度/样本、退化与历史表见
-[可重算统计](../../../dmgmd-overlap-o5-20261016/statistics.md)与
-[结果表](../../../dmgmd-overlap-o5-20261016/report-tables.md)。
+`可重算统计`与
+`结果表`。
 P1 三体系两后端的所有请求模式均实际 full fallback，真实 split/overlap/progress 为零，
 比值约 1；这些重复配置只衡量噪声，不构成 overlap 启用证据。
 
-![相对 full 的净加速及配对点态区间](../../../dmgmd-overlap-o5-20261016/net-speedup.png)
+![相对 full 的净加速及配对点态区间](assets/o5-net-speedup-20261016.png)
+
+该结果图从历史实验树迁入本目录，SHA-256 `63fa215387039c17eb62327472a6bb3f670b0bb7524f1a61ce1b1e1a566f0aca`。
 
 carbon_200k 的分区成本随 P 从约 28–30% 增到 53–58%，CudaAware 增量最多约 9%，
 仍有明显净损失。carbon_1m 分区成本约 5–30%，CudaAware 增量随 P 增到约 12%，仍不足
@@ -645,7 +641,7 @@ O4 full/O3 full 约 0.998–1.001，O4 serial/O3 serial 约 1.000–1.007。
 小接口成本精度不足，结论为 INCONCLUSIVE，原始较慢样本保留。没有借用 O1–O4 旧机器的
 表格数字补齐本轮归因；跨二进制与非独占环境限制适用于全部历史比较。
 
-强扩展 S=T(1)/T(P)、E=S/P，全部有有效同 N 的 T1；P1 为 M1，P>1 为 M2a，
+强扩展 S=T(1)/T(P)、E=S/P，全部有有效同 N 的 T1；P1 为全量复制模式，P>1 为局部域分解模式，
 K=4 固定。只配对共同重复块，追加配置的强扩展仍使用五个匹配 P1 的块。
 P8 的 full/wait S 分别为 carbon_200k：Host 4.2015/2.7157、CudaAware 3.7777/2.6903；
 carbon_1m：Host 6.2006/4.8646、CudaAware 5.4095/4.7742；
@@ -716,7 +712,7 @@ pack、同步、分类、launch 与真实重建/迁移全部保留在正式墙�
 正式计数已给出：carbon 两个静态 fixture 在该窗口没有重建；water 每 4300 步重建/迁移
 112 次（2.6047%）、真实 split/overlap 4188 次，每 rank 分类 112 次；漂移场景每 600 步
 重建 200 次（33.3%）、迁移 150 次，split 400 次且分类 200 次。
-薄 slab 是 M2a full fallback，split/overlap=0，仍可能执行普通 halo 的 poll；不计 overlap 证据。
+薄 slab 是 局部域分解full fallback，split/overlap=0，仍可能执行普通 halo 的 poll；不计 overlap 证据。
 
 每个真实 split 多一组五个产品 kernel launch，分类 miss 另有条件 kernel 与 fill；
 carbon_1m 与 water/P8 的 interior/owned 都约 0.5，但净收益方向相反，不能单用比例
@@ -770,7 +766,7 @@ carbon_1m/P4/CudaAware/wait 为 7.0776 ms，water/P8/CudaAware/wait 为 1.4241 m
 
 ### 独立验证与采用建议
 
-[adoption-validation-plan.json](../../../dmgmd-overlap-o5-20261016/adoption-validation-plan.json)
+`adoption-validation-plan.json`
 于 Oct19 在新样本采集前冻结：从探索组选择两个 wait/poll 净区间下界均 >1.05 的
 water/CudaAware/P4/P8，保留 full/serial 两控制，五新重复块；order_seed=2026101912，
 bootstrap_seed=2026101913。Oct21 实际执行，二进制、输入、GPU/CPU 映射、warmup/steps
@@ -801,32 +797,24 @@ carbon、HostStaged、P1、空 interior 和高重建场景继续使用 full。
 
 使用前保持同资源 full 对照；科学输出、绑定、backend 或执行模式异常时立即停止实验并回 full。
 体系/盒形/重建比例/设备环境变化或净收益不能稳定复现时，保持 full，并重新独立验证。
-现有 rebuild/M1/empty 等 full fallback 保留。没有据本轮 interior 或 rank 数拟合自动阈值；
+现有 rebuild/全量复制模式与empty 等 full fallback 保留。没有据本轮 interior 或 rank 数拟合自动阈值；
 自动采用策略与默认变更属于后续独立生产决策。本次交付保持 `DMGMD_DOMAIN_OVERLAP=off`。
 
 <a id="o5-20261021-复核入口与剩余范围"></a>
 
 ### 复核入口与剩余范围
 
-原始数据位于 [独立 O5 目录](../../../dmgmd-overlap-o5-20261016/)。主要入口：
+O5 执行时的冻结计划、trial 输出、统计文件、诊断、源码快照及哈希清单位于独立目录
+`dmgmd-overlap-o5-20261016/`，现已按授权清理。O5 的汇总数值与限制保留在本报告；下方的
+路径和命令只是历史记录，原始数据和工具已不在，不能再进行离线重算。
 
-- `frozen-plan.json`、`continuation-plan.json`、`extension-plan.json`：冻结身份、顺序与续跑。
-- `main/`、`main-20261019/`、`extension/`、`adoption-validation/`：全部性能原始输出/命令/环境。
-- `diagnostic/` 保留旧记录；`diagnostic-20261021/` 为直接 rank 日志补采；`profiles/` 为 Nsight。
-- `trial-analysis.json`、`trials.csv`、`summary.*`、`ratios.*`、`scaling.*`：全部样本与统计。
-- `analysis-first5/`、`analysis-first5-recomputed/`、`interruption-sensitivity.*`：预定追加依据与续跑敏感性。
-- `cpu-formal-loop.*`、`diagnostic-stages.*`、`gpu-mapping-audit-20261021-v2/`：采样窗口、阶段与映射。
-- `source-final.json`/patch、`frozen-identity-final-check.json`、`reference-final-check.json`：源码/二进制及三个只读 reference 末次审计。
-- `raw-evidence.sha256`、`raw-evidence-inventory.json`、`all-attempts.*`：原始证据完整性、失败及未完成项。
-
-在仓库根目录一键离线重算（不启动 GPU）：
+历史离线重算命令（当前不可运行）：
 
 ```bash
 bash dmgmd-overlap-o5-20261016/recompute.sh
 ```
 
-该入口加载唯一受支持环境，校验分析工具/原始证据哈希，重算初轮五重复并断言与冻结统计
-相同，再重算最终配对区间、CPU marker、诊断、Nsight、独立采用验证和图表。
+执行时该入口曾校验分析工具/原始证据哈希并重算配对统计、诊断与图表；实验树清理后此命令不再可用。
 详细命令也在 [benchmark README](../../../tests/benchmark/README.md#o5-统一绑定与正式实验)。
 
 尚未验收的范围保留在计划：GPUMD 合计 P×K 绑定、LAMMPS 固定绑定科学门槛/三引擎正式矩阵、
@@ -856,7 +844,7 @@ bash dmgmd-overlap-o5-20261016/recompute.sh
 ### 模式和当前结论
 
 一个 MPI rank 对应一张 **GPU**；CPU 负责提交 kernel、MPI 和运行时管理。
-M2a 的跨 GPU owned/ghost 域分解在以下四模式下始终存在。
+局部域分解模式的跨 GPU owned/ghost 域分解在以下四模式下始终存在。
 
 | 模式 | partition / overlap | 当前执行含义 |
 | --- | --- | --- |
@@ -866,7 +854,7 @@ M2a 的跨 GPU owned/ghost 域分解在以下四模式下始终存在。
 | overlap-poll | serial / poll | 同上，但普通 halo 回调至多调用 8 次 progress，再 finish；不保证发生 8 次，也没有后台 progress thread |
 
 early 的 interior 力中心和 late 的边界中心互补；依赖 producer 也互补，
-不是把相同原子的力算两次。P1/M1、重建和空 interior 等 fallback 实际执行 full；
+不是把相同原子的力算两次。P1/全量复制模式、重建和空 interior 等 fallback 实际执行 full；
 请求配置、执行计数和 fallback 原因必须一起读取。
 
 O5 有效性能 trial 为主矩阵 600、历史 150、退化 120、独立确认 40，共 910。
@@ -954,14 +942,14 @@ O6 专门负责这项归因。Nsight Compute 的 replay/cache control 会影响�
 | --- | --- | --- |
 | 明确 GPU 拆分主因 | 先解释 radial/descriptor/partial 的实际损失，再选一个执行优化 | O6 → O9 |
 | 合并缓存判定归约 | 当前全局 MAX 的值只用于超阈值判断，再做 reason OR；有限值下可先判本地再 OR，需保持异常/阈值/空 rank 语义 | O7 |
-| 按需 NVE thermo | 当前 M2a 每步执行 8-double 全局 thermo；审计消费者后才允许跳过无用辅助工作，保留 NVT 和规定输出 | O8 |
+| 按需 NVE thermo | 当前 局部域分解每步执行 8-double 全局 thermo；审计消费者后才允许跳过无用辅助工作，保留 NVT 和规定输出 | O8 |
 | 分别选择小归约与 halo 后端 | CudaAware 不保证更快；先看 O7/O8 后还剩多少机会，不能机械删同步 | 条件性 O10 |
 | 相对新 full 复验 | full 变快会改变 overlap 的竞争基线，必须重新比较默认 HostStaged/full | O11 |
 
 活动中心列表可能降低掩码执行损失，也会增加构建/维护成本，尚无收益证明。
 CUDA Graphs 主要针对提交开销，现有证据不足以将其列为拆分 GPU 成本的首选解法。
 更频繁 poll、增加 CPU 核数和 progress thread 没有本轮收益依据。
-M2b/3D 属于不同协议/几何设计，不作为本次结论的自动后续。
+分阶段中间场交换方案/3D 属于不同协议/几何设计，不作为本次结论的自动后续。
 各 goal 的范围、依赖、正确性与实测完成条件统一见
 [O6–O11 计划](../../plans/communication-computation-overlap.md)。
 
@@ -983,8 +971,5 @@ O5 固定 K=4 物理核/rank、无 rank 间物理核共享，P1/2/4/8 使用一�
 
 ### 复核入口
 
-在仓库根目录执行 `bash dmgmd-overlap-o5-20261016/recompute.sh`，会核验工具与原始证据哈希，
-重算 O5 全部统计。代表配置的主样本来自 `summary.json`（o4、carbon_200k、P2、CudaAware），
-阶段表来自 `diagnostic-stages.json`（同配置、ordinary），短 trace 来自
-`profiles/carbon_200k-p2-CudaAware-wait/trace.sqlite` 及 `profile-analysis.json` 的对应 witness。
-本记录只是重新解读已有证据，不增加独立重复数或修改 O5 的冻结采用门槛。
+O5 当时以 `recompute.sh` 校验工具和原始证据，并汇总主样本、阶段表与短 trace；这些 raw 文件现已清理。
+本节保留原报告结论，不增加独立重复数或修改 O5 的冻结采用门槛。

@@ -68,7 +68,7 @@ CPU 模型生成器会同时保留原子和文本列表；百万级体系建议�
 
 源码依据：锁定 GPUMD 的 `force/force.cu` 选择多卡；`force/nep_multigpu.cu::compute`
 要求 `floor(Ly/(rc/2))/P >= 10`，碳 rc=7 Å，因此 8 卡长轴至少约 280 Å。
-本目录在生成矩阵时校验该条件和 DMG-MD large-box 条件；运行后 P>1 必须报告 M2a/y。
+本目录在生成矩阵时校验该条件和 DMG-MD large-box 条件；运行后 P>1 必须报告局部域分解模式/y。
 GPUMD 多卡模式、DMG-MD unique UUID 绑定与通信后端也必须匹配，否则不能纳入结果。
 
 ## 执行顺序
@@ -212,7 +212,7 @@ python3 tests/benchmark/run_benchmark.py --profile standard \
 
 `--dmgmd-profiling off,trace` 把两个诊断模式作为同一 benchmark 矩阵中的独立配置，沿用
 manifest 输入、固定 seed、随机 trial 顺序和结果保存。默认只有 `off`。`trace` 只支持
-`--engines dmgmd` 的 M2a（rank 数 >1）；它显式设置 `DMGMD_DOMAIN_TIMING=1`、
+`--engines dmgmd` 的局部域分解模式（rank 数 >1）；它显式设置 `DMGMD_DOMAIN_TIMING=1`、
 `DMGMD_DOMAIN_TRACE=1`、每步通信日志。`off` 显式设置两者为 0。runner 先清除继承的
 全部 `DMGMD_*`，再把这三个诊断开关、backend 和通信日志间隔列入每 trial
 `launch_environment`；成功判定还检查程序 `DMGMD_DOMAIN_DIAGNOSTICS` 实际模式记录，
@@ -245,7 +245,7 @@ trace 原始行在 trial `stdout.txt`；同时采 CPU 时，runner 将 rank/PID/
 trace 单调纳秒关联为 `cpu/markers.jsonl`，C1 `summary.json` 包含 `run`、
 `step_ordinary`、`step_rebuild` 阶段的有效采样窗口。短步可能没有完整窗口，CPU 值保持
 `null`，不能补算。时间字段的语义、CUDA event 与 host 时钟的关联限制见
-[M2a 现行合同](../../docs/standards/mpi-runtime.md)。trace 组的逐行日志和 event 会扰动
+[局部域分解现行合同](../../docs/standards/mpi-runtime.md)。trace 组的逐行日志和 event 会扰动
 性能；性能组保持 profiler off，CPU sampler 开销需另用 off 模式的 proc/off 配对校准。
 
 重建步使用已有 `tests/mpi/run_mpi_domain.py` 的 `CROSSINGS_MODEL/CROSSINGS_RUN` 定向
@@ -349,7 +349,7 @@ python3 tests/benchmark/analyze_cpu.py TRIAL_DIR --output /tmp/cpu-recomputed
 后三个选项只允许在 proc 模式使用，防止以为诊断已开却静默不采。全部在 `--help` 和
 `--dry-run` 展示；dry-run 不验证 GPU/namespace/cgroup 权限。可选分析器 `--markers FILE`
 读取 schema v1 的可靠 monotonic marker；默认 phase/sequence 与 run CPU 利用率为空。
-O1 的显式 `--dmgmd-profiling trace` 会产生 M2a marker 并自动传给解析器；
+O1 的显式 `--dmgmd-profiling trace` 会产生 局部域分解marker 并自动传给解析器；
 详细 domain timing 不能通过继承 `DMGMD_*` 打开。
 
 数据位置：上层 metadata/result 指向 cpu 目录，内含 config.json、samples.jsonl、
@@ -593,7 +593,7 @@ python3 tests/mpi/run_cache_decision.py \
 ```
 
 该测试覆盖严格阈值两侧/等号、非 root 贡献者、PBC、多 run、空 rank、非有限平方及
-multi-box fatal，逐字节比较科学文件；P8 使用满足 M2a eligibility 的加长盒。
+multi-box fatal，逐字节比较科学文件；P8 使用满足 局部域分解资格条件 的加长盒。
 每步通信账本仍由 `tests/mpi/run_mpi_domain.py` 独立按 owned/layout/migration 记录核算。
 实测范围、冻结设计与原始目录见 [O7 报告](../../docs/status/performance/cache-reduction-results.md#o7-results-20261023-report)。
 

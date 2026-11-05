@@ -1,4 +1,4 @@
-# M2a 普通步 NEP 分区与实验重叠
+# 局部域分解普通步 NEP 分区与实验重叠
 
 类别：现行实验接口合同。默认关闭。O2 serial/verify 默认仍先完成 halo；O4 可显式将
 early 提交放在 begin 与 finish 之间，沿用同一默认 stream。
@@ -10,23 +10,23 @@ O2 证据见 [O2 状态](../status/validation/communication-computation-overlap.
 ## 选择与生命周期
 
 `DMGMD_DOMAIN_PARTITION=off|serial|verify`，默认 `off`；非法值或各 rank 配置不一致拒绝。
-overlap=off 时，`serial` 仅在 M2a 普通步、全局 confirmed_reuse、本步 halo 已完成通信且 unpack 对默认
-stream 后续计算有序可见时生效。P=1/M1、段首 force、rebuild/迁移、空 interior/空 rank、
+overlap=off 时，`serial` 仅在 局部域分解普通步、全局 confirmed_reuse、本步 halo 已完成通信且 unpack 对默认
+stream 后续计算有序可见时生效。P=1/全量复制模式、段首 force、rebuild/迁移、空 interior/空 rank、
 未证明模型走原 full 同步路径。`verify` 使用相同分区，另执行同快照未分区 oracle 和 poison
 诊断，不能用于性能测量。支持范围为现有普通 NEP4/5、NEP-ZBL，`model_type=0`、无 B projection。
 
 O4 另选 `DMGMD_DOMAIN_OVERLAP=off|wait|poll`，默认 off。wait/poll 必须同时选择
 partition=serial 或 verify；非法值与 rank 不一致配置在调度前拒绝。verify+overlap 用于
-正确性，不用于成本测量。P1/M1 记录同步 full fallback；M2a 各 rank 按自身 I 选择 full/overlap。
+正确性，不用于成本测量。P1/全量复制记录同步 full fallback；局部域分解各 rank 按自身 I 选择 full/overlap。
 `DMGMD_OVERLAP_TRACE=0|1` 默认 0，启用要求 overlap 非 off；各 rank 必须一致。
 
 实验调度由 `DMGMD_DOMAIN_SCHEDULE=split|producer|producer-compact|producer-geometry` 选择，
 默认 `split`，非法值和 rank 不一致在数据面调度前拒绝。O8.5 增加 `producer`，O8.6 增加
 两条紧凑调度（见下节）。`producer` 是显式实验选择；partition=off 时仍执行完整
-full，P1/M1、setup/rebuild/迁移、空 interior/local 和未证明模型沿用原 fallback。
+full，P1/全量复制模式、setup/rebuild/迁移、空 interior/local 和未证明模型沿用原 fallback。
 `DMGMD_SCHEDULE_CONFIG` 保存实际选择，不能以请求开关代替实际拆分证据。
 
-`NEP::compute_domain` 保留未选择的完整 M2a 路径；可选 `DomainForceContext` 传入模式、
+`NEP::compute_domain` 保留未选择的完整 局部域分解路径；可选 `DomainForceContext` 传入模式、
 ordinary 标志、本步编号和 halo_ready_step。runtime 在 `refresh_ghost_positions` 返回后
 发布本步 ready token；这是 MPI completion + O3 unpack event 物理完成的证明，不是单独用
 `refreshed_epoch` 推断本步完成。`DomainForceTicket` 只在一次 compute 内存在，绑定 step/call/key/halo generation，分别检查
@@ -117,7 +117,7 @@ oracle 不增加逻辑 force、周期 neighbor sink、MPI 或生产 launch 计�
 `producer-compact`（B）和 `producer-geometry`（C）是显式实验调度，默认仍为 `split`。
 两者沿用 O8.5 的 producer/consumer 顺序；radial(O)、partial(D)、many-body(O)、可选
 ZBL(O) 在 halo 物理完成且全部 descriptor 就绪后完整执行。full、原 split 和
-`producer`（A）继续作为独立对照；partition=off、P1/M1、setup/rebuild/迁移仍走 full。
+`producer`（A）继续作为独立对照；partition=off、P1/全量复制模式、setup/rebuild/迁移仍走 full。
 
 B 完整保留图规则 S/I/E。C 直接从实际完整 Verlet 重建时保存的 `Neighbor::x0/y0/z0`
 选择 owned slab 内部的中心，不计算 S/I/B：
@@ -169,7 +169,7 @@ E/D、H/D、E/O 和 early GPU 时间，主墙钟关闭详细诊断，不从原�
 `DomainPartitionKey` 包含 layout epoch（runtime 同时验证 mapping_epoch 相等）、独立 Verlet
 generation、workspace generation、O/D/L、CPU/float box 矩阵和 PBC。势参数及 cutoff/skin
 在一个 NEP 实例中不可变；type/gid 的 slot 身份在 layout epoch 内不可变。变更任何一项必须
-重建原 M2a cache/eligibility 或创建新实例，不能只替换 pointer 或绕过 runtime 的全局判定。
+重建原 局部域分解cache/eligibility 或创建新实例，不能只替换 pointer 或绕过 runtime 的全局判定。
 缓存不是靠地址、capacity 或 shape 判断身份。
 
 O4 prepare 在任何 halo post 前执行：confirmed-reuse Neighbor 的非空中心分支不读取坐标；
@@ -190,7 +190,7 @@ key 不同先撤销 valid 再生成 mask；生成失败不发布部分结果。�
 显式详细诊断或 verify 输出 `DMGMD_PARTITION rank=... step=... call=... mode=split|full`
 及 reason、epoch/generation、classified、I/E/O/D/L、classify_host_seconds、oracle/poison。
 `DMGMD_PARTITION_SUMMARY` 为每 rank/段累计 split/full/classification 次数，关闭详细日志也保留；
-`DMGMD_PARTITION_CONFIG` 是程序实际解析的模式；M1 另记录 `reason=m1-fallback`。
+`DMGMD_PARTITION_CONFIG` 是程序实际解析的模式；全量复制另记录 `reason=m1-fallback`。
 O8.5 非空调用的每步详细记录实际 schedule 和六类 kernel 的 launch 次数；空 local
 以 `full/empty-local` 记录，当前调用不启动 kernel，累计 launch 数保持不变。summary 记录累计 producer
 调用和各类实际 dispatch 次数，排除 verify replay。分类覆盖与 oracle 验证中心唯一性，
@@ -273,7 +273,7 @@ warp/block 分析以 32/64 个真实硬件 lane 为组，尾部 padding 为 inac
 rank/backend 执行同输入三模式，要求科学输出逐字节一致，同时保留原 P1 oracle 的 manifest
 容差和逐字段通信记账。新增专用辅助/周期链、skin ghost 进入 cutoff、无迁移 rebuild/多 run，
 并让 NEP5/typewise/flexible/typewise ZBL 实际产生非空 split，禁止全 fallback 冒充通过。
-P1/M1 关闭路径、空 rank/interior、迁移/restart/输出及 call 1000 继续受检。
+P1/全量复制关闭路径、空 rank/interior、迁移/restart/输出及 call 1000 继续受检。
 `--cases water,zbl` 可只筛选主矩阵；共同 P1/oracle、fallback 和 timing 门仍执行。
 `--schedule producer` 显式覆盖 O8.5，要求每个实际 split 的五类 launch 为 2/2/1/1/1，
 不能复用旧完整 split 的通过声明。`run_long_nve.py --schedule producer --partition-mode

@@ -325,7 +325,7 @@ def run(args: argparse.Namespace) -> int:
                 })
                 save_final(runner, payload, "IN_PROGRESS")
 
-            # Compare M1/M2a ranks and CudaAware against the HostStaged baseline
+            # Compare replicated-full/local-domain ranks and CudaAware against the HostStaged baseline
             # generated from the exact same locked model and potential fixture.
             for fixture_name in ("nep5-carbon-fallback", "nep5-carbon-domain", "nep-zbl-batio3"):
                 p1 = executed[(fixture_name, ensemble, 1, "HostStaged")]

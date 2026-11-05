@@ -1,0 +1,1979 @@
+{
+  "schema": "dmgmd.npt-scr-n3-confirmation-index.v1",
+  "created_at_utc": "2026-11-04T11:42:49.780734+00:00",
+  "repository_revision": "80c57680664d5e8b4d355946907222da009177ed",
+  "scientific_status": "PASS",
+  "g_b_status": "PASS",
+  "path_base": "repository root; artifact paths are relative to that directory",
+  "scope": {
+    "system": "216-atom diamond NEP-C, 300 K, 0 GPa, B=425 GPa",
+    "geometry": "isotropic orthogonal fully periodic M1",
+    "primary": "P1/HostStaged base dt=0.25 fs and half dt=0.125 fs; 32 candidate + 32 reference chains each",
+    "bridge": "P2/P4 x HostStaged/CudaAware; 8 candidate chains per condition, base dt only",
+    "host": "n3 single node, driver 570.86.10; GPU1-7 exclusively leased by jobs; no GPU0 use",
+    "chains": {
+      "bridge_base": 32,
+      "primary_base": 64,
+      "primary_half": 64
+    },
+    "total_chain_count": 160,
+    "total_raw_thermo_rows": 35840000
+  },
+  "one_shot_analysis": {
+    "started_at_utc": "2026-11-04T10:29:27.751564+00:00",
+    "ended_at_utc": "2026-11-04T11:39:03.501210+00:00",
+    "pid": 4135290,
+    "exit_code": 0,
+    "argv": [
+      "/usr/bin/python3",
+      "/fdata/zhangyifei/zhangyifei/newmd/newmd/tests/npt/analyze_paired_confirmation.py",
+      "--records",
+      "/fdata/zhangyifei/zhangyifei/newmd/checkpoints/g-b-20261104-migration/confirmation-n3-v1/records.json",
+      "--manifest",
+      "/fdata/zhangyifei/zhangyifei/newmd/newmd/tests/npt/independent-confirmation-n3-manifest.json",
+      "--protocol",
+      "/fdata/zhangyifei/zhangyifei/newmd/newmd/tests/npt/independent-confirmation-n3-protocol.md",
+      "--output",
+      "/fdata/zhangyifei/zhangyifei/newmd/checkpoints/g-b-20261104-migration/confirmation-n3-v1/paired-analysis.json",
+      "--workers",
+      "4"
+    ],
+    "parameters": {
+      "bootstrap_analysis_seed": 2026110301,
+      "bootstrap_replicates_per_component": 20000,
+      "variance_bootstrap_workers": 4,
+      "worker_model": "fork-inherited read-only loaded chains; summaries returned"
+    },
+    "confidence": {
+      "bonferroni_sum_alpha": 0.016581205444144164,
+      "component_alpha": 0.008290602722072082,
+      "component_z": 2.64,
+      "minimum_composite_coverage": 0.9834187945558558,
+      "no_independence_assumption": true
+    }
+  },
+  "software_identity": {
+    "acf_helper_executable": "ffa85c62195c6886c40510024ffd60ecea30531fc0851242208f0fc796db9761",
+    "native_acf_helper": "3453c32097ae4e80e8bbcd20fb805159614802bf694a6a32d24ce9cb1c2ac1b9",
+    "paired_cli": "d6aa17720652673428cf0d2d3f00b00124a43cbdf9beb8258dda95b8ade3efb0",
+    "paired_integration_tests": "3ad03fe2a5ba9546e93ce50039069d76ed03b687528e645f14f5c66dda1e2ee5",
+    "paired_math_draft": "1653e4151195bdf7ca92e5f7612823a2270563b9f21b22fe2ea144d7ad43dd1a",
+    "paired_math_tests_draft": "dc9da757bd4173478ffcec8c30b02571c2a433ff603ae82a3f982cb182cbcf2c",
+    "primary_analyzer": "da0b26270c5c9330deec1b30c96179d516a5b0c2f95b973e6431cd2e77520496",
+    "shared_statistics_primitives": "0b85ecee1b7ec7aee19d5b350ec5bdc7a5e23d635874843e68a50aa5faee6b67"
+  },
+  "artifacts": {
+    "paired_analysis": {
+      "path": "docs/status/validation/evidence/npt-scr-gb/results/n3/paired-analysis.json",
+      "sha256": "ddc4b004888706b2915d60f494a1590869dda6f637b35acc0a67e2aa5c565461"
+    },
+    "registration_manifest": {
+      "path": "tests/npt/independent-confirmation-n3-manifest.json",
+      "sha256": "41e5cbfd14f22cf3422bd479040a3827b0d72b18b555eeb32d0dcfcc2facfa7b"
+    },
+    "registration_protocol": {
+      "path": "tests/npt/independent-confirmation-n3-protocol.md",
+      "sha256": "249a4c3cdc8ce491627e943c0cdfeaa70114b5010413309b8fc28a59e9349f37"
+    },
+    "original_18_look_index": {
+      "path": "docs/status/validation/npt-scr-formal-index.json",
+      "sha256": "c9da2f5d27beeb4eaa6d7d91655f55fa2eb65809fb7cc51de901c7c3a187e86d"
+    }
+  },
+  "reported_scientific_results": {
+    "primary_base": {
+      "pressure_GPa": {
+        "candidate_minus_reference_mean": {
+          "allowed_interval": [
+            -0.1,
+            0.1
+          ],
+          "block_standard_error_conservative_sum": 0.017902249127992854,
+          "block_t_critical": 2.640570917277084,
+          "confidence_interval": [
+            -0.021831668540334227,
+            0.0781832339295788
+          ],
+          "decision": "PASS",
+          "estimate": 0.028175782694622287,
+          "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+          "seed_standard_error_paired_by_initial_model_only": 0.017730687884911552,
+          "seed_t_critical": 2.8203897987235913
+        },
+        "candidate_over_reference_variance": {
+          "allowed_interval": [
+            0.85,
+            1.15
+          ],
+          "alpha_two_sided": 0.008290602722072082,
+          "analysis_seed": 2026110301,
+          "block_length_fs": 125,
+          "block_length_steps": 500,
+          "bootstrap_replicates": 20000,
+          "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+          "common_reference_center": -0.008361472879348762,
+          "confidence_interval": [
+            0.9766543680866988,
+            1.0664508879563483
+          ],
+          "confidence_z": 2.64,
+          "decision": "PASS",
+          "estimate": 1.0206582072004222,
+          "estimator": "ratio of global unbiased sample variances",
+          "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+          "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+        },
+        "empirical_cdf_distance": 0.00811046006944438,
+        "empirical_cdf_decision": "REPORT_ONLY",
+        "ess": {
+          "candidate": {
+            "effective_samples_mean_pooled": 10978.052900266604,
+            "effective_samples_squared_deviation_pooled": 22927.809072768443,
+            "pooled_sample_count": 4608000,
+            "scope": "pooled over seeds for this engine and metric"
+          },
+          "reference": {
+            "effective_samples_mean_pooled": 10995.37067694239,
+            "effective_samples_squared_deviation_pooled": 21186.56076740045,
+            "pooled_sample_count": 4608000,
+            "scope": "pooled over seeds for this engine and metric"
+          }
+        },
+        "precision_gate": "PASS"
+      },
+      "temperature_K": {
+        "candidate_minus_reference_mean": {
+          "allowed_interval": [
+            -6,
+            6
+          ],
+          "block_standard_error_conservative_sum": 0.12861169688362373,
+          "block_t_critical": 2.640570917277084,
+          "confidence_interval": [
+            -0.43356112433785143,
+            0.24565548848725371
+          ],
+          "decision": "PASS",
+          "estimate": -0.09395281792529886,
+          "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+          "seed_standard_error_paired_by_initial_model_only": 0.11980307593231514,
+          "seed_t_critical": 2.8203897987235913
+        },
+        "candidate_over_reference_variance": {
+          "allowed_interval": [
+            0.85,
+            1.15
+          ],
+          "alpha_two_sided": 0.008290602722072082,
+          "analysis_seed": 2026110301,
+          "block_length_fs": 125,
+          "block_length_steps": 500,
+          "bootstrap_replicates": 20000,
+          "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+          "common_reference_center": 300.0924207571883,
+          "confidence_interval": [
+            0.9791523867640907,
+            1.0216891146055638
+          ],
+          "confidence_z": 2.64,
+          "decision": "PASS",
+          "estimate": 1.0002804044489277,
+          "estimator": "ratio of global unbiased sample variances",
+          "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+          "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+        },
+        "empirical_cdf_distance": 0.002262803819444492,
+        "empirical_cdf_decision": "REPORT_ONLY",
+        "ess": {
+          "candidate": {
+            "effective_samples_mean_pooled": 65270.6633133675,
+            "effective_samples_squared_deviation_pooled": 206731.18895147042,
+            "pooled_sample_count": 4608000,
+            "scope": "pooled over seeds for this engine and metric"
+          },
+          "reference": {
+            "effective_samples_mean_pooled": 68856.72471911476,
+            "effective_samples_squared_deviation_pooled": 186234.67053302206,
+            "pooled_sample_count": 4608000,
+            "scope": "pooled over seeds for this engine and metric"
+          }
+        },
+        "precision_gate": "PASS"
+      },
+      "volume_A3": {
+        "candidate_minus_reference_mean": {
+          "allowed_interval": [
+            -3.1039132165397367,
+            3.1039132165397367
+          ],
+          "block_standard_error_conservative_sum": 0.05309529841135457,
+          "block_t_critical": 2.640570917277084,
+          "confidence_interval": [
+            -0.23661163164386428,
+            0.058577761352335556
+          ],
+          "decision": "PASS",
+          "estimate": -0.08901693514576436,
+          "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+          "seed_standard_error_paired_by_initial_model_only": 0.05233131128360202,
+          "seed_t_critical": 2.8203897987235913
+        },
+        "candidate_over_reference_variance": {
+          "allowed_interval": [
+            0.85,
+            1.15
+          ],
+          "alpha_two_sided": 0.008290602722072082,
+          "analysis_seed": 2026110301,
+          "block_length_fs": 125,
+          "block_length_steps": 500,
+          "bootstrap_replicates": 20000,
+          "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+          "common_reference_center": 1241.5652866158946,
+          "confidence_interval": [
+            0.9354389415244055,
+            1.0203211543169064
+          ],
+          "confidence_z": 2.64,
+          "decision": "PASS",
+          "estimate": 0.9775849047838607,
+          "estimator": "ratio of global unbiased sample variances",
+          "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+          "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+        },
+        "empirical_cdf_distance": 0.009743272569444406,
+        "empirical_cdf_decision": "PASS",
+        "ess": {
+          "candidate": {
+            "effective_samples_mean_pooled": 10919.99838896124,
+            "effective_samples_squared_deviation_pooled": 22327.89668883389,
+            "pooled_sample_count": 4608000,
+            "scope": "pooled over seeds for this engine and metric"
+          },
+          "reference": {
+            "effective_samples_mean_pooled": 11106.433223021777,
+            "effective_samples_squared_deviation_pooled": 21768.80198779852,
+            "pooled_sample_count": 4608000,
+            "scope": "pooled over seeds for this engine and metric"
+          }
+        },
+        "precision_gate": "PASS"
+      }
+    },
+    "primary_half": {
+      "pressure_GPa": {
+        "candidate_minus_reference_mean": {
+          "allowed_interval": [
+            -0.1,
+            0.1
+          ],
+          "block_standard_error_conservative_sum": 0.0177043211457188,
+          "block_t_critical": 2.640570917277084,
+          "confidence_interval": [
+            -0.042421951025941686,
+            0.05107708002909584
+          ],
+          "decision": "PASS",
+          "estimate": 0.004327564501577076,
+          "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+          "seed_standard_error_paired_by_initial_model_only": 0.013261391908940191,
+          "seed_t_critical": 2.8203897987235913
+        },
+        "candidate_over_reference_variance": {
+          "allowed_interval": [
+            0.85,
+            1.15
+          ],
+          "alpha_two_sided": 0.008290602722072082,
+          "analysis_seed": 2026110301,
+          "block_length_fs": 125,
+          "block_length_steps": 1000,
+          "bootstrap_replicates": 20000,
+          "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+          "common_reference_center": 0.01104288911507498,
+          "confidence_interval": [
+            0.9758931401735889,
+            1.0771262519482032
+          ],
+          "confidence_z": 2.64,
+          "decision": "PASS",
+          "estimate": 1.0235972784969876,
+          "estimator": "ratio of global unbiased sample variances",
+          "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+          "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+        },
+        "empirical_cdf_distance": 0.004497938368055565,
+        "empirical_cdf_decision": "REPORT_ONLY",
+        "ess": {
+          "candidate": {
+            "effective_samples_mean_pooled": 11579.206995006345,
+            "effective_samples_squared_deviation_pooled": 22025.980953865037,
+            "pooled_sample_count": 9216000,
+            "scope": "pooled over seeds for this engine and metric"
+          },
+          "reference": {
+            "effective_samples_mean_pooled": 11539.618766100059,
+            "effective_samples_squared_deviation_pooled": 22952.271328795025,
+            "pooled_sample_count": 9216000,
+            "scope": "pooled over seeds for this engine and metric"
+          }
+        },
+        "precision_gate": "PASS"
+      },
+      "temperature_K": {
+        "candidate_minus_reference_mean": {
+          "allowed_interval": [
+            -6,
+            6
+          ],
+          "block_standard_error_conservative_sum": 0.1297047263124727,
+          "block_t_critical": 2.640570917277084,
+          "confidence_interval": [
+            -0.32213118469471413,
+            0.36285787157348426
+          ],
+          "decision": "PASS",
+          "estimate": 0.020363343439385062,
+          "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+          "seed_standard_error_paired_by_initial_model_only": 0.10108881494083002,
+          "seed_t_critical": 2.8203897987235913
+        },
+        "candidate_over_reference_variance": {
+          "allowed_interval": [
+            0.85,
+            1.15
+          ],
+          "alpha_two_sided": 0.008290602722072082,
+          "analysis_seed": 2026110301,
+          "block_length_fs": 125,
+          "block_length_steps": 1000,
+          "bootstrap_replicates": 20000,
+          "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+          "common_reference_center": 299.9258342568322,
+          "confidence_interval": [
+            0.9857729294496157,
+            1.0241923770545078
+          ],
+          "confidence_z": 2.64,
+          "decision": "PASS",
+          "estimate": 1.00433837041692,
+          "estimator": "ratio of global unbiased sample variances",
+          "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+          "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+        },
+        "empirical_cdf_distance": 0.0008203125000000311,
+        "empirical_cdf_decision": "REPORT_ONLY",
+        "ess": {
+          "candidate": {
+            "effective_samples_mean_pooled": 64848.52086101373,
+            "effective_samples_squared_deviation_pooled": 201630.7832132705,
+            "pooled_sample_count": 9216000,
+            "scope": "pooled over seeds for this engine and metric"
+          },
+          "reference": {
+            "effective_samples_mean_pooled": 73646.3489748967,
+            "effective_samples_squared_deviation_pooled": 203362.37143701105,
+            "pooled_sample_count": 9216000,
+            "scope": "pooled over seeds for this engine and metric"
+          }
+        },
+        "precision_gate": "PASS"
+      },
+      "volume_A3": {
+        "candidate_minus_reference_mean": {
+          "allowed_interval": [
+            -3.1037570547169056,
+            3.1037570547169056
+          ],
+          "block_standard_error_conservative_sum": 0.052498147775283235,
+          "block_t_critical": 2.640570917277084,
+          "confidence_interval": [
+            -0.15483652168154663,
+            0.12241364277110847
+          ],
+          "decision": "PASS",
+          "estimate": -0.01621143945521908,
+          "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+          "seed_standard_error_paired_by_initial_model_only": 0.0413757379557767,
+          "seed_t_critical": 2.8203897987235913
+        },
+        "candidate_over_reference_variance": {
+          "allowed_interval": [
+            0.85,
+            1.15
+          ],
+          "alpha_two_sided": 0.008290602722072082,
+          "analysis_seed": 2026110301,
+          "block_length_fs": 125,
+          "block_length_steps": 1000,
+          "bootstrap_replicates": 20000,
+          "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+          "common_reference_center": 1241.5028218867621,
+          "confidence_interval": [
+            0.9337040057663974,
+            1.0289513787018507
+          ],
+          "confidence_z": 2.64,
+          "decision": "PASS",
+          "estimate": 0.9787037295497167,
+          "estimator": "ratio of global unbiased sample variances",
+          "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+          "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+        },
+        "empirical_cdf_distance": 0.005539605034722173,
+        "empirical_cdf_decision": "PASS",
+        "ess": {
+          "candidate": {
+            "effective_samples_mean_pooled": 11507.058961195844,
+            "effective_samples_squared_deviation_pooled": 21471.068122512617,
+            "pooled_sample_count": 9216000,
+            "scope": "pooled over seeds for this engine and metric"
+          },
+          "reference": {
+            "effective_samples_mean_pooled": 11662.730871058282,
+            "effective_samples_squared_deviation_pooled": 23169.443257804265,
+            "pooled_sample_count": 9216000,
+            "scope": "pooled over seeds for this engine and metric"
+          }
+        },
+        "precision_gate": "PASS"
+      }
+    },
+    "bridge_base": {
+      "P2/CudaAware": {
+        "pressure_GPa": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.017902249127992854,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.021831668540334227,
+                0.0781832339295788
+              ],
+              "estimate": 0.028175782694622287,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.017730687884911552,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": -0.008361472879348762,
+              "confidence_interval": [
+                0.9766543680866988,
+                1.0664508879563483
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0206582072004222,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 3.986975619258936e-08,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -1.0121872628059573e-07,
+                1.0947585529926003e-07
+              ],
+              "estimate": 4.128564509332155e-09,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 5.357963234708748e-09,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 1.4527669678767718,
+              "confidence_interval": [
+                0.9999996860035002,
+                1.0000003386248424
+              ],
+              "estimate": 1.0000000137685476,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 1.452766947874281,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -0.1,
+              0.1
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.021831769759060506,
+              0.07818334340543409
+            ],
+            "decision": "PASS",
+            "estimate": 0.028175786823186794
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9766540614206457,
+              1.0664512490831122
+            ],
+            "decision": "PASS",
+            "estimate": 1.0206582212534034
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 1.2152777777774126e-05,
+              "p1_all32_vs_gpumd_all32": 0.00811046006944438,
+              "p1_same8_vs_p1_all32": 0.002232855902777775
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.01035546874999993
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1110547035773,
+              "effective_samples_squared_deviation_pooled": 5564.151834623861,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10978.052900266604,
+              "effective_samples_squared_deviation_pooled": 22927.809072768443,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1108982450924,
+              "effective_samples_squared_deviation_pooled": 5564.152162327864,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "temperature_K": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.12861169688362373,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.43356112433785143,
+                0.24565548848725371
+              ],
+              "estimate": -0.09395281792529886,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.11980307593231514,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 300.0924207571883,
+              "confidence_interval": [
+                0.9791523867640907,
+                1.0216891146055638
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0002804044489277,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 1.6221559375793602e-06,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -5.1480342671289e-06,
+                3.424364943807054e-06
+              ],
+              "estimate": -8.618346616609232e-07,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 5.903475532822576e-07,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 278.12967120298856,
+              "confidence_interval": [
+                0.9999940994242211,
+                1.0000017510451684
+              ],
+              "estimate": 0.99999811551643,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 278.130195334772,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -6,
+              6
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.4335662723721186,
+              0.24565891285219751
+            ],
+            "decision": "PASS",
+            "estimate": -0.09395367975996052
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9791466092012335,
+              1.0216909036293516
+            ],
+            "decision": "PASS",
+            "estimate": 1.0002785194369401
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 2.517361111120664e-05,
+              "p1_all32_vs_gpumd_all32": 0.002262803819444492,
+              "p1_same8_vs_p1_all32": 0.004114366319444396
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.006402343750000095
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 16484.997193139625,
+              "effective_samples_squared_deviation_pooled": 51353.94583998407,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 65270.6633133675,
+              "effective_samples_squared_deviation_pooled": 206731.18895147042,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.016270246968,
+              "effective_samples_squared_deviation_pooled": 51353.604002908236,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "volume_A3": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.05309529841135457,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.23661163164386428,
+                0.058577761352335556
+              ],
+              "estimate": -0.08901693514576436,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.05233131128360202,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 1241.5652866158946,
+              "confidence_interval": [
+                0.9354389415244055,
+                1.0203211543169064
+              ],
+              "confidence_z": 2.64,
+              "estimate": 0.9775849047838607,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 3.892782089267051e-07,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -8.307621165355518e-06,
+                1.58778994386426e-05
+              ],
+              "estimate": 3.7851391366435414e-06,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 3.3224779894196697e-06,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 12.451080685167582,
+              "confidence_interval": [
+                0.9999995017101259,
+                1.000000869214271
+              ],
+              "estimate": 1.00000013579544,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 12.451078994367831,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -3.1039132165397367,
+              3.1039132165397367
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.23661993926502964,
+              0.0585936392517742
+            ],
+            "decision": "PASS",
+            "estimate": -0.08901315000662773
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9354384754046531,
+              1.0203220411946148
+            ],
+            "decision": "PASS",
+            "estimate": 0.977585037535433
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 8.680555555529157e-06,
+              "p1_all32_vs_gpumd_all32": 0.009743272569444406,
+              "p1_same8_vs_p1_all32": 0.0034878472222222845
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.01323980034722222
+          },
+          "cdf_decision": "PASS",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.770632421962,
+              "effective_samples_squared_deviation_pooled": 5467.449086354416,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10919.99838896124,
+              "effective_samples_squared_deviation_pooled": 22327.89668883389,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.77389591974,
+              "effective_samples_squared_deviation_pooled": 5467.456105759953,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        }
+      },
+      "P2/HostStaged": {
+        "pressure_GPa": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.017902249127992854,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.021831668540334227,
+                0.0781832339295788
+              ],
+              "estimate": 0.028175782694622287,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.017730687884911552,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": -0.008361472879348762,
+              "confidence_interval": [
+                0.9766543680866988,
+                1.0664508879563483
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0206582072004222,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 3.921429750736301e-08,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -9.506466458351611e-08,
+                1.1216609863839551e-07
+              ],
+              "estimate": 8.5507170274397e-09,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 6.7470423682768446e-09,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 1.4527670229842762,
+              "confidence_interval": [
+                0.9999997954769385,
+                1.0000003368148775
+              ],
+              "estimate": 1.000000051701338,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 1.452766947874281,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -0.1,
+              0.1
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.021831763604998812,
+              0.07818334609567744
+            ],
+            "decision": "PASS",
+            "estimate": 0.028175791245339313
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9766541683383574,
+              1.0664512471528735
+            ],
+            "decision": "PASS",
+            "estimate": 1.0206582599698173
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 1.2152777777774126e-05,
+              "p1_all32_vs_gpumd_all32": 0.00811046006944438,
+              "p1_same8_vs_p1_all32": 0.002232855902777775
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.01035546874999993
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1110601285195,
+              "effective_samples_squared_deviation_pooled": 5564.154498522705,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10978.052900266604,
+              "effective_samples_squared_deviation_pooled": 22927.809072768443,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1108982450924,
+              "effective_samples_squared_deviation_pooled": 5564.152162327864,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "temperature_K": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.12861169688362373,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.43356112433785143,
+                0.24565548848725371
+              ],
+              "estimate": -0.09395281792529886,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.11980307593231514,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 300.0924207571883,
+              "confidence_interval": [
+                0.9791523867640907,
+                1.0216891146055638
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0002804044489277,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 1.7067812524985472e-06,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -3.7569085613820623e-06,
+                5.262699186065479e-06
+              ],
+              "estimate": 7.528953123417084e-07,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 6.613885108214289e-07,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 278.13036519284606,
+              "confidence_interval": [
+                0.9999961683394734,
+                1.0000042427531062
+              ],
+              "estimate": 1.0000006107142514,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 278.130195334772,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -6,
+              6
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.4335648812464128,
+              0.2456607511864398
+            ],
+            "decision": "PASS",
+            "estimate": -0.09395206502998651
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9791486349845407,
+              1.0216934493802283
+            ],
+            "decision": "PASS",
+            "estimate": 1.0002810153344261
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 2.4305555555548253e-05,
+              "p1_all32_vs_gpumd_all32": 0.002262803819444492,
+              "p1_same8_vs_p1_all32": 0.004114366319444396
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.006401475694444436
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.034878503593,
+              "effective_samples_squared_deviation_pooled": 51354.0015821561,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 65270.6633133675,
+              "effective_samples_squared_deviation_pooled": 206731.18895147042,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.016270246968,
+              "effective_samples_squared_deviation_pooled": 51353.604002908236,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "volume_A3": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.05309529841135457,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.23661163164386428,
+                0.058577761352335556
+              ],
+              "estimate": -0.08901693514576436,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.05233131128360202,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 1241.5652866158946,
+              "confidence_interval": [
+                0.9354389415244055,
+                1.0203211543169064
+              ],
+              "confidence_z": 2.64,
+              "estimate": 0.9775849047838607,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 4.4147581491658686e-07,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -1.1482432907443504e-05,
+                1.751866021171089e-05
+              ],
+              "estimate": 3.018113652133694e-06,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 3.984015690014634e-06,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 12.451079950553499,
+              "confidence_interval": [
+                0.9999993365476288,
+                1.000000999441091
+              ],
+              "estimate": 1.000000076795406,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 12.451078994367831,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -3.1039132165397367,
+              3.1039132165397367
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.23662311407677172,
+              0.05859528001254727
+            ],
+            "decision": "PASS",
+            "estimate": -0.08901391703211223
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9354383209052217,
+              1.0203221740677941
+            ],
+            "decision": "PASS",
+            "estimate": 0.9775849798578904
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 7.812499999981792e-06,
+              "p1_all32_vs_gpumd_all32": 0.009743272569444406,
+              "p1_same8_vs_p1_all32": 0.0034878472222222845
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.013238932291666672
+          },
+          "cdf_decision": "PASS",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.770916989424,
+              "effective_samples_squared_deviation_pooled": 5467.44989728127,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10919.99838896124,
+              "effective_samples_squared_deviation_pooled": 22327.89668883389,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.77389591974,
+              "effective_samples_squared_deviation_pooled": 5467.456105759953,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        }
+      },
+      "P4/CudaAware": {
+        "pressure_GPa": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.017902249127992854,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.021831668540334227,
+                0.0781832339295788
+              ],
+              "estimate": 0.028175782694622287,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.017730687884911552,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": -0.008361472879348762,
+              "confidence_interval": [
+                0.9766543680866988,
+                1.0664508879563483
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0206582072004222,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 3.9722196923592384e-08,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -1.0365523744447614e-07,
+                1.0625955661199052e-07
+              ],
+              "estimate": 1.3021595837571904e-09,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 9.574208396587088e-09,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 1.45276692504718,
+              "confidence_interval": [
+                0.9999996914209124,
+                1.00000031792365
+              ],
+              "estimate": 0.9999999842871555,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 1.452766947874281,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -0.1,
+              0.1
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.021831772195571673,
+              0.0781833401891354
+            ],
+            "decision": "PASS",
+            "estimate": 0.02817578399678187
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.976654066711585,
+              1.0664512270063073
+            ],
+            "decision": "PASS",
+            "estimate": 1.0206581911629786
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 1.2152777777774126e-05,
+              "p1_all32_vs_gpumd_all32": 0.00811046006944438,
+              "p1_same8_vs_p1_all32": 0.002232855902777775
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.01035546874999993
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1110928431704,
+              "effective_samples_squared_deviation_pooled": 5564.151080109081,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10978.052900266604,
+              "effective_samples_squared_deviation_pooled": 22927.809072768443,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1108982450924,
+              "effective_samples_squared_deviation_pooled": 5564.152162327864,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "temperature_K": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.12861169688362373,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.43356112433785143,
+                0.24565548848725371
+              ],
+              "estimate": -0.09395281792529886,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.11980307593231514,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 300.0924207571883,
+              "confidence_interval": [
+                0.9791523867640907,
+                1.0216891146055638
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0002804044489277,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 1.7340791270241322e-06,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -4.814973032933028e-06,
+                4.348892287182002e-06
+              ],
+              "estimate": -2.3304037287551358e-07,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 6.784719292078068e-07,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 278.1302058408991,
+              "confidence_interval": [
+                0.9999954844771602,
+                1.0000041127188743
+              ],
+              "estimate": 1.0000000377741336,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 278.130195334772,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -6,
+              6
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.4335659393108844,
+              0.2456598373795409
+            ],
+            "decision": "PASS",
+            "estimate": -0.09395305096567173
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9791479653791246,
+              1.0216933165256692
+            ],
+            "decision": "PASS",
+            "estimate": 1.0002804422336533
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 2.4305555555548253e-05,
+              "p1_all32_vs_gpumd_all32": 0.002262803819444492,
+              "p1_same8_vs_p1_all32": 0.004114366319444396
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.006401475694444436
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.020417295378,
+              "effective_samples_squared_deviation_pooled": 51353.879033908095,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 65270.6633133675,
+              "effective_samples_squared_deviation_pooled": 206731.18895147042,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.016270246968,
+              "effective_samples_squared_deviation_pooled": 51353.604002908236,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "volume_A3": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.05309529841135457,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.23661163164386428,
+                0.058577761352335556
+              ],
+              "estimate": -0.08901693514576436,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.05233131128360202,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 1241.5652866158946,
+              "confidence_interval": [
+                0.9354389415244055,
+                1.0203211543169064
+              ],
+              "confidence_z": 2.64,
+              "estimate": 0.9775849047838607,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 5.00874863689631e-07,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -2.0592419232221003e-05,
+                1.5168237069632731e-05
+              ],
+              "estimate": -2.7120910812941347e-06,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 4.912608473289164e-06,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 12.45107696233225,
+              "confidence_interval": [
+                0.9999990756297514,
+                1.00000064917775
+              ],
+              "estimate": 0.9999998367984347,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 12.451078994367831,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -3.1039132165397367,
+              3.1039132165397367
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.2366322240630965,
+              0.058592929589405186
+            ],
+            "decision": "PASS",
+            "estimate": -0.08901964723684566
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9354380768324786,
+              1.0203218166866976
+            ],
+            "decision": "PASS",
+            "estimate": 0.9775847452404741
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 7.812500000037303e-06,
+              "p1_all32_vs_gpumd_all32": 0.009743272569444406,
+              "p1_same8_vs_p1_all32": 0.0034878472222222845
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.013238932291666727
+          },
+          "cdf_decision": "PASS",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.7714056991967,
+              "effective_samples_squared_deviation_pooled": 5467.45672848422,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10919.99838896124,
+              "effective_samples_squared_deviation_pooled": 22327.89668883389,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.77389591974,
+              "effective_samples_squared_deviation_pooled": 5467.456105759953,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        }
+      },
+      "P4/HostStaged": {
+        "pressure_GPa": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.017902249127992854,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.021831668540334227,
+                0.0781832339295788
+              ],
+              "estimate": 0.028175782694622287,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.017730687884911552,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": -0.008361472879348762,
+              "confidence_interval": [
+                0.9766543680866988,
+                1.0664508879563483
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0206582072004222,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 3.9557631875933944e-08,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -1.0322128738472245e-07,
+                1.0582385089327448e-07
+              ],
+              "estimate": 1.3012817542760196e-09,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 7.786020150513132e-09,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 1.4527668161508358,
+              "confidence_interval": [
+                0.9999996356928216,
+                1.0000001833369774
+              ],
+              "estimate": 0.9999999093292662,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 1.452766947874281,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -0.1,
+              0.1
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.021831771761621613,
+              0.07818333975342968
+            ],
+            "decision": "PASS",
+            "estimate": 0.028175783995904043
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9766540122845017,
+              1.0664510834762306
+            ],
+            "decision": "PASS",
+            "estimate": 1.0206581146565936
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 1.4756944444527242e-05,
+              "p1_all32_vs_gpumd_all32": 0.00811046006944438,
+              "p1_same8_vs_p1_all32": 0.002232855902777775
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.010358072916666683
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1108914730057,
+              "effective_samples_squared_deviation_pooled": 5564.15313940686,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10978.052900266604,
+              "effective_samples_squared_deviation_pooled": 22927.809072768443,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2897.1108982450924,
+              "effective_samples_squared_deviation_pooled": 5564.152162327864,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "temperature_K": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.12861169688362373,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.43356112433785143,
+                0.24565548848725371
+              ],
+              "estimate": -0.09395281792529886,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.11980307593231514,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 300.0924207571883,
+              "confidence_interval": [
+                0.9791523867640907,
+                1.0216891146055638
+              ],
+              "confidence_z": 2.64,
+              "estimate": 1.0002804044489277,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 1.7727428902282795e-06,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -4.640396931759822e-06,
+                4.7277898136293015e-06
+              ],
+              "estimate": 4.369644093473981e-08,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 3.804222447694388e-07,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 278.1300454561589,
+              "confidence_interval": [
+                0.9999951085108162,
+                1.0000042732767322
+              ],
+              "estimate": 0.9999994611206707,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 278.130195334772,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -6,
+              6
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.4335657647347832,
+              0.24566021627706736
+            ],
+            "decision": "PASS",
+            "estimate": -0.09395277422885792
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9791475972507815,
+              1.0216934805658848
+            ],
+            "decision": "PASS",
+            "estimate": 1.0002798654184943
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 2.6041666666642982e-05,
+              "p1_all32_vs_gpumd_all32": 0.002262803819444492,
+              "p1_same8_vs_p1_all32": 0.004114366319444396
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.006403211805555531
+          },
+          "cdf_decision": "REPORT_ONLY",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.009604660616,
+              "effective_samples_squared_deviation_pooled": 51353.853081221816,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 65270.6633133675,
+              "effective_samples_squared_deviation_pooled": 206731.18895147042,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 16485.016270246968,
+              "effective_samples_squared_deviation_pooled": 51353.604002908236,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        },
+        "volume_A3": {
+          "primary_p1_minus_gpumd": {
+            "mean": {
+              "block_standard_error_conservative_sum": 0.05309529841135457,
+              "block_t_critical": 2.640570917277084,
+              "confidence_interval": [
+                -0.23661163164386428,
+                0.058577761352335556
+              ],
+              "estimate": -0.08901693514576436,
+              "pairing": "registered initial-model seed only; no timestep/RNG stream pairing",
+              "seed_standard_error_paired_by_initial_model_only": 0.05233131128360202,
+              "seed_t_critical": 2.8203897987235913
+            },
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "block_length_fs": 125,
+              "block_length_steps": 500,
+              "bootstrap_replicates": 20000,
+              "ci_method": "hierarchical seed then independent within-seed complete-block percentile bootstrap",
+              "common_reference_center": 1241.5652866158946,
+              "confidence_interval": [
+                0.9354389415244055,
+                1.0203211543169064
+              ],
+              "confidence_z": 2.64,
+              "estimate": 0.9775849047838607,
+              "estimator": "ratio of global unbiased sample variances",
+              "finite_sample_correction": "same pooled N/(N-1) from centered M2/(N-1) for both engines",
+              "resampling": "seed clusters with replacement, then each engine's blocks independently with replacement"
+            }
+          },
+          "paired_bridge_mpi_minus_p1": {
+            "mean": {
+              "block_standard_error": 4.586689376622805e-07,
+              "block_t_critical": 2.6422858038321517,
+              "complete_paired_blocks": 2304,
+              "confidence_interval": [
+                -1.3237552221145805e-05,
+                1.20019480747394e-05
+              ],
+              "estimate": -6.178020732032034e-07,
+              "pairing": "registered same initial-model and ensemble seed, matched time-block index; numeric samples need not be byte-identical",
+              "seed_standard_error": 3.467268105164016e-06,
+              "seed_t_critical": 3.6396810875822467
+            },
+            "pairing": "same initial model/ensemble seed and same time-block index",
+            "variance_ratio": {
+              "alpha_two_sided": 0.008290602722072082,
+              "analysis_seed": 2026110301,
+              "bootstrap_replicates": 20000,
+              "candidate_global_unbiased_variance": 12.451081658922998,
+              "confidence_interval": [
+                0.9999995105433286,
+                1.000001061560416
+              ],
+              "estimate": 1.0000002140019486,
+              "estimator": "ratio of global unbiased sample variances",
+              "reference_global_unbiased_variance": 12.451078994367831,
+              "resampling": "seed clusters then paired within-seed block indices"
+            }
+          },
+          "composite_mean": {
+            "allowed_interval": [
+              -3.1039132165397367,
+              3.1039132165397367
+            ],
+            "combination": "primary plus paired bridge; component intervals combined by endpoint addition",
+            "confidence_interval": [
+              -0.23662486919608544,
+              0.0585897633004103
+            ],
+            "decision": "PASS",
+            "estimate": -0.08901755294783757
+          },
+          "composite_variance_ratio": {
+            "allowed_interval": [
+              0.85,
+              1.15
+            ],
+            "combination": "primary ratio times paired bridge ratio; component intervals combined by endpoint multiplication",
+            "confidence_interval": [
+              0.9354384836675749,
+              1.0203222374494554
+            ],
+            "decision": "PASS",
+            "estimate": 0.9775851139889353
+          },
+          "cdf_triangle": {
+            "components": {
+              "mpi8_vs_p1_same8": 8.680555555529157e-06,
+              "p1_all32_vs_gpumd_all32": 0.009743272569444406,
+              "p1_same8_vs_p1_all32": 0.0034878472222222845
+            },
+            "identity": "D(MPI8,P1-8)+D(P1-8,P1-32)+D(P1-32,GPUMD-32)",
+            "triangle_sum": 0.01323980034722222
+          },
+          "cdf_decision": "PASS",
+          "ess": {
+            "mpi_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.7688372934863,
+              "effective_samples_squared_deviation_pooled": 5467.449620008997,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_full32": {
+              "effective_samples_mean_pooled": 10919.99838896124,
+              "effective_samples_squared_deviation_pooled": 22327.89668883389,
+              "pooled_sample_count": 4608000,
+              "scope": "pooled over seeds for this engine and metric"
+            },
+            "p1_anchor_candidate_same8": {
+              "effective_samples_mean_pooled": 2886.77389591974,
+              "effective_samples_squared_deviation_pooled": 5467.456105759953,
+              "pooled_sample_count": 1152000,
+              "scope": "pooled over seeds for this engine and metric"
+            }
+          },
+          "ess_gate": "PASS",
+          "decision": "PASS"
+        }
+      }
+    }
+  },
+  "theory_diagnostics": {
+    "primary_base": "THEORY_TARGET_INCONCLUSIVE",
+    "primary_half": "THEORY_TARGET_INCONCLUSIVE"
+  },
+  "history": {
+    "original_18_looks_status": "INCONCLUSIVE; original index unchanged",
+    "interrupted_predecessor_confirmation": {
+      "completed": 63,
+      "interrupted": 6,
+      "planned": 91,
+      "included_in_successor": false,
+      "final_analysis_run": false
+    },
+    "registration_changes": "Same frozen seeds, full budgets, estimators and bounds; successor uses isolated same-source CUDA12.8 reference build and reviewed n3 runtime."
+  },
+  "limitations": [
+    "Compatibility applies to the registered finite trajectories; no universal exact-NPT or ergodicity claim.",
+    "Theory-target diagnostics remain separate and do not override cross-engine compatibility.",
+    "No RDMA/cross-node or non-NEP NPT validation.",
+    "NEP5/ZBL evidence is the separately recorded short output/restart contract, not this statistical study.",
+    "GPUMD internal clock seed is not observed; distinct UTC launch seconds are conservative isolation evidence."
+  ],
+  "provenance_note": "Numerical summaries copy the one completed frozen report; this index performs no new estimator, bootstrap or statistical look.",
+  "post_study_test_maintenance": {
+    "old_source_sha256": "d0d7ba73540360ec09e0170f375239523811b5b9bfaf1c6bb5fa5276dabd4449",
+    "new_source_sha256": "0cd77b2960044685b2d18de9432ffde0c884488e4fc0636d3a38535141b7d9de",
+    "applied_at_utc": "2026-11-04T11:40:22.613837+00:00",
+    "analysis_ended_at_utc": "2026-11-04T11:39:03.501210+00:00",
+    "test_count": 6,
+    "test_status": "PASS",
+    "frozen_registration_updated": false
+  },
+  "review_receipts": {
+    "source_reference_integrity": "IDENTITY_AUDIT_PASS, 51 checks",
+    "independent_execution_metadata": "PASS, 15 checks",
+    "report_metadata_and_decision_arithmetic": "PASS_METADATA_AND_DECISION_CONSISTENCY",
+    "independent_scientific_review": "PASS",
+    "post_study_cpu_tests": "6/6 PASS",
+    "final_integrity": "PASS_EXPECTED_SINGLE_MAINTENANCE_EXCEPTION; 465 checks, zero failures",
+    "documentation": "21 files, 405 local links/fragments, zero broken; git diff --check exit0"
+  },
+  "finalized_at_utc": "2026-11-04T11:56:25.710849+00:00",
+  "step_decisions": {
+    "B0": "PASS",
+    "B1": "PASS",
+    "B2": "PASS",
+    "B3": "PASS_SCOPED_INDEPENDENT_CONFIRMATION",
+    "B4": "PASS",
+    "G-B": "PASS"
+  },
+  "root_acceptance": {
+    "decision": "PASS",
+    "accepted_at_utc": "2026-11-04T11:56:25.710849+00:00",
+    "receipt_sha256": "183e2c249fd8b4ed8241961b76dd99edf0ba3386eb6c24eaee06e5e79038e611"
+  },
+  "relocation": {
+    "retention_date": "2026-11-05",
+    "retention_policy": "At user request, retain only the final paired-analysis result, registration manifest/protocol and original 18-look index; intermediate execution, migration, audit and snapshot details were removed.",
+    "retained_paired_analysis_sha256": "ddc4b004888706b2915d60f494a1590869dda6f637b35acc0a67e2aa5c565461",
+    "replayability": "NOT_FULLY_REPLAYABLE_BY_DESIGN",
+    "historical_paths_note": "Paths embedded in the final report and one_shot_analysis record describe the original execution layout and are historical facts, not current locators."
+  }
+}

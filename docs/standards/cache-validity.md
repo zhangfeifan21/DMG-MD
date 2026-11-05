@@ -1,4 +1,4 @@
-# M2a 缓存有效性与统一重建
+# 局部域分解缓存有效性与统一重建
 
 类别：现行标准及充分条件证明。核对日期：2026-10-23。
 
@@ -51,7 +51,7 @@ d_coord = max_(ti,tj,tk)(R_force(ti,tj) + R_dep(tj,tk)) + 2*skin
 
 这是保守逐边充分界。跨 MIC image 的更紧端点界尚无当前单-slot ghost 表示下的证明，不能
 据此缩 halo。半径须按 radial-first/angular/ZBL 实际消费路径及 float pair-average 舍入取上界，
-无法证明时 dispatcher 回退 M1。
+无法证明时 dispatcher 回退到全量复制模式。
 
 rebuild 用参考位置建立左右 send members，eligibility 要求 slab_width≥d_coord。
 普通步刷新固定成员，不重新 band-test；P2 同 peer 按现有 plan 去重。位移界、manager/key

@@ -1,6 +1,6 @@
 # 系综与恒温器
 
-类别：现行实现合同。更新日期：2026-11-02。适用于锁定 GPUMD
+类别：现行实现合同。更新日期：2026-11-04。适用于锁定 GPUMD
 `9d23496e41319b9e2af5221a7df6285387401d1e` 的普通 NEP4/5、NEP-ZBL 路径。
 验收范围与统计限制见 [NHC 记录](../status/validation/thermostat-validation.md#nhc-20261102)、
 [BDP 记录](../status/validation/thermostat-validation.md#bdp-20261102)和[双路径矩阵](../status/validation/thermostat-validation.md#thermostat-matrix-20261102)。
@@ -31,7 +31,7 @@ T_target = T1 + (T2 - T1) * fraction
 ramp 的短程功能检查不能替代平衡分布证据。
 
 所有路径沿用 `T = Σ_owned m*v²/(3N*k_B)`，其中 N 为全局原子数，
-`k_B=8.617343e-5 eV/K`。不扣除质心自由度；ghost 和 M1 的其他 rank 副本不参与求和。
+`k_B=8.617343e-5 eV/K`。不扣除质心自由度；ghost 和全量复制模式的其他 rank 副本不参与求和。
 `velocity` 初始化会修正全局动量，因此去质心初速不能直接作为具有 3N 个独立动量的统计 oracle。
 测试中的正则矩使用显式独立 Gaussian 初速、无约束且无速度修正的相互作用体系。
 
@@ -86,9 +86,9 @@ Q_0 *= 3N
 
 ## 并行、限制与通信
 
-P1 使用 M1；P2/P4 按真实几何判据进入 M1 fallback 或 M2a，支持 HostStaged 和通过环境门的
+P1 使用全量复制模式；P2/P4 按真实几何判据进入全量复制回退路径或局部域分解模式，支持 HostStaged 和通过环境门的
 CudaAware。没有测试专用强制路由。单节点已验收范围不推导出跨节点保证。
-NPT、其他势函数、fixed/move group 仍不支持。
+势函数支持仍限 NEP4/5 与 NEP-ZBL；fixed/move group 仍不支持。`npt_ber` 的已验收范围、输出时点、重启限制及全量复制路径见[控压器标准](barostat.md)。`npt_scr` 的 G-B 已通过，但统计支持仅限 216 原子 NEP-C、300 K/0 GPa、单节点全量复制模式下的各向同性正交全周期矩阵：base 为 P1/HostStaged 与 P2/P4 双后端，half-dt 仅 P1/HostStaged；NEP5/ZBL 仅有另行记录的短程合同证据。原注册18个 formal look 总体 INCONCLUSIVE 的历史结论保留；本次结果不外推至普遍严格 NPT 采样、遍历性、RDMA 或跨节点。详见[NPT/G-B矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)、[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)与[机器索引](../status/validation/npt-scr-n3-confirmation-index.json)。
 
 NHC/BDP 与 `correct_velocity`、带第二参数的自适应 `time_step` 组合会在运行前拒绝。
 还要求以下实验选项为默认值（unset 也接受）：

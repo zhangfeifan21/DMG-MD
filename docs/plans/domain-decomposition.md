@@ -2,13 +2,14 @@
 
 类别：后续计划。状态：**PROPOSED**。更新日期：2026-10-21。
 
-M0、M1、M2a 已实施；双路径、两跳 halo、迁移、缓存与字节合同分别由
+单 rank 基线、全量复制模式、局部域分解模式已实施；双路径、两跳 halo、迁移、缓存与字节合同分别由
 [MPI runtime](../standards/mpi-runtime.md)、[布局](../standards/data-layout.md)和
 [缓存有效性](../standards/cache-validity.md)定义。O1–O5 本机阶段及 DMG-MD 绑定已完成；
 近期性能工作按 [O6–O11](communication-computation-overlap.md) 推进，跨引擎绑定和
-LAMMPS 验收独立管理，见[待办](risk-and-backlog.md)。M2b/3D 不是当前默认下一切口。
+LAMMPS 验收独立管理，见[待办](risk-and-backlog.md)。分阶段中间场交换方案与 3D 不是当前默认下一切口。
 
-## M2b：分阶段中间场交换
+<a id="m2b-分阶段中间场交换"></a>
+## 分阶段中间场交换方案
 
 目标是减少两跳坐标带和 dependency-center 冗余计算。候选流程：
 
@@ -33,9 +34,9 @@ force assembly，须单独比较，不能与中间场 forward exchange 混为一
 有向边三个 float。省掉深层坐标不保证总字节减少。均匀密度且两侧带不重叠、无需去重时，
 两跳 slab 每 rank 接收位置量近似为 `24 * 2ρA*d_coord` B/step；实际值以 face plan 为准。
 
-验收以 M2a 为 oracle：同快照比较逐原子 energy/force/全部 virial、邻居/反边及精确字节；
+验收以 局部域分解为 oracle：同快照比较逐原子 energy/force/全部 virial、邻居/反边及精确字节；
 覆盖两跳链、多元素/NEP5/ZBL、P2 同 peer、周期、空 rank、迁移、多 run/restart，再执行
-baseline、MPI 与 long_nve。先做同步版本，随后另评估 overlap；M2b/force assembly 方向待确认。
+baseline、MPI 与 long_nve。先做同步版本，随后另评估 overlap；分阶段中间场交换方案/force assembly 方向待确认。
 
 ## 多节点硬化
 
@@ -49,4 +50,4 @@ baseline、MPI 与 long_nve。先做同步版本，随后另评估 overlap；M2b
 
 3D 分解、负载均衡、triclinic/非周期 local-domain、small-box 多 image 和更多 ensemble
 未实施。每项先给几何/halo/所有权证明、反例和 golden 设计，再确定方向。
-P=1、M1 fallback、rank-0 兼容输出与原容差始终保留。
+P=1、全量复制回退路径、rank-0 兼容输出与原容差始终保留。

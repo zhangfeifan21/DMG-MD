@@ -80,7 +80,7 @@ scripts/run_long_nve_nightly.sh \
 
 CudaAware 相对 HostStaged 的 P2/P4 `seconds_max` 分别慢：carbon 3.6%/3.5%，water
 5.8%/6.4%，BaTiO3 11.5%/11.0%。P1 的 backend 名仅来自相互独立的重复运行；P1 恒走
-M1 fallback，没有 M2a p2p 后端差异。
+全量复制回退路径，没有 局部域分解p2p 后端差异。
 
 用户给出的 2026-09-18 correctness-nightly 观测使用旧二进制和详细正确性日志，不能作为本表
 低诊断成本 A/B 的置信基线；本表只与同一最终二进制、同一 runner 内的 P1 参照计算 speedup。
@@ -172,11 +172,11 @@ ghost 使 P=4 的全局 dependency-center 总工作反而上升（例如 carbon 
   cell 网格进一步限制扩展。
 - 重建步：water/BaTiO3 主要是 direct migration、membership/layout/upload 与 cell/neighbor；
   NEP 本身与普通步接近。减少重建已生效，但真实 water 仍有 2.25% rebuild，应在第三阶段对比
-  M2b/MatPL 时继续单列，不能只看总时间。
+ 分阶段中间场交换方案/MatPL 时继续单列，不能只看总时间。
 - 后续具体待办：把重建的 cell list 改为 rank-local cell 网格（保留相同候选/排序 oracle）；
   对 NVE 只在科学输出/控制真正需要时计算 thermo，同时保持 NVT thermostat 每步全局 thermo；
-  第三阶段按计划实现并比较 M2b 与 MatPL 式 ghost 力回传。该排期为当时建议；当前 P0 与 O1–O3 状态见[当前状态](../current.md)。
-- 本轮不实现 M2b、ghost force return、overlap、3D decomposition、动态负载均衡或新势函数；
+  第三阶段按计划实现并比较分阶段中间场交换方案与 MatPL 式 ghost 力回传。该排期为当时建议；当前 P0 与 O1–O3 状态见[当前状态](../current.md)。
+- 本轮不实现分阶段中间场交换方案、ghost force return、overlap、3D decomposition、动态负载均衡或新势函数；
   也不因 water/BaTiO3 的 CudaAware 仍负扩展而放宽任何正确性门槛。
 
 ## 7. 最终验证证据

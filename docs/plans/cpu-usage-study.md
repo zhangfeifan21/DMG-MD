@@ -29,7 +29,7 @@ CPU 时间无法区分 MPI 忙轮询与有效工作；墙钟、CUDA event、MPI 
 1. 使用已验收的统一入口固定 GPU UUID、每 rank 物理核心、NUMA、cpuset/quota，
    保存实际 affinity 与独占条件；其他尚未验收的调度器环境先补相应门槛。
 2. 复用 manifest，以 carbon_1m/water_400k、P1/2、两后端 pilot，资源允许再补 P4。
-   P1 为 M1；OOM/缺卡/后端回退保留 FAILED/PARTIAL。
+   P1 为全量复制模式；OOM/缺卡/后端回退保留 FAILED/PARTIAL。
 3. 同输入、binary、步数和资源下，随机化无采样、proc、详细 trace 三组，至少五次重复。
    校准周期/步数，正式目标每 trial 至少十个完整有效窗口；各 P 使用同一步数。
 4. 主结果采用关闭 profiler 的正式 run 墙钟，另报进程墙钟和采样/marker/存储开销；

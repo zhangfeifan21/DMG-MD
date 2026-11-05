@@ -42,9 +42,13 @@ Origin file: src/force/neighbor.cu
 Purpose: Cell-list construction and the O(N) full (Verlet) neighbor builder
 with skin-based rebuild checks.
 
+DMG-MD B1 adaptation: consume a one-shot force-rebuild flag in the replicated-full/global
+path after validated box changes; the flag defaults false and does not affect
+the pinned displacement check or local-domain cache decision.
+
 Adaptations for this replica are listed at the bottom of this header block.
 
-DMG-MD domain additions (M2a): gpu_find_neighbor_ON1_domain (center range
+DMG-MD domain additions (local-domain): gpu_find_neighbor_ON1_domain (center range
 separated from the candidate domain, with a safe row-capacity guard),
 gpu_sort_neighbor_list_domain (global-ID row ordering) and the
 needs_rebuild_domain / find_neighbor_domain / invalidate_rebuild_reference
@@ -216,7 +220,7 @@ static __global__ void gpu_find_neighbor_ON1(
   }
 }
 
-// M2a domain variant of gpu_find_neighbor_ON1 (docs/standards/mpi-runtime.md):
+// local-domain variant of gpu_find_neighbor_ON1 (docs/standards/mpi-runtime.md):
 // centers are [center_begin, center_end) while candidates are
 // every local slot (owned + ghosts), removing the legacy assumption that a
 // candidate must also lie inside the center range. Writing past the per-row
@@ -328,7 +332,7 @@ void find_cell_list(  const double rc,
 
   // number of cells is allowed to be larger than the number of atoms
   if (N_cells > cell_count.size()) {
-    // M2a may alternate the logical scratch size between local_count during
+    // local-domain may alternate the logical scratch size between local_count during
     // workspace initialization and N_cells during the build. Capacity reuse
     // avoids a free/allocate pair on every otherwise unchanged rebuild.
     cell_count.resize_reuse(N_cells);
@@ -553,7 +557,7 @@ void Neighbor::find_neighbor_global(
     z0.resize(N);
   }
 
-  if (is_first_time || check_atom_distance(box, x, y, z, N)) {
+  if (is_first_time || force_global_rebuild_ || check_atom_distance(box, x, y, z, N)) {
     find_neighbor(
       0,
       N,
@@ -576,6 +580,7 @@ void Neighbor::find_neighbor_global(
       y0.data(), 
       z0.data());
     GPU_CHECK_KERNEL
+    force_global_rebuild_ = false;
   }
 }
 

@@ -1,18 +1,22 @@
 # 按需执行 NVE thermo 实测
 
-目标：保存 O8 按需执行 M2a NVE thermo 的消费者证据、调用计数、MPI/nightly 验收、配对性能和边界。
+目标：保存 O8 按需执行 局部域分解 NVE thermo 的消费者证据、调用计数、MPI/nightly 验收、配对性能和边界。
 
 | 日期 | 阶段 | 结论 | 适用范围与限制 |
 | --- | --- | --- | --- |
 | 2026-10-23 至 2026-10-26 | [O8 按需 NVE thermo](#o8-results-20261026-report) | 实际调用计数和科学文件 differential 292/292 通过；完成 MPI/nightly 与 105 个正式 trial。 | 增量结果按四组分别为 INCONCLUSIVE 或 SPEEDUP；只适用于所列输入、输出节奏、绑定、GPU、后端和本机环境。 |
 
-以下各节按来源报告分别保留原始身份、环境、实际命令、统计数据、失败与未覆盖边界及原始产物路径；标题层级仅为嵌入整合文档而调整。
+以下各节按来源报告记录执行身份、环境、历史命令、统计数据、失败与未覆盖边界；标题层级仅为嵌入整合文档而调整。
+
+> **保留与适用边界（2026-11-05）：** 本文保存公共共享服务器历史测量的结果、结论和适用限制；这些数据属于历史探索，不作为专用性能服务器的基准参考。按授权清理了对应的忽略目录 `dmgmd-overlap-*`，逐 trial 输出、日志、trace、原始输入副本及重算工具均不再保留。下文残留的旧文件名、路径和命令仅记载当时执行过程，不能用来访问产物或复算。后续专用服务器 benchmark 将单独记录为性能参考；本报告的数字、结论和生产默认不变。
+
+
 
 <a id="o8-results-20261026-report"></a>
 
 <a id="o8-results-20261026-o8按需执行-m2a-nve-thermo2026-10-2326"></a>
 
-## O8：按需执行 M2a NVE thermo（2026-10-23–26）
+## O8：按需执行 局部域分解 NVE thermo（2026-10-23–26）
 
 类别：实现、数值回归与独立三版本配对实测。状态：**完成；采用按需 NVE thermo，收益限于冻结范围**。
 本页仅记录 O8；O9–O11 未实施。生产仍为 HostStaged/full、overlap=off。
@@ -35,7 +39,7 @@ energy/stress，不能只按是否请求逐原子 energy 决定；restart/snapsh
 所有 rank 根据同一输入决定执行相同 collective，不按 owned 数量或 root 身份分支。
 有需求时 sums/SUM/归一化/D2H 及数值顺序不变；无需求时完整删除这些辅助工作。
 NEP 数学、launch 参数、SoA 布局、所有权、halo、重建/迁移、积分和用户输出均保持原合同。
-M1/P1 保持原每步 thermo 路径。
+全量复制模式与P1 保持原每步 thermo 路径。
 
 详细计时原先靠每步 thermo D2H 使 event 就绪。O8 将诊断 event 按步保存，到原有段末
 device synchronization 后读取，不引入新的逐步等待。该诊断使用 O(段步数) 资源，
@@ -107,10 +111,10 @@ P1/P2/P4、两后端，包含 100-step 严格短轨迹、10000-step NVE 和 NVT�
 | adaptive timestep/修速 / 13 步 | 13 | 6 |
 | 静默前段及重建/迁移 / 11 步 | 11 | 4 |
 | 空 local rank / 1000 步 | 1000 | 0 |
-| P1/M1 fallback / 7 步 | 7 | 7 |
+| P1/全量复制回退路径 / 7 步 | 7 | 7 |
 
 P2/P4 覆盖两后端、full/serial/wait/poll 和独立详细计时；P8 另覆盖静默、互素输出、
-多 run、空 rank、NVT。cache reason OR 仍恰好每 M2a 步一次，空 rank 也不跳过；
+多 run、空 rank、NVT。cache reason OR 仍恰好每 局部域分解步一次，空 rank 也不跳过；
 1000-step empty-local 继续覆盖周期 neighbor 输出。跨 rank restart 读取的模型与输出逐字节一致。
 
 第一次 differential 的 `correct_velocity 2` 被原 O7 正确拒绝：合同最小间隔为 10。
@@ -177,7 +181,7 @@ O8 相对 O7 的增量：carbon/HostStaged 为 **INCONCLUSIVE**，另三组为 *
 不宣称稳定 CPU 降幅，不把这些值相加来拆账主墙钟或推导网络传输成本。
 
 首个 CPU 诊断遇到 MPI 合并 stdout 交错，PID/clock marker 校验正确拒绝该日志。
-失败原始数据保存在 `diagnostic-failed-interleaving/`；该旧 result 的退出/科学 PASS
+失败原始数据当时归档于 `diagnostic-failed-interleaving/`（该目录现已清理）；该旧 result 的退出/科学 PASS
 不构成 CPU 验收，其 error 与缺失 CPU status 保留。采集器修正为仅在 diagnostics
 阶段使用既有逐 rank 文件适配器，并明确拒绝带 error 或缺 CPU status 的结果。
 修正前源码和 frozen plan 独立保留，AST 检查证明仅 `freeze`（新增适配器哈希）与
@@ -187,7 +191,9 @@ O8 相对 O7 的增量：carbon/HostStaged 为 **INCONCLUSIVE**，另三组为 *
 
 <a id="o8-results-20261026-重算与原始证据"></a>
 
-### 重算与原始证据
+### 历史重算与原始证据
+
+O8 实验树 `dmgmd-overlap-o8-20261023/` 已于 2026-11-05 按授权清理；本页保留结果与结论。以下命令是历史分析记录，当前不能访问原始数据或再次复算。
 
 ```text
 source ../env/md-mpi.sh
@@ -195,12 +201,8 @@ python3 tests/benchmark/run_overlap_o8.py analyze --root dmgmd-overlap-o8-202610
 python3 dmgmd-overlap-o8-20261023/summarize-diagnostics.py
 ```
 
-精确门槛和运行顺序保存在独立目录的 `gate-commands.sh`、
+精确门槛和运行顺序当时记录在独立目录的 `gate-commands.sh`、
 `remaining-gates-and-main.sh`、`continue-after-network.sh` 与 `extension-and-diagnostics.sh`。
-各 trial 的 `launch.json`、原始 stdout/stderr、输入/科学文件哈希、CPU 绑定 audit、
-GPU/CPU 遥测与结果 JSON/CSV 均保留；主 trial 保存 launcher 合并输出，修正后的 CPU
-诊断另有逐 rank 文件与派生拼接 provenance。`run-frozen-command.py` 在 source 同一
-环境入口后复用冻结的受控环境，保留旧 PATH 中的非工具链目录而不切换 MPI/CUDA 库。
-最终源码、相对起始 dirty tree 的 O8 patch、完整工作树 patch、逐文件哈希及三个只读
-reference 的前后清单由 `snapshot-final.py` 保存；原始门槛、慢样本及失败尝试均保留。
+各 trial 的 launch/stdout/stderr、输入与科学文件哈希、绑定 audit、遥测、结果文件、
+源码 patch 和 reference 前后清单也在该目录归档；这些 raw files、原始门槛、慢样本及失败尝试已随目录清理。
 此记录不代表 100000-step release、跨节点、其它设备或输入范围的验收。

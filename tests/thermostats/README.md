@@ -51,7 +51,7 @@ python3 tests/thermostats/check_bdp_contract.py \
   --work-root /tmp/thermostats-bdp-contract-new
 ```
 
-短程 case 是 2016/5184 原子的 NEP4 diamond；前者自然触发 P2/P4 M1 fallback，后者进入 M2a。
+短程 case 是 2016/5184 原子的 NEP4 diamond；前者自然触发 P2/P4 全量复制回退路径，后者进入局部域分解模式。
 每个同 rank/backend 的重复要求科学输出文件逐字节一致；跨 rank 与 GPUMD NHC 比较使用
 既有 baseline 容差。BDP 不与 wall-clock seed 的 GPUMD 比较轨迹。
 负例设置超时并核验非零退出、错误文字、没有最终 XYZ/restart；零 KE 用两个互不作用的静止原子，
@@ -70,7 +70,7 @@ python3 tests/thermostats/check_variants.py \
 
 协议检查也接受 `--ensemble nvt_nhc`（默认）。LD_PRELOAD 探针仅包装 host 2-double Bcast，
 不插入 collective 或 CUDA 操作；检查每 rank 的因子位模式，以及相对 Berendsen 的逐步通信增量。
-NEP5/ZBL 脚本复用 long-NVE 锁定输入/转换，记录实际路由；BaTiO3 在 P2 为 M2a、P4 为 fallback，
+NEP5/ZBL 脚本复用 long-NVE 锁定输入/转换，记录实际路由；BaTiO3 在 P2 为局部域分解模式、P4 为 fallback，
 不能按 rank 数猜测 data plane。
 
 对上面的成功源记录，可补做每个组合的 5-step 新作业 restart 与两种系综的 P1→P4 恢复：
@@ -108,7 +108,7 @@ python3 tests/thermostats/check_velocity_statistics.py \
   --devices 2,4,5,7 --work-root /tmp/thermostats-velocity-new
 ```
 
-KE runner 覆盖 P1、M1 P2/P4、M2a P2/P4 的双后端；减半步长保持物理耦合时间和采样时长；
+KE runner 覆盖 P1、全量复制P2/P4、局部域分解路径 P2/P4 的双后端；减半步长保持物理耦合时间和采样时长；
 BDP 另执行八组 GPUMD 分布对照。NHC 用同样入口的 `--ensembles nvt_nhc`。
 并行 seed 只分配不重叠 GPU 组，不是性能 benchmark；MPI 默认 CPU 绑定可能使多个独立作业竞争
 同一核心，需在操作记录中说明实际 affinity。

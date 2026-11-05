@@ -1,4 +1,4 @@
-# M2a 缓存判定归约实测
+# 局部域分解缓存判定归约实测
 
 目标：保存 O7 将缓存判定归约合并为单次 OR 的实现语义、验收、配对性能结果和采用结论。
 
@@ -6,13 +6,17 @@
 | --- | --- | --- | --- |
 | 2026-10-23 | [O7 单次 OR 归约](#o7-results-20261023-report) | 语义等价实现减少一次实际 collective，经门槛验收后采用。 | 整步收益 INCONCLUSIVE；减少调用次数不等于已证明墙钟收益，范围限本次输入/后端/资源。 |
 
-以下各节按来源报告分别保留原始身份、环境、实际命令、统计数据、失败与未覆盖边界及原始产物路径；标题层级仅为嵌入整合文档而调整。
+以下各节按来源报告记录执行身份、环境、历史命令、统计数据、失败与未覆盖边界；标题层级仅为嵌入整合文档而调整。
+
+> **保留与适用边界（2026-11-05）：** 本文保存公共共享服务器历史测量的结果、结论和适用限制；这些数据属于历史探索，不作为专用性能服务器的基准参考。按授权清理了对应的忽略目录 `dmgmd-overlap-*`，逐 trial 输出、日志、trace、原始输入副本及重算工具均不再保留。下文残留的旧文件名、路径和命令仅记载当时执行过程，不能用来访问产物或复算。后续专用服务器 benchmark 将单独记录为性能参考；本报告的数字、结论和生产默认不变。
+
+
 
 <a id="o7-results-20261023-report"></a>
 
 <a id="o7-results-20261023-o7合并-m2a-缓存判定归约2026-10-23"></a>
 
-## O7：合并 M2a 缓存判定归约（2026-10-23）
+## O7：合并 局部域分解缓存判定归约（2026-10-23）
 
 类别：实现、数值回归与独立配对实测。状态：**完成；采用单次 OR，整步收益 INCONCLUSIVE**。
 本页仅记录 O7；O8–O11 没有实施。
@@ -30,7 +34,7 @@ rebuild/migration transaction 和 NEP 调用均未改动。
 所有消费者已沿调用核对：旧 `global_max_squared` 只用于该阈值比较；
 `local_reasons` 只传给 OR，后续决策只读取 `global_reasons`。
 `allreduce_max_host` 的自适应时间步消费者、周期 `neighbor.out` 占用最大值消费者及
-M1 的相应调用保留。
+全量复制模式的相应调用保留。
 
 - `inspect_domain_cache` 仅对 routeable 原子调用 `atomicMax`。非有限位移平方（包括
   NaN/Inf）、非有限 fractional step、单步超过一个盒长或 wrap 后仍无法路由时，只置
@@ -43,9 +47,9 @@ M1 的相应调用保留。
 - 各 rank 无条件完成同一处 OR 后才分支；删除的 MAX 对所有 rank 同时删除。
   不新增条件性 collective，也不提前进入 halo/force。底层 MPI 失败仍走现有 fatal 路径。
 - periodic crossing 使用原 VV1 在 wrap 前累计的连续位移；多 run 不清零 epoch，
-  restart 仍 bootstrap。M1 的源文件与调用链没有改动。
+  restart 仍 bootstrap。全量复制模式的源文件与调用链没有改动。
 
-普通 M2a 步的固定 collective 从 3 次变为 2 次（decision OR + 原每步 thermo）；
+普通 局部域分解步的固定 collective 从 3 次变为 2 次（decision OR + 原每步 thermo）；
 MPI input/output 逻辑字节分别从 `76P` 降为 `68P`，不表示物理链路字节。
 自适应时间步、周期 neighbor 记录、重建/迁移、输出的额外通信仍另计。
 
@@ -90,13 +94,13 @@ scope/backend 追加五个完整配对块，最多一次。不按速度删样本
 ### 验收与实际归约次数
 
 八 rank 环境预检、committed golden 4/4、CUDA neighbor 检查及 CPU CTest 12/12 已通过。
-P2/P4/P8 × 两后端的 108 个边界/错误对照作业及 4 个 P1/M1 作业通过，成功路径的
+P2/P4/P8 × 两后端的 108 个边界/错误对照作业及 4 个 P1/全量复制作业通过，成功路径的
 thermo/trajectory/neighbor 等科学文件逐字节一致。错误作业中所有 rank 均观测到
 完成后的 invalid OR，随后按原错误文本退出，没有进入本步 halo/force。
 18 对错误作业的退出码及观测到的 `DMGMD_ERROR` 类别/消息逐项一致；MPI_Abort 的
 异步终止不保证每个 rank 的错误行都抵达 launcher，因此不比较错误日志条数。
 完整 MPI 主矩阵 68/68 通过，含 NEP5、多元素/typewise cutoff、ZBL、NVT、自适应步长/
-修速、重建/迁移、restart 与空 rank；另通过 M1 fallback、多 run、timing A/B 与 fatal
+修速、重建/迁移、restart 与空 rank；另通过 全量复制回退路径、多 run、timing A/B 与 fatal
 focused checks。所有主配置均检查逐原子数值、owner/layout 及逐步精确通信量。
 nightly NVE 子矩阵的三个基础体系、seed 0、P1/P2/P4、两后端共 **18/18** 配置通过，
 包含每配置 100 步严格短轨迹和 10000 步守恒检查；跨 rank P1↔P4 restart **12/12** 通过。
@@ -120,7 +124,7 @@ PMPI probe 只用于独立诊断，不链接或预加载到正式性能运行。
 | mixed-invalid-limit | 首步 fatal | 1 / 1 | 3 / 2 | 1 / 1 |
 
 测试准备中的两次拒绝也保留：单原子输入被现有 `N>=2` 校验拒绝；64 Å 盒的 P8
-因 slab 过薄走 M1，不能充作 M2a 证据。前者改为两个互不作用原子，后者仅将 P8
+因 slab 过薄走全量复制模式，不能充作 局部域分解证据。前者改为两个互不作用原子，后者仅将 P8
 盒长改为 128 Å 并平移原子以保持 16 Å face/PBC witness，单步 multi-box fixture
 同步缩放速度。通过的 P2/P4 样本保留，受影响的 P8 单独重跑。
 
@@ -159,14 +163,16 @@ host decision 墙钟包含前序 GPU/D2H 等待与进程到达差，不能全部
 
 <a id="o7-results-20261023-重算入口"></a>
 
-### 重算入口
+### 历史重算记录
+
+O7 原始实验目录 `dmgmd-overlap-o7-20261023/` 已于 2026-11-05 按授权清理；本页保留结果与结论。以下命令只记录当时的分析入口，不能再用于复算。
 
 ```text
 source ../env/md-mpi.sh
 python3 tests/benchmark/run_overlap_o7.py analyze --root dmgmd-overlap-o7-20261023
 ```
 
-精确门槛命令见独立目录的 `gate-commands.sh`、`gate-continuation-1.sh` 和
+精确门槛命令当时记录在独立目录的 `gate-commands.sh`、`gate-continuation-1.sh` 和
 `remaining-gates-and-main.sh` 及修正采集器后的 `continuation-main.sh`；正式 trial 的 `launch.json` 包含实际命令与环境，
-`result.json`、独立 rank stdout/stderr、绑定 audit、遥测、输入及科学输出哈希均保留。
+`result.json`、独立 rank stdout/stderr、绑定 audit、遥测、输入及科学输出哈希曾归档，现已随原始目录清理。
 最终报告不代表未运行的 100000-step release、跨节点或其它硬件/输入。

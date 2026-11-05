@@ -1,13 +1,17 @@
 # Producer 调度方案对照实测
 
-目标：并列保存 O8.5 producer-only split 与 O8.6 紧凑索引/几何内缩候选的正确性、正式整步对照、实际执行诊断和未确认边界。
+目标：并列记录 O8.5 producer-only split 与 O8.6 紧凑索引/几何内缩候选的正确性、正式整步对照、实际执行诊断和未确认边界。
 
 | 日期 | 阶段 | 结论 | 适用范围与限制 |
 | --- | --- | --- | --- |
 | 2026-10-27 开始、10-28 完成 | [O8.5 只拆 producer、力计算完整执行](#o85-results-20261027-report) | 完成 120 个正式 trial、CUDA 时间线、CPU 诊断和复算；多数组合拆分成本下降，候选相对 full 的净收益按组不同。 | 探索结果，未采用；生产默认保持 HostStaged/full、overlap=off、schedule=split。注意源文件名日期为 10-27，正文执行完成日期为 10-28。 |
 | 2026-10-28 | [O8.6 producer 紧凑索引与几何内缩](#o86-results-20261028-report) | 完成候选 A/B/C 的正确性与正式整步配对，记录 GPU 执行、分区维护成本和资源边界。 | COMPLETE 仅指本轮实验完成；未自动采用，O9 独立确认仍是后续门槛；结论限冻结输入、P2/P8、双后端、K=4 和 wait。 |
 
-以下各节按来源报告分别保留原始身份、环境、实际命令、统计数据、失败与未覆盖边界及原始产物路径；标题层级仅为嵌入整合文档而调整。
+以下各节按来源报告记录执行身份、环境、历史命令、统计数据、失败与未覆盖边界；标题层级仅为嵌入整合文档而调整。
+
+> **保留与适用边界（2026-11-05）：** 本文保存公共共享服务器历史测量的结果、结论和适用限制；这些数据属于历史探索，不作为专用性能服务器的基准参考。按授权清理了对应的忽略目录 `dmgmd-overlap-*`，逐 trial 输出、日志、trace、原始输入副本及重算工具均不再保留。下文残留的旧文件名、路径和命令仅记载当时执行过程，不能用来访问产物或复算。后续专用服务器 benchmark 将单独记录为性能参考；本报告的数字、结论和生产默认不变。
+
+
 
 <a id="o85-results-20261027-report"></a>
 
@@ -38,7 +42,7 @@ HostStaged/full、overlap=off、schedule=split。O9 未在本任务执行。
 
 候选构建为 Release、CUDA architecture 89、O6.5 diagnostics OFF。
 `DMGMD_DOMAIN_SCHEDULE=producer` 是显式实验选择，原完整 split 仍保留；
-partition=off、P1/M1、setup/rebuild/迁移、空 interior/local 与未证明模型维持 full。
+partition=off、P1/全量复制模式、setup/rebuild/迁移、空 interior/local 与未证明模型维持 full。
 
 `compute_domain` 仅分离 descriptor 与 force consumer 的主机调度；现有 E/H 与 key、
 粒子/邻居顺序、L stride、精度/表达式、halo 字节与后端、默认 stream 不变。
@@ -135,7 +139,7 @@ Nsight 正式窗口 128 步；CPU 为保证既有 80% marker 覆盖另用 carbon
 - 两份二进制分别通过八 rank 环境预检与 committed golden 4/4。
 - 最终 GPU CTest 18/18，无 skip；GPU precondition/ticket/workspace/box 检查覆盖两种 schedule。
 - producer MPI 主矩阵 272 配置通过，包含 off/serial/verify/verify-wait、P2/P4、双后端，
-  加共同 P1/M1 fallback、cache/timing/error 等共 313 次执行。
+  加共同 P1/全量复制回退路径、cache/timing/error 等共 313 次执行。
 - 所有 313 次保存的实际 CONFIG 均为 producer；13044 条真实 split 记录的基础 dispatch
   为 2/2/1/1/1，不能把 full fallback 当作候选。完整字节记账和既有 manifest 容差保持。
 - 受控延迟/有限 progress/错误退出/非法与 rank 不一致配置共 27/27 通过。
@@ -341,20 +345,20 @@ collector 按 freeze → gates → pilot → main → walls → extend → profi
 错误发生于创建科学 trial 前，原失败保留；修复后全部采集完成，额度暂停未中断后台作业。
 采集/复算方式见[benchmark README](../../../tests/benchmark/README.md#o85-producer-拆分实验)。
 
-产物根目录为 `dmgmd-overlap-o85-20261027/`：
+O8.5 执行期间的产物根目录为 `dmgmd-overlap-o85-20261027/`，已于 2026-11-05 按授权清理。下列条目描述当时归档内容，当前不可访问：
 
-- `initial-source/`、`initial.patch` 和 `initial-source.json` 保留任务开始时的 O6.5 dirty 身份。
+- `initial-source/`、`initial.patch` 和 `initial-source.json` 当时记录任务开始时的 O6.5 dirty 身份。
 - `final.patch` 是相对上述起始源码的 O8.5 patch，排除已有 O6.5 修改；`final-source.json`
-  记录最终源码及辅助交接文件的哈希，`analysis-source/` 保存本轮源码、manifest、工具与环境入口。
-- `dmg-md-baseline`、`dmg-md-candidate` 固定独立二进制；`handoff.json` 保留 O9 所需
+  当时记录最终源码及辅助交接文件的哈希，`analysis-source/` 保存本轮源码、manifest、工具与环境入口；这些文件均已清理。
+- `dmg-md-baseline`、`dmg-md-candidate` 当时固定独立二进制；`handoff.json` 记录 O9 所需
   二进制/patch 身份、全部正负对照和未验证范围。
-- `raw-inventory.json` 固定所有原始输入、日志、正确性产物、trace/SQLite、CPU、源码和
+- `raw-inventory.json` 当时记录原始输入、日志、正确性产物、trace/SQLite、CPU、源码和
   二进制的 SHA-256。最终 reference 核对与起始 HEAD/status/ignored 逐文件哈希完全一致：
   GPUMD 原有 ignored 208 个，两个 LAMMPS 0 个，无新增或改写。
 - `recompute.sh` 从封存的 `analysis-source` 无 GPU 重算墙钟、全部 trace、CPU、遥测及
   报告聚合；不依赖未来工作树源码，不启动 GPU/MPI，不重新采集样本。
 
-本次封存与无 GPU 独立复算使用：
+以下是当时封存与无 GPU 独立复算使用的历史命令，现已不可运行：
 
 ```bash
 python3 tests/benchmark/recompute_overlap_o85.py --seal --root dmgmd-overlap-o85-20261027
@@ -658,7 +662,7 @@ C 相对 B 的辅助逻辑空间峰值在 carbon/water 下降约 35%/37%，仍�
 成本的配对显著性检验。原始计数、marker、映射、进程身份、采样区间和全部 CPU 汇总已离线
 逐字段重建一致，正式段最小覆盖为 94.30%。旧采集器在 summary 前以 `trial_finished` 关闭，
 又在 finally 中以 `trial_finally` 二次关闭，只改写 `collector-exit.json` 的原因字符串。
-复算仅对双方退出码为 0 的这一已证明元数据差异做适配，保留原始文件和首次严格比较失败日志；
+复算当时仅对双方退出码为 0 的这一已证明元数据差异做适配；原始文件和首次严格比较失败日志已随实验目录清理；
 全部计数/窗口/状态/身份及其他字段仍必须精确一致，见 `raw-recheck-amendment.json` 和
 `raw-recheck.json`。未修改冻结采集器、原始样本、正式统计或数值容差。
 
@@ -674,11 +678,11 @@ carbon_1m、跨节点、其他设备或长期 release。本轮没有同资源 GP
 
 ### 命令、封存与 O9 交接
 
-精确构建与 gate 命令在 `build-command.json`、`gate-command.json` 和构建日志中，正式采集命令与退出码在
-`performance-command.json`，每 trial 的 launch/audit/input/binary hashes 和 raw logs 均保留。
+精确构建与 gate 命令当时记录在 `build-command.json`、`gate-command.json` 和构建日志中，正式采集命令与退出码记录在
+`performance-command.json`；每 trial 的 launch/audit/input/binary hashes 和 raw logs 已随目录清理。
 流程为 freeze → 环境/golden/GPU/MPI/schedule/nightly → P8 环境与实际覆盖 → 科学对照
-→ pilot → main → 必要追加 → 独立 trace → CPU → 离线分析。工具与复算入口见
-[benchmark README](../../../tests/benchmark/README.md#o86-producer-紧凑索引与几何内缩)。
+→ pilot → main → 必要追加 → 独立 trace → CPU → 离线分析。历史工具说明见
+[benchmark README](../../../tests/benchmark/README.md#o86-producer-紧凑索引与几何内缩)；原实验数据和复算入口已清理。
 
 ```bash
 source ../env/md-mpi.sh
@@ -688,11 +692,10 @@ python3 tests/benchmark/recompute_overlap_o86.py --seal --root dmgmd-overlap-o86
 bash dmgmd-overlap-o86-20261028/recompute.sh
 ```
 
-`initial-source/`、起始 dirty patch 与 reference 清单保留任务开始身份；`final.patch` 相对起始
-源码隔离 O8.6 修改，`final-source.json` 与 `analysis-source/` 封存源码、工具、manifest 和环境。
-`raw-inventory.json` 固定原始产物 SHA-256，`recompute.sh` 用封存源码无 GPU/MPI 重算所有
-墙钟、trace、CPU、遥测和报告聚合，不依赖未来工作树。三个只读 reference 的最终状态、
+`initial-source/`、起始 dirty patch、reference 清单、`final.patch`、`final-source.json`、
+`analysis-source/`、`raw-inventory.json` 与 `recompute.sh` 当时归档了 O8.6 身份、源码、环境、
+墙钟、trace、CPU、遥测和报告聚合；上述原始记录已随实验目录清理，不能再次复算。三个只读 reference 的最终状态、
 全部原有 ignored 文件哈希与起始一致：GPUMD 原有 208 个，两个 LAMMPS 均为 0。
 
-`handoff.json` 交付 A/B/C 的独立身份、全部正负区间与未验证范围。O9 必须用未参与选择的新
+`handoff.json` 当时交付 A/B/C 的独立身份、正负区间与未验证范围。O9 必须用未参与选择的新
 配对块筛选并确认；本次只完成 O8.6，没有执行 O9/O10/O11、生产采用、commit 或 push。

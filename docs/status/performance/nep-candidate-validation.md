@@ -8,7 +8,11 @@
 | 2026-10-29 | [O9 独立候选确认](#o9-results-20261029-report) | CONFIRMED_SCOPED_CANDIDATE：预选 B 在 carbon/P2 双后端及 water/P8 HostStaged 通过独立核心净收益确认。 | 结论限已确认的三个 scope；water/P8 CudaAware 仍慢于默认，最终采用建议见 O11 复验。 |
 | 2026-10-30 完成（批次 10-29） | [O11 限定范围采用复验](#o11-results-20261030-report) | SCOPED_MANUAL_USE：建议仅限 carbon_200k/P2 的 HostStaged 或 CudaAware B-wait。 | 生产默认仍 HostStaged/full、overlap=off、schedule=split；water/P8 未通过采用条件，poll/几何无额外确认。 |
 
-以下各节按来源报告分别保留原始身份、环境、实际命令、统计数据、失败与未覆盖边界及原始产物路径；标题层级仅为嵌入整合文档而调整。
+以下各节按来源报告记录执行身份、环境、历史命令、统计数据、失败与未覆盖边界；标题层级仅为嵌入整合文档而调整。
+
+> **保留与适用边界（2026-11-05）：** 本文保存公共共享服务器历史测量的结果、结论和适用限制；这些数据属于历史探索，不作为专用性能服务器的基准参考。按授权清理了对应的忽略目录 `dmgmd-overlap-*`，逐 trial 输出、日志、trace、原始输入副本及重算工具均不再保留。下文残留的旧文件名、路径和命令仅记载当时执行过程，不能用来访问产物或复算。后续专用服务器 benchmark 将单独记录为性能参考；本报告的数字、结论和生产默认不变。
+
+
 
 <a id="o9-results-20261026-report"></a>
 
@@ -104,8 +108,8 @@ I/B 不重不漏、仅 owned 中心写最终 force/virial，每行浮点表达�
 全局 ID 排序不能替换为一次重新排列物理粒子数组。
 
 反例包括同 shape 的 slot/gid 重排、无迁移的 neighbor rebuild、不同 rank 的空/小 interior、
-不满 block 的尾部、I/B 混合 block，以及 thin-slab/M1 fallback。若将来有单因素证据选定候选，
-需另冻多元素/NEP5/ZBL、普通/重建/迁移、空/小 interior、M1 的 full/serial oracle golden，
+不满 block 的尾部、I/B 混合 block，以及 thin-slab/全量复制回退路径。若将来有单因素证据选定候选，
+需另冻多元素/NEP5/ZBL、普通/重建/迁移、空/小 interior、全量复制模式的 full/serial oracle golden，
 连同 long_nve 和原容差验证，再比较候选 full/serial/wait/poll 与各自原二进制；
 整步对照必须含列表/分类维护、额外内存和 launch 成本。这些是重新开启条件，不是本轮已实现或通过项。
 
@@ -567,11 +571,11 @@ python3 tests/benchmark/run_overlap_o11.py seal --root dmgmd-overlap-o11-2026102
 python3 tests/benchmark/recompute_overlap_o11.py --root dmgmd-overlap-o11-20261029
 ```
 
-`raw-inventory.json` 封存原始结果及分析源码。离线复算只加载封存源码并校验哈希，
-复用封存的 reference 最终状态；复算通过记录和派生结果哈希比较由 finalization.json 给出。
+`raw-inventory.json` 当时封存原始结果及分析源码。离线复算只加载封存源码并校验哈希，
+复用封存的 reference 最终状态；这些原始文件已于 2026-11-05 随实验目录按授权清理，不能再次复算。复算通过记录和派生结果哈希比较由 finalization.json 给出。
 
 
-复算日志位于 `dmgmd-overlap-o11-20261029-finalize/recompute.log`；结果为
+复算日志当时位于 `dmgmd-overlap-o11-20261029-finalize/recompute.log`（现已清理）；结果为
 `PASS sealed evidence 31293` 和 `SCOPED_MANUAL_USE trials 800 CPU 48`。
-`finalization.json` 保存 completion_time、全部派生哈希和推荐范围。
-出版后的文档另有 `publication-inventory.json`，不改写实验原始封存清单。
+`finalization.json` 当时记录 completion_time、全部派生哈希和推荐范围。
+出版后的文档另有 `publication-inventory.json`，不改写实验原始封存清单；这些文件也随实验树清理。

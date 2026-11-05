@@ -7,7 +7,11 @@
 | 2026-10-21 | [O6 稳态成本定位](#o6-results-20261021-report) | 无诊断整步结果及稳态 kernel 对照将主要新增 GPU 执行位置定位到 carbon radial。 | NCU 计数器权限失败；微架构因果 INCONCLUSIVE；结论限冻结输入、资源和本机。 |
 | 2026-10-26 开始、10-27 完成 | [O6.5 拆分执行因果对照](#o65-results-20261027-report) | 真实图/mask 与同快照 A–D 重放显示紧凑映射降低两类目标 kernel 耗时，达到进入独立整步试验的门槛。 | 仍慢于 A；未接入生产流水线，整步净收益 NOT_TESTED/INCONCLUSIVE；微架构原因未知。 |
 
-以下各节按来源报告分别保留原始身份、环境、实际命令、统计数据、失败与未覆盖边界及原始产物路径；标题层级仅为嵌入整合文档而调整。
+以下各节按来源报告记录执行身份、环境、历史命令、统计数据、失败与未覆盖边界；标题层级仅为嵌入整合文档而调整。
+
+> **保留与适用边界（2026-11-05）：** 本文保存公共共享服务器历史测量的结果、结论和适用限制；这些数据属于历史探索，不作为专用性能服务器的基准参考。按授权清理了对应的忽略目录 `dmgmd-overlap-*`，逐 trial 输出、日志、trace、原始输入副本及重算工具均不再保留。下文残留的旧文件名、路径和命令仅记载当时执行过程，不能用来访问产物或复算。后续专用服务器 benchmark 将单独记录为性能参考；本报告的数字、结论和生产默认不变。
+
+
 
 <a id="o6-results-20261021-report"></a>
 
@@ -33,7 +37,7 @@ water/P4/P8 的拆分也增加 GPU 成本，但 wait 的独立无诊断净加速
 的 Git 状态干净。修改范围为诊断/统计工具、测试和文档；没有重新编译生产程序。
 复用并复制 O4/O5 已验收可执行文件，其 SHA-256 为
 `860c1ba319a3bae55f1f3cb52eaf05dc1d3524d6a71766790b78fc0b1d68ceb6`。
-最终 patch、源码文件与哈希随独立目录 `dmgmd-overlap-o6-20261021/` 保存；没有提交或推送。
+最终 patch、源码文件与哈希在实验期间随独立目录 `dmgmd-overlap-o6-20261021/` 保存；该 ignored 目录已于 2026-11-05 清理。没有提交或推送。
 O1–O5 样本和 reference 均不写入。
 
 环境仍为 n4、AMD EPYC 7K62、八张 RTX 4090、driver 580.173.02、CUDA 12.9、
@@ -221,9 +225,10 @@ radial 的 late 工作少而耗时长值得继续追踪，但“把完整 grid �
 
 <a id="o6-results-20261021-原始产物与复算"></a>
 
-### 原始产物与复算
+### 历史原始产物与复算
 
-独立目录：`dmgmd-overlap-o6-20261021/`，不与 O1–O5 混合。
+O6 独立目录 `dmgmd-overlap-o6-20261021/` 不与 O1–O5 混合；目录及其统计/诊断原始文件已于
+2026-11-05 按授权清理。本页保留 O6 汇总结果与限制。下列命令仅记载当时执行过程，当前不可运行。
 
 ```bash
 source ../env/md-mpi.sh
@@ -236,20 +241,17 @@ python3 tests/benchmark/profile_overlap_o6_ncu.py --root dmgmd-overlap-o6-202610
 python3 tests/benchmark/run_overlap_o6_controls.py --root dmgmd-overlap-o6-20261021
 ```
 
-以上为实际阶段入口；每个底层 argv/显式环境在 launch、profiler-command、export-command
-或 gate command JSON 中保存。新机器必须使用新目录并先核对固定资源与旧二进制身份。
-离线复算（含原始证据 SHA-256 校验，不要求 GPU）：
+以上为历史阶段入口；每个底层 argv/显式环境当时写入 launch、profiler-command、export-command
+或 gate command JSON。现已清理这些记录和原始产物。历史离线复算命令（当前不可运行）：
 
 ```bash
 bash dmgmd-overlap-o6-20261021/recompute.sh
 ```
 
-关键入口为 `frozen-plan.json`、`gates.json`、`wall-analysis.json`、`kernel-trials.json`、
-`kernel-steps.csv`、`kernel-summary.*`、`summary.md`、`matched-control-analysis.json`、
-`ncu-plan.json`、`ncu-analysis.json`、`all-attempts.json` 和 `raw-evidence-inventory.json`。
-源码快照、patch、输入/二进制、绑定、遥测、rank 原始日志、`.nsys-rep`/SQLite 全部保留。
-完整各阶段状态以 `analysis-status.json` 为准；性能无收益和硬件 INCONCLUSIVE 均不改写为 PASS。
-全部原始尝试共 113 项：111 PASS、两项 NCU INCONCLUSIVE；没有把未运行的 NCU 项算成有效尝试。
+执行时的汇总入口包括 `frozen-plan.json`、`wall-analysis.json`、`kernel-summary.*`、
+`summary.md` 和 `raw-evidence-inventory.json`；源码、输入、二进制、日志、遥测、`.nsys-rep`/SQLite
+均随原始实验目录清理。本报告保留历史结论：113 项尝试中 111 PASS、两项 NCU INCONCLUSIVE，
+未把未运行的 NCU 项算作有效尝试；这些数据不再可离线复算。
 
 ---
 
@@ -271,9 +273,9 @@ bash dmgmd-overlap-o6-20261021/recompute.sh
 起始 HEAD：`33c7b7f41b9ea5e2d374e915614fbf5b41410fd7`，起始源码工作树干净。
 三个只读 reference 的 HEAD、Git 状态及原有 ignored 文件列表在工作前后逐项相同；
 未提交或推送。源码、独立二进制、输入与工具/库 SHA-256、完整命令/环境、K=4
-CPU/NUMA 映射、GPU UUID、遥测及所有原始尝试保存于本机独立目录
-`dmgmd-overlap-o65-20261026/`；`raw-inventory.json` 封存原始证据，`final.patch`
-和 `final-source.json` 描述最终工作树。O1–O9 既有样本没有改写或混用。
+CPU/NUMA 映射、GPU UUID、遥测及所有原始尝试在实验期间保存在独立目录
+`dmgmd-overlap-o65-20261026/`；raw inventory、`final.patch` 和 `final-source.json` 已于
+2026-11-05 随授权清理。O1–O9 既有样本没有改写或混用。
 
 | 二进制 | SHA-256 | 用途 |
 | --- | --- | --- |
@@ -472,7 +474,7 @@ compact 映射的模型适用范围。
 
 `DMGMD_ENABLE_O65_DIAGNOSTICS` 默认为 OFF。条件块去除后，两份 NEP 源文件与原
 HEAD 除空白外相同，证据为 `default-source-proof.json`；生产路径没有紧凑映射分支。
-构建和启动前失败保留于原始日志；首份短 trace 的 `shortName` 省略模板参数，原模板分类器因此停止；修正为 `mangledName` 的 bool 参数后复用同一原始 SQLite，并保留第一次失败日志。`collector-amendment.json`、源码副本及 patch 绑定该元数据修正和完整配对块恢复，未修改原始 frozen plan、数值源码、二进制或已采集的重放计时。
+构建和启动前失败当时记录于原始日志；首份短 trace 的 `shortName` 省略模板参数，原模板分类器因此停止；修正为 `mangledName` 的 bool 参数后复用同一原始 SQLite。相关 SQLite、失败日志、collector amendment、源码副本及 patch 已于 2026-11-05 随原始实验目录清理；不影响本报告保留的结论与数字。
 
 关键执行命令（各子作业的完整命令/环境及 profiler 参数见对应 launch JSON）：
 
@@ -488,14 +490,13 @@ python3 tests/benchmark/run_overlap_o65.py main --root dmgmd-overlap-o65-2026102
 python3 tests/benchmark/run_overlap_o65_replays.py all --root dmgmd-overlap-o65-20261026
 ```
 
-一键离线复算（不要求 GPU）：
+历史一键离线复算命令（当前不可运行）：
 
 ```bash
 python3 tests/benchmark/recompute_overlap_o65.py --root dmgmd-overlap-o65-20261026
 ```
 
-复算先验证封存原始证据 SHA-256，再从 Nsight SQLite、日志、快照和 CSV 重建所有
-墙钟、kernel、覆盖与 A–D 区间，生成 `candidate-evidence.json`。清单共 9886 个文件、71,764,418,164 字节（含 symlink 目标的逐文件校验）；`analysis-source/` 冻结 59 个 Python/JSON 依赖及其哈希，也可用 `bash dmgmd-overlap-o65-20261026/recompute.sh` 复算。
+该历史命令曾先验证封存原始证据 SHA-256，再从 Nsight SQLite、日志、快照和 CSV 重建墙钟、kernel、覆盖与 A–D 区间。清单当时共 9,886 个文件、71,764,418,164 字节（含 symlink 目标）；原始文件和 59 个冻结分析依赖现已清理，不能再次复算。
 
 重放的 producer/缓存、输出恢复与并发 rank 上下文不同于原流水线；D 的差值是映射/
 执行组合效果，不全归给空 block、缓存或 occupancy，也不精确拆账历史墙钟。

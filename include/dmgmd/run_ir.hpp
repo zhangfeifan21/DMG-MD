@@ -28,7 +28,7 @@ enum class EnsembleKind {
   nvt_ber,
   nvt_nhc,
   nvt_bdp,
-  // Reserved for later NPT support; the parser still rejects these ensembles.
+  // Isotropic replicated-full-only NPT ensembles.
   npt_ber,
   npt_scr,
 };
@@ -38,6 +38,11 @@ struct EnsembleCommand {
   double initial_temperature = 0.0;
   double final_temperature = 0.0;
   double temperature_coupling = 0.0;
+  // NPT inputs are retained in their user-facing GPa/step units. The
+  // ensemble controller converts them once at the runtime boundary.
+  double target_pressure_gpa = 0.0;
+  double bulk_modulus_gpa = 0.0;
+  double pressure_coupling = 0.0;
 };
 
 struct CorrectVelocityCommand {
@@ -107,5 +112,6 @@ RunProgram parse_run_file(const std::string& filename);
 // Host-only preflight of the entire program before either runtime starts.
 // Parsing an ensemble does not imply that its dynamics are implemented.
 void validate_runtime_ensembles(const RunProgram& program);
+bool program_uses_npt(const RunProgram& program) noexcept;
 
 }  // namespace dmgmd

@@ -2,8 +2,8 @@
 
 DMG-MD 是面向多节点、多 GPU 的经典分子动力学 runtime，正在开发 v1.0 正式版。
 当前可读取 GPUMD 格式的 `model.xyz`（原子结构）、`run.in`（计算设置）和 NEP/NEP-ZBL
-势文件，支持 NVE 与 Berendsen、Nosé–Hoover 链（NHC）、BDP 三种 NVT。
-v1.0 还计划加入各向同性 NPT、LJ、EAM/alloy 及发布交付，尚未全部实现或发布；
+势文件，支持 NVE、Berendsen/NHC/BDP 三种 NVT 和已验收范围内的全量复制模式`npt_ber`。
+`npt_scr` 的 G-B 已通过，但统计支持严格限于已注册的 216 原子 NEP-C/300 K/0 GPa/单节点全量复制模式矩阵；不代表普遍严格 NPT、遍历性、RDMA 或跨节点支持。LJ、EAM/alloy 及发布交付仍待完成；
 范围与阶段门见[开发流程](docs/plans/dmg-md-v1.0-development-workflow.md)和
 [逐 Step 进度](docs/plans/dmg-md-v1.0-progress.md)。
 
@@ -25,8 +25,8 @@ O9 首轮[执行候选证据复核](docs/status/performance/nep-candidate-valida
 2026-10-29 [独立确认](docs/status/performance/nep-candidate-validation.md#o9-results-20261029-report) 在 carbon/P2 双后端及
 water/P8/HostStaged 确认净收益，结论为 CONFIRMED_SCOPED_CANDIDATE，交 O11。
 [O11 限定采用复验](docs/status/performance/nep-candidate-validation.md#o11-results-20261030-report)已完成：800 个正式 trial、48 个 CPU
-诊断及离线复算通过，仅建议 carbon/P2 两后端手动 B-wait；water/P8 本轮未通过
-采用门槛，默认保持 off。条件性 [O10](docs/plans/communication-computation-overlap.md#o10) 暂缓。跨引擎/调度器[绑定验收](docs/plans/mpi-cpu-binding.md)
+诊断及离线复算通过。当时基于公共共享服务器结果仅建议 carbon/P2 两后端手动 B-wait；该建议属于历史探索，专用服务器 benchmark 才用于后续性能参考与采用判断，当前生产默认仍为 HostStaged/full、overlap=off。water/P8 本轮未通过
+采用门槛。条件性 [O10](docs/plans/communication-computation-overlap.md#o10) 暂缓。跨引擎/调度器[绑定验收](docs/plans/mpi-cpu-binding.md)
 及 [LAMMPS 动力学与正式三引擎矩阵](docs/plans/lammps-multigpu-benchmark.md)独立推进，
 目前仅完成 LAMMPS 静态/smoke。CPU 采样负责观测，绑定由启动入口执行。
 
@@ -425,27 +425,27 @@ UCX/Open MPI 源码包校验 SHA-256。构建时自动执行 CPU 测试，不需
 日常计算无需执行这里的原生安装或构建命令。
 
 DMG-MD 是面向多节点、多 GPU 经典分子动力学的 runtime。当前仓库包含与锁定 GPUMD
-reference 兼容的单 rank 路径，以及一 MPI rank 一张 GPU 的 replicated-data MPI runtime
-（M1）和 M2a local-domain 路径。
+reference 兼容的单 rank 基线，以及一 MPI rank 一张 GPU 的全量复制模式
+和局部域分解模式路径。
 
 当前版本直接读取 GPUMD 格式的 `model.xyz`、NEP/NEP-ZBL potential 和 `run.in`。GPUMD
 的最小数值核心已在 `src/gpumd_compat/` 中复现（tokenizer、Box、GPU_Vector、邻居构建、
 NEP loader 及 CUDA kernels，复制自锁定 commit `9d23496e`），构建与运行均不依赖
-`../gpumd-reference`。M1 replicated-full 路径在每个 rank 保留完整坐标/类型，只分片积分、
-thermo 和 authoritative per-atom output；满足 M2a eligibility 的大盒输入则使用 rank-local
+`../gpumd-reference`。全量复制模式在每个 rank 保留完整坐标/类型，只分片积分、
+thermo 和 authoritative per-atom output；满足局部域分解模式的 eligibility 的大盒输入则使用 rank-local
 owned/ghost 布局、保守两跳位置 halo、点对点 halo/迁移通信和 NEP 中心/依赖域分片。不满足
-eligibility 的输入自动回退 M1，small-box 输入继续可运行。M2b 的 Fp/partial 分阶段交换
+eligibility 的输入自动回退全量复制模式，small-box 输入继续可运行。分阶段中间场交换方案的 Fp/partial 分阶段交换
 和多节点硬化尚未实施。
 
 ## 当前进度
 
-截至 2026-11-03，v1.0 主线已完成 Gate 0、A0–A6 与 G-A，下一步为 B0 压力 oracle。
-NHC/BDP 已通过所列 NEP 单节点 M1/M2a 矩阵，NPT、新势与发布门仍待完成；
+截至 2026-11-04，v1.0 主线已完成 Gate 0、A0–A6/G-A 和 B0–B4/G-B；B3 原注册18个 formal look 的总体 INCONCLUSIVE 结论保留，随后独立确认通过，B4 测试维护与文档收口也已通过。
+NHC/BDP 已通过所列 NEP 单节点全量复制模式和局部域分解模式矩阵，`npt_ber` 已完成 B2 验收；`npt_scr` 只在 216 原子 NEP-C、300 K/0 GPa、单节点全量复制模式各向同性正交全周期盒范围获得统计支持：base 为 P1/HostStaged 与 P2/P4 双后端，half-dt 仅 P1/HostStaged。NEP5/ZBL 仅有另行记录的短程合同证据；新势、C/D 阶段及发布门待完成，v1.0 尚未发布；
 完整证据和未覆盖项见[开发进度](docs/plans/dmg-md-v1.0-progress.md)。
 
 O 系列为独立性能主线，与 v1.0 产品化无阶段门依赖。
-当前代码已完成 M1/M2a、统一缓存重建及 O1–O9 的已验证阶段；O11 仅在
-carbon_200k/P2 建议限定范围手动 B-wait。O2 实验分区默认关闭，halo 默认
+当前代码已完成 全量复制模式/局部域分解模式、统一缓存重建及 O1–O9 的已验证阶段；O11 仅在
+公共共享服务器上的历史 O11 测量曾建议 carbon_200k/P2 限定范围手动 B-wait；该建议仅作历史探索记录，后续性能参考与采用判断以专用服务器 benchmark 为准，当前生产默认不变。O2 实验分区默认关闭，halo 默认
 begin 后立即 finish；O4 已接入默认关闭的普通步实际重叠，本轮验收见
 [O4 报告](docs/status/validation/communication-computation-overlap.md#overlap-o4-20261016)。2026-10-15 O3 已通过 192 组 domain
 三模式、68 个生命周期/故障作业、golden/CTest 与 long_nve smoke；完整证据与历史
@@ -456,7 +456,7 @@ nightly/单机八卡 benchmark 见[当前状态](docs/status/current.md)。10000
 
 - NEP4、NEP5 及对应的 NEP-ZBL potential；
 - `potential`、`velocity`、`time_step`；
-- `ensemble nve`、`ensemble nvt_ber`、`ensemble nvt_nhc` 和 `ensemble nvt_bdp`；
+- `ensemble nve`、`ensemble nvt_ber`、`ensemble nvt_nhc`、`ensemble nvt_bdp`，已验收的全量复制模式 `ensemble npt_ber`，以及限于以下冻结体系矩阵的 `ensemble npt_scr`；
 - `correct_velocity`；
 - `dump_thermo`、`dump_xyz`、`dump_restart`；
 - `run` 及多段 run。
@@ -465,17 +465,18 @@ nightly/单机八卡 benchmark 见[当前状态](docs/status/current.md)。10000
 的命令和 ensemble subtype 都会立即失败，不会被静默忽略。
 
 三种 NVT 的格式均为 `ensemble NAME T1 T2 Tdamp`，温度单位 K，`Tdamp` 单位为步数。
-NHC/BDP 在 M1/M2a 上由 root 持有链或 RNG，要求固定正步长；暂不接受 `correct_velocity`、
+NHC/BDP 在 全量复制模式/局部域分解模式上由 root 持有链或 RNG，要求固定正步长；暂不接受 `correct_velocity`、
 自适应步长和非默认实验分区/重叠选项。BDP 默认 seed 为 `12345678`，可用
 `DMGMD_ENSEMBLE_SEED` 覆盖；所有 rank 必须具有相同原始字符串。
 每段 `run` 重置新恒温器状态，`restart.xyz` 不保存链/RNG，恢复是非连续的新作业。
 语法、输出时点、统计证据及限制见[系综说明](docs/standards/ensembles.md)和
-[验收入口](tests/thermostats/README.md)。NPT 与非 NEP 势仍不支持。
+[验收入口](tests/thermostats/README.md)。NPT 只限各向同性、正交全周期 全量复制模式；P>1 仍强制 全量复制模式，局部域分解模式不支持 NPT。
+`npt_ber` 的 B2 验收已完成。`npt_scr` 的 G-B 已通过，但原注册18个统计 look 的总体 INCONCLUSIVE 历史保留；新增支持仅针对 216 原子 NEP-C、300 K/0 GPa、单节点全量复制模式（replicated-full）各向同性正交全周期盒。base 覆盖 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅覆盖 P1/HostStaged。NEP5/ZBL 只有另行记录的短程合同证据，非 NEP 势不支持 NPT；不外推普遍严格采样、遍历性、RDMA 或跨节点。状态和证据见[NPT/G-B最终报告](docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)、[机器索引](docs/status/validation/npt-scr-n3-confirmation-index.json)、[控压器标准](docs/standards/barostat.md)与[NPT/G-B 矩阵](docs/status/validation/npt-validation.md#npt-matrix-20261104)。
 
-v1.0 的 P0 目标是在 M1 上支持 NEP/LJ/EAM 与 NVE、三种 NVT、`npt_ber`、`npt_scr`，
-NPT 限各向同性、正交全周期盒；M2a 限 NEP 的 NVE/三种 NVT。
+v1.0 的 P0 目标是在 全量复制模式上支持 NEP/LJ/EAM 与 NVE、三种 NVT、`npt_ber`、`npt_scr`，
+NPT 限各向同性、正交全周期盒；局部域分解模式限 NEP 的 NVE/三种 NVT。
 Tersoff 1989 与 Langevin/BAOAB 属于 P1（v1.1 候选）。这些目标须经对应阶段门验收后
-才进入当前支持范围；M1 的复制计算也不代表增加 GPU 就能加速力计算。
+才进入当前支持范围；全量复制模式的复制计算也不代表增加 GPU 就能加速力计算。
 
 ## 依赖
 
@@ -573,7 +574,7 @@ python3 tests/mpi/run_mpi_differential.py \
   --candidate ./build/dmg-md --devices 0,1,2,3
 ```
 
-M2a local-domain 专属矩阵使用满足 large-box 与 slab-width 条件的 fixture，覆盖两跳
+局部域分解模式专属矩阵使用满足 large-box 与 slab-width 条件的 fixture，覆盖两跳
 coordinate halo、迁移、周期边界、空 rank、restart、NEP5、typewise cutoff 和 ZBL 分支：
 
 ```bash

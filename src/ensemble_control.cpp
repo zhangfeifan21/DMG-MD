@@ -2,9 +2,11 @@
 #include "gpumd_compat/common.cuh"
 #include "gpumd_compat/thermostat_nhc.hpp"
 #include "gpumd_compat/thermostat_svr.hpp"
+#include "gpumd_compat/npt_scr.hpp"
 
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -61,6 +63,50 @@ EnsembleController::EnsembleController(
     case EnsembleKind::nve:
     case EnsembleKind::nvt_ber:
       break;
+    case EnsembleKind::npt_ber:
+    case EnsembleKind::npt_scr: {
+      const bool scr = configuration_.kind == EnsembleKind::npt_scr;
+      const char* name = scr ? "NPT stochastic cell rescaling" : "NPT Berendsen";
+      require_target_temperatures(configuration_, name);
+      if (!std::isfinite(configuration_.temperature_coupling) ||
+          configuration_.temperature_coupling < 1.0 ||
+          !std::isfinite(configuration_.target_pressure_gpa) ||
+          !std::isfinite(configuration_.bulk_modulus_gpa) ||
+          configuration_.bulk_modulus_gpa <= 0.0 ||
+          !std::isfinite(configuration_.pressure_coupling) ||
+          configuration_.pressure_coupling < 1.0) {
+        throw std::invalid_argument(
+            std::string(name) + " requires Tdamp >= 1, finite P, B > 0 and tau_p >= 1");
+      }
+      target_pressure_internal_ =
+          configuration_.target_pressure_gpa / gpumd_compat::PRESSURE_UNIT_CONVERSION;
+      if (configuration_.bulk_modulus_gpa > 2000.0) {
+        pressure_coupling_internal_ = 0.0;
+      } else {
+        // Preserve GPUMD's operation order: form pc in GPa^-1, then convert
+        // it to (eV/A^3)^-1 exactly once.
+        pressure_coupling_internal_ =
+            1.0 / (3.0 * configuration_.pressure_coupling *
+                   configuration_.bulk_modulus_gpa);
+        pressure_coupling_internal_ *= gpumd_compat::PRESSURE_UNIT_CONVERSION;
+      }
+      if (!std::isfinite(target_pressure_internal_) ||
+          !std::isfinite(pressure_coupling_internal_) ||
+          pressure_coupling_internal_ < 0.0) {
+        throw std::invalid_argument(std::string(name) + " pressure conversion is not finite");
+      }
+      if (scr) {
+        if (global_count <= 0 || global_count > std::numeric_limits<int>::max() / 3) {
+          throw std::invalid_argument("NPT SCR requires 0 < N <= INT_MAX/3");
+        }
+        if (owns_state) {
+          state_ = std::make_unique<State>();
+          state_->svr = std::make_unique<gpumd_compat::SvrState>(seed);
+          state_->global_count = global_count;
+        }
+      }
+      break;
+    }
     case EnsembleKind::nvt_nhc:
       require_target_temperatures(configuration_, "NHC");
       if (!std::isfinite(configuration_.temperature_coupling) ||
@@ -108,7 +154,14 @@ bool EnsembleController::needs_pre_force_kinetic_energy() const noexcept
 bool EnsembleController::uses_root_state() const noexcept
 {
   return configuration_.kind == EnsembleKind::nvt_nhc ||
-         configuration_.kind == EnsembleKind::nvt_bdp;
+         configuration_.kind == EnsembleKind::nvt_bdp ||
+         configuration_.kind == EnsembleKind::npt_scr;
+}
+
+bool EnsembleController::has_barostat() const noexcept
+{
+  return configuration_.kind == EnsembleKind::npt_ber ||
+         configuration_.kind == EnsembleKind::npt_scr;
 }
 
 bool EnsembleController::needs_post_force_thermo() const noexcept
@@ -118,7 +171,7 @@ bool EnsembleController::needs_post_force_thermo() const noexcept
 
 double EnsembleController::target_temperature(int step, int steps) const
 {
-  // Preserve the former M1/M2a host expression and operation order exactly.
+  // Preserve the former replicated-full/local-domain host expression and operation order exactly.
   const double fraction = static_cast<double>(step) / static_cast<double>(steps);
   return configuration_.initial_temperature +
          (configuration_.final_temperature - configuration_.initial_temperature) * fraction;
@@ -163,8 +216,10 @@ std::optional<double> EnsembleController::after_force(
     }
     return factor;
   }
-  if (configuration_.kind == EnsembleKind::nvt_bdp) {
-    require_positive(target, "BDP target temperature");
+  if (configuration_.kind == EnsembleKind::nvt_bdp ||
+      configuration_.kind == EnsembleKind::npt_scr) {
+    require_positive(target, configuration_.kind == EnsembleKind::npt_scr
+                                 ? "NPT SCR target temperature" : "BDP target temperature");
     if (!state_ || !state_->svr) throw std::logic_error("BDP hook requires root-owned RNG state");
     if (!global_thermo) throw std::logic_error("BDP requires normalized global thermo");
     const int ndeg = 3 * state_->global_count;
@@ -183,14 +238,69 @@ std::optional<double> EnsembleController::after_force(
     require_positive(factor, "BDP velocity factor");
     return factor;
   }
+  if (configuration_.kind != EnsembleKind::nvt_ber &&
+      configuration_.kind != EnsembleKind::npt_ber) {
+    throw std::logic_error("unsupported post-force ensemble hook");
+  }
+  if (configuration_.kind == EnsembleKind::npt_ber && global_thermo != nullptr) {
+    require_positive((*global_thermo)[0], "NPT Berendsen instantaneous temperature");
+  }
   const double coupling = 1.0 / configuration_.temperature_coupling;
   if (coupling > 1.0e-5) {
     if (global_thermo == nullptr) {
       throw std::logic_error("Berendsen requires normalized global thermo");
     }
-    return std::sqrt(1.0 + coupling * (target / (*global_thermo)[0] - 1.0));
+    const double factor = std::sqrt(1.0 + coupling * (target / (*global_thermo)[0] - 1.0));
+    if (configuration_.kind == EnsembleKind::npt_ber) {
+      require_positive(factor, "NPT Berendsen velocity factor");
+    }
+    return factor;
   }
   return std::nullopt;
+}
+
+double EnsembleController::barostat_scale(
+    const std::array<double, 8>* global_thermo, const double pre_scale_volume,
+    const int step, const int steps, const std::uint64_t global_step) const
+{
+  if (!has_barostat()) throw std::logic_error("barostat hook requires an NPT ensemble");
+  const double p_inst = global_thermo == nullptr
+      ? std::numeric_limits<double>::quiet_NaN()
+      : ((*global_thermo)[2] + (*global_thermo)[3] + (*global_thermo)[4]) *
+            0.3333333333333333;
+  const double target = target_temperature(step, steps);
+  double gaussian = 0.0;
+  double scale = std::numeric_limits<double>::quiet_NaN();
+  if (configuration_.kind == EnsembleKind::npt_scr) {
+    require_positive(target, "NPT SCR target temperature");
+    require_positive(pre_scale_volume, "NPT SCR pre-scale volume");
+    if (!state_ || !state_->svr) {
+      throw std::logic_error("NPT SCR barostat hook requires root-owned RNG state");
+    }
+    // Even with pc==0, consume the pressure draw so the shared BDP/SCR stream
+    // advances in the documented order for the B>2000 fixed-box branch.
+    gaussian = gpumd_compat::gasdev(*state_->svr);
+    last_barostat_gaussian_ = gaussian;
+    scale = gpumd_compat::npt_scr_isotropic_scale(
+        target_pressure_internal_, pressure_coupling_internal_, p_inst,
+        target, pre_scale_volume, gaussian);
+  } else {
+    scale = 1.0 - pressure_coupling_internal_ *
+        (target_pressure_internal_ - p_inst);
+  }
+  if (!std::isfinite(p_inst) || !std::isfinite(scale) || scale <= 0.0) {
+    std::ostringstream message;
+    message << "invalid " << (configuration_.kind == EnsembleKind::npt_scr ? "npt_scr" : "npt_ber")
+            << " box factor step=" << global_step
+            << " P_GPa=" << configuration_.target_pressure_gpa
+            << " P_inst_internal=" << p_inst
+            << " T_target=" << target
+            << " V_pre_scale=" << pre_scale_volume
+            << " gaussian=" << gaussian
+            << " factor=" << scale;
+    throw std::runtime_error(message.str());
+  }
+  return scale;
 }
 
 }  // namespace dmgmd

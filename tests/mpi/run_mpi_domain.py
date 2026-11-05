@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the M2a local-domain acceptance matrix (docs/standards/mpi-runtime.md).
+"""Run the local-domain acceptance matrix (docs/standards/mpi-runtime.md).
 
 Every fixture uses a box that genuinely satisfies the NEP large-box criterion
 and the slab_width >= d_coord guard for the pinned nep_C.txt potential
@@ -10,7 +10,7 @@ path) is the numerical oracle.
 
 Verified per run:
 - the DMGMD_DOMAIN record actually reports mode=m2a (a fallback PASS never
-  counts as M2a coverage);
+  counts as local-domain coverage);
 - per-rank layouts (owned / dependency ghosts / coordinate-only ghosts /
   local_count) from the DMGMD_DOMAIN_LAYOUT records;
 - repeated sub-skin internal/PBC slab crossings retain their manager owner and
@@ -28,7 +28,7 @@ Verified per run:
 - every dumped frame carries exactly N atoms (owned global IDs exactly once;
   ghosts never reach the output or the thermo);
 - exact per-step communication accounting: the collective fields carry no
-  N-scaled term on ordinary steps (no position Allgatherv exists in the M2a
+  N-scaled term on ordinary steps (no position Allgatherv exists in the local-domain
   protocol), and every rank's p2p halo/migration/control bytes match the
   layout-derived model exactly.
 """
@@ -534,7 +534,7 @@ def verify_timing_records(stdout: str, run_text: str, label: str) -> None:
 
 
 class StepIndex:
-    """Parses the per-rank M2a records of one execution."""
+    """Parses the per-rank local-domain records of one execution."""
 
     def __init__(self, stdout: str, case: DomainCase, ranks: int) -> None:
         self.ranks = ranks
@@ -1341,7 +1341,7 @@ def main() -> int:
                     f"{case.name}: P=1 must stay on the M1 path (mode=m1-fallback)")
             references[case.name] = reference_root
 
-        # Requested partitioning must really reach the original P1/M1 path.
+        # Requested partitioning must really reach the original P1/replicated-full path.
         for mode in args.partition_modes:
             if mode == "off": continue
             stage_dir = work_root / "partition-p1-fallback" / mode

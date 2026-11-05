@@ -35,6 +35,42 @@ add_test(
 set_tests_properties(dmgmd.domain_neighbor_cuda PROPERTIES SKIP_RETURN_CODE 77)
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_test(NAME dmgmd.npt_manifest
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_manifest.py)
+add_test(NAME dmgmd.npt_statistics
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_statistics.py)
+set_tests_properties(dmgmd.npt_statistics PROPERTIES
+  ENVIRONMENT "DMGMD_ACF_HELPER=$<TARGET_FILE:dmgmd_autocorrelation>"
+)
+add_test(NAME dmgmd.npt_paired_confirmation_math
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_paired_confirmation_math.py)
+add_test(NAME dmgmd.npt_paired_confirmation_integration
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_paired_confirmation_integration.py)
+set_tests_properties(
+  dmgmd.npt_paired_confirmation_math
+  dmgmd.npt_paired_confirmation_integration
+  PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+add_test(NAME dmgmd.pressure_oracle_cpu
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/thermo/test_pressure_oracle.py
+)
+add_executable(dmgmd_pressure_writer_tests thermo/pressure_writer_tests.cu)
+target_include_directories(dmgmd_pressure_writer_tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(dmgmd_pressure_writer_tests PRIVATE dmgmd_runtime)
+add_test(NAME dmgmd.pressure_writer COMMAND $<TARGET_FILE:dmgmd_pressure_writer_tests>)
+add_executable(dmgmd_box_control_tests gpu/box_control_tests.cu)
+target_include_directories(dmgmd_box_control_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(dmgmd_box_control_tests PRIVATE dmgmd_runtime)
+add_test(NAME dmgmd.box_control COMMAND $<TARGET_FILE:dmgmd_box_control_tests>)
+set_tests_properties(dmgmd.box_control PROPERTIES SKIP_RETURN_CODE 77)
+add_executable(dmgmd_box_control_host_tests unit/box_control_host_tests.cu)
+target_link_libraries(dmgmd_box_control_host_tests PRIVATE dmgmd_runtime)
+add_test(NAME dmgmd.box_control_host COMMAND $<TARGET_FILE:dmgmd_box_control_host_tests>)
+add_executable(dmgmd_m2a_npt_guard_tests unit/m2a_npt_guard_tests.cu)
+target_include_directories(dmgmd_m2a_npt_guard_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(dmgmd_m2a_npt_guard_tests PRIVATE dmgmd_runtime)
+add_test(NAME dmgmd.m2a_npt_guard COMMAND $<TARGET_FILE:dmgmd_m2a_npt_guard_tests>)
 add_executable(dmgmd_nhc_fixture thermostats/nhc_fixture.cpp)
 target_link_libraries(dmgmd_nhc_fixture PRIVATE dmgmd_ensemble_control)
 add_test(NAME dmgmd.nhc_fixture

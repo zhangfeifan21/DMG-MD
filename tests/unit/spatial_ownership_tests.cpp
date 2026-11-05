@@ -1,6 +1,6 @@
-// CPU unit tests for the M1 spatial slab ownership logic
+// CPU unit tests for the replicated-full spatial slab ownership logic
 // (include/dmgmd/spatial_ownership.hpp). Everything here is pure host code:
-// no MPI, no CUDA. The cases mirror the checklist in the M1 plan: slab
+// no MPI, no CUDA. The cases mirror the checklist in the replicated-full plan: slab
 // boundary rules, periodic end-to-head migration, multi-slab crossings, empty
 // slabs, axis tie-breaking, and malformed global_id rejection.
 #include "dmgmd/mpi_runtime.hpp"
@@ -215,9 +215,9 @@ void check_empty_slabs()
   const auto empty = ownership_from_positions(fractional, ids, 3, 4);
   require(empty.map_hash() != 0, "empty-rank ownership still hashes its map");
 
-  // N < P is valid in M1: indexed collectives carry zero counts for ranks
+  // N < P is valid in replicated-full: indexed collectives carry zero counts for ranks
   // whose slabs contain no atoms instead of requiring balanced non-empty
-  // ranges as M0 did.
+  // ranges as single-rank baseline did.
   const auto sparse_ids = identity_ids(2);
   const std::vector<double> sparse_fractional{0.05, 0.55};
   std::size_t sparse_total = 0;

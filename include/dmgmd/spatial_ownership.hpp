@@ -10,11 +10,11 @@
 
 namespace dmgmd {
 
-// M1 spatial slab ownership (docs/standards/mpi-runtime.md, "M1 空间所有权").
+// replicated-full spatial slab ownership (docs/standards/mpi-runtime.md, "replicated-full 空间所有权").
 // One MPI rank owns one equal-width fractional half-open slab along one box
 // axis. The box itself stays replicated: every rank still holds all N slots,
 // and this type only records *who* is authoritative for integration, thermo
-// and output of each replicated slot. It replaces the M0 contiguous OwnedRange
+// and output of each replicated slot. It replaces the single-rank baseline contiguous OwnedRange
 // representation; AtomCounts::owned_count deliberately stays N (the replicated
 // SoA stride) and never becomes this rank's spatial owned count.
 
@@ -76,8 +76,8 @@ inline double fractional_along_axis(
 // the pinned reference partitioner (gpumd-reference/src/force/
 // nep_multigpu.cu:1438-1446): a cascade where direction y wins ties against
 // x and z, and x wins ties against z (all-equal cubes pick y). The reference
-// compares rc/2 bin counts; M1 has no cell-aligned bins yet (that guard is
-// deliberately deferred to M2a), so the edge lengths are compared directly.
+// compares rc/2 bin counts; replicated-full has no cell-aligned bins yet (that guard is
+// deliberately deferred to local-domain), so the edge lengths are compared directly.
 inline int longest_box_axis(const std::array<double, 9>& h)
 {
   const std::array<double, 3> length{
@@ -95,7 +95,7 @@ inline int longest_box_axis(const std::array<double, 9>& h)
 class SpatialOwnership {
  public:
   // world_size == 1 degenerate map: every slot owned by rank 0. This is also
-  // the only map used at P=1 so that path stays byte-identical to M0.
+  // the only map used at P=1 so that path stays byte-identical to single-rank baseline.
   static SpatialOwnership trivial(
       std::size_t global_count,
       const std::vector<std::uint64_t>& global_id,

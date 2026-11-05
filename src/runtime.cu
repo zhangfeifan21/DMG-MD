@@ -6,13 +6,14 @@
 // 9d23496e41319b9e2af5221a7df6285387401d1e, numerics unchanged).  DMG-MD
 // must never include or link ../gpumd-reference directly.
 //
-// File layout since M2a: this translation unit keeps the M1/P1
+// File layout since local-domain: this translation unit keeps the replicated-full/P1
 // replicated-full runtime and the GPUMD-compatible output formatters shared
 // with the local-domain runtime; the pieces both runtimes need live in
-// src/runtime_internal.hpp, and the M2a local-domain runtime lives in
+// src/runtime_internal.hpp, and the local-domain runtime lives in
 // src/domain_runtime.cu. run_replicated() is the mode dispatcher
 // (docs/standards/mpi-runtime.md).
 #include "runtime_internal.hpp"
+#include "dmgmd/box_control.hpp"
 
 #include <cuda_runtime.h>
 
@@ -103,19 +104,19 @@ class DeviceAtoms {
   GPU_Vector<double> previous_position;
 };
 
-// Persistent M1 spatial ownership state plus its device mirrors and the
+// Persistent replicated-full spatial ownership state plus its device mirrors and the
 // indexed communication plan. The ownership epoch survives across run
 // segments (never resets to a balanced range). The per-step migration
-// protocol is defined by the M1 section of docs/standards/mpi-runtime.md:
+// protocol is defined by the replicated-full section of docs/standards/mpi-runtime.md:
 //   * recompute the owner map from the wrapped replicated positions;
 //   * verify every rank derived the identical map (fixed-size Allreduce,
 //     before ANY collective whose counts depend on the new epoch);
 //   * if the map changed, migrate the authoritative dynamic state (velocity,
 //     and unwrapped when enabled) with the OLD ownership, so the new owner
-//     receives the latest half-step values instead of M0's stale replicas;
+//     receives the latest half-step values instead of single-rank baseline's stale replicas;
 //   * only then adopt the new map (epoch++, plan rebuild, rank 0 log).
 // Position is already replicated by the step-4 Allgatherv; type/mass/group/
-// global_id are static replicated data that M1 never migrates.
+// global_id are static replicated data that replicated-full never migrates.
 class RuntimeOwnership {
  public:
   RuntimeOwnership(
@@ -129,7 +130,7 @@ class RuntimeOwnership {
   {
     const std::size_t global_count = identity.counts.global_count;
     if (world_size_ == 1) {
-      // P=1 fully degenerates to the M0 path: rank 0 owns every slot, the
+      // P=1 fully degenerates to the single-rank baseline path: rank 0 owns every slot, the
       // map can never change, and no migration communication is added.
       partition_axis_ = -1;
       adopt(SpatialOwnership::trivial(global_count, global_id_, world_size_));
@@ -159,6 +160,35 @@ class RuntimeOwnership {
   [[nodiscard]] const IndexedOwnershipPlan& plan() const noexcept { return plan_; }
   [[nodiscard]] int partition_axis() const noexcept { return partition_axis_; }
 
+  void refresh_box(const Box& box)
+  {
+    if (!box.is_orthogonal || box.pbc_x != 1 || box.pbc_y != 1 || box.pbc_z != 1) {
+      throw std::invalid_argument(
+          "M1 ownership box refresh requires an orthogonal fully periodic box");
+    }
+    if (box.cpu_h[1] != 0.0 || box.cpu_h[2] != 0.0 || box.cpu_h[3] != 0.0 ||
+        box.cpu_h[5] != 0.0 || box.cpu_h[6] != 0.0 || box.cpu_h[7] != 0.0) {
+      throw std::invalid_argument("M1 ownership box refresh rejected nonzero off-diagonal entries");
+    }
+    std::array<double, 9> candidate_inverse{};
+    std::copy(box.cpu_h + 9, box.cpu_h + 18, candidate_inverse.begin());
+    for (double value : candidate_inverse) {
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument("M1 ownership box refresh rejected a non-finite inverse");
+      }
+    }
+    const int candidate_axis = world_size_ > 1
+        ? longest_box_axis({box.cpu_h[0], box.cpu_h[1], box.cpu_h[2], box.cpu_h[3],
+                            box.cpu_h[4], box.cpu_h[5], box.cpu_h[6], box.cpu_h[7], box.cpu_h[8]})
+        : -1;
+    inverse_box_ = candidate_inverse;
+    if (world_size_ > 1) {
+      partition_axis_ = candidate_axis;
+    }
+    // At P=1, -1 is the permanent degenerate-ownership sentinel. A box
+    // refresh must never turn it into a spatial ownership scan.
+  }
+
   // Steps 6-7 of the per-step protocol. `step` is the 1-based global step for
   // the ownership epoch log record.
   void recompute_and_commit(
@@ -169,7 +199,7 @@ class RuntimeOwnership {
   {
     if (partition_axis_ < 0) {
       // P=1: the map is constant, so there is nothing to recompute, verify
-      // or migrate. This keeps the single-rank path byte-identical to M0,
+      // or migrate. This keeps the single-rank path byte-identical to single-rank baseline,
       // including its communication records.
       return;
     }
@@ -356,10 +386,10 @@ HostSnapshot gather_owned_snapshot(
   return snapshot;
 }
 
-// M1 kernels iterate an owned slot index list instead of a contiguous
+// replicated-full kernels iterate an owned slot index list instead of a contiguous
 // [begin,end) range: spatial slab ownership is an arbitrary subset of the
 // replicated slots. The per-atom arithmetic is unchanged, so a P=1 run whose
-// index list is [0,N) reproduces the M0 results bit-for-bit.
+// index list is [0,N) reproduces the single-rank baseline results bit-for-bit.
 __global__ void velocity_verlet(
     bool first_half,
     const int* owned_indices,
@@ -507,7 +537,7 @@ ThermoState compute_thermo(
 
 class NepForce {
  public:
-  // Takes over the exactly-once parsed NEP (M2a contract: the potential
+  // Takes over the exactly-once parsed NEP (local-domain contract: the potential
   // parameters are never re-parsed) and sizes the replicated-full workspace
   // for the global atom count.
   NepForce(std::unique_ptr<NEP> potential, const AtomCounts& counts)
@@ -520,7 +550,7 @@ class NepForce {
     // partials belonging to neighboring centers. Merely assigning a rank-local
     // N1/N2 leaves those arrays incomplete. Until phase-level intermediate
     // exchange exists, every rank evaluates full NEP scratch and the runtime
-    // grants authority only to its M1 spatial-ownership outputs.
+    // grants authority only to its replicated-full spatial-ownership outputs.
     nep_->N1 = 0;
     nep_->N2 = local;
   }
@@ -538,8 +568,21 @@ class NepForce {
                   atoms.virial);
   }
 
+  void notify_box_changed() { nep_->notify_box_changed(); }
+
+  void apply_isotropic_box_scale(
+      Box& box, DeviceAtoms& atoms, RuntimeOwnership& ownership, double factor)
+  {
+    detail::apply_isotropic_scale(
+        box, atoms.position, box_scale_workspace_, atoms.counts.global_count,
+        atoms.counts.local_count(), factor);
+    ownership.refresh_box(box);
+    notify_box_changed();
+  }
+
  private:
   std::unique_ptr<NEP> nep_;
+  BoxScaleWorkspace box_scale_workspace_;
 };
 
 std::vector<std::size_t> all_owned_indices(const HostAtoms& atoms)
@@ -651,18 +694,18 @@ void run_segment(
     RuntimeOwnership& ownership,
     MpiRuntime& mpi)
 {
-  // Per-step protocol (docs/standards/mpi-runtime.md, M1): integrate the
+  // Per-step protocol (docs/standards/mpi-runtime.md, replicated-full): integrate the
   // currently owned slots, allgather replicated coordinates, evaluate full
   // NEP scratch, recompute spatial ownership and migrate the dynamic state
   // under the old ownership, then integrate/thermo/output under the new
-  // ownership. Replicated velocity is not refreshed every step (M0): the only
+  // ownership. Replicated velocity is not refreshed every step (single-rank baseline): the only
   // remaining consumers of non-owned velocity are correct_velocity (restored
   // here on trigger steps) and ownership migration itself (which syncs the
   // authoritative half-step velocity before a new owner takes over).
   const EnsembleController controller(
       ensemble, checked_int(atoms.counts.global_count, "global_count"),
       base_time_step, mpi.is_root(),
-      ensemble.kind == EnsembleKind::nvt_bdp
+      (ensemble.kind == EnsembleKind::nvt_bdp || ensemble.kind == EnsembleKind::npt_scr)
           ? parse_ensemble_seed(std::getenv("DMGMD_ENSEMBLE_SEED"))
           : kDefaultEnsembleSeed);
   const auto scale_velocity = [&](double factor) {
@@ -743,7 +786,7 @@ void run_segment(
     mpi.allgather_indexed_device_soa(
         atoms.position.data(), 3, atoms.counts.local_count(),
         ownership.plan(), communication);
-    // 5. Full replicated NEP (wrap + clear + compute), unchanged from M0.
+    // 5. Full replicated NEP (wrap + clear + compute), unchanged from single-rank baseline.
     force.compute(box, atoms);
     // 6-7. Recompute the spatial owner map from the wrapped positions,
     // verify it matches on every rank, migrate velocity/unwrapped under the
@@ -760,6 +803,13 @@ void run_segment(
           return controller.after_force(&thermo.values, step, steps);
         })) {
       scale_velocity(*factor);
+    }
+    if (const auto factor = ensemble_box_factor(
+            controller, thermo, box, step, steps, global_step + 1, mpi, communication);
+        factor && *factor != 1.0) {
+      // A fixed-box Berendsen branch (including B>2000) has no box event and
+      // must not trigger an otherwise unnecessary NEP neighbor rebuild.
+      force.apply_isotropic_box_scale(box, atoms, ownership, *factor);
     }
     bool need_snapshot = false;
     for (const Measurement& measurement : measurements) {
@@ -799,9 +849,9 @@ void run_segment(
   }
 }
 
-// The M1 replicated-full runtime: also the P=1 path and the M2a fallback for
+// The replicated-full runtime: also the P=1 path and the local-domain fallback for
 // inputs that do not meet the local-domain eligibility criteria. Behavior is
-// unchanged from the M1 milestone; only the NEP construction moved to the
+// unchanged from the replicated-full milestone; only the NEP construction moved to the
 // dispatcher (parsed exactly once, workspace sized here).
 void run_m1_replicated(
     const RunProgram& program,
@@ -812,7 +862,7 @@ void run_m1_replicated(
     MpiRuntime& mpi)
 {
   const auto total_started = std::chrono::steady_clock::now();
-  // The full Model is replicated input. The M1 spatial ownership set below is
+  // The full Model is replicated input. The replicated-full spatial ownership set below is
   // the only authority for integration, thermodynamics and output; data stays
   // fully replicated (no ghost slots, no local compaction) and NEP stays
   // replicated-full. Ownership migrates logically between epochs; atoms are
@@ -823,7 +873,7 @@ void run_m1_replicated(
     throw std::logic_error(
         "replicated initialization requires a complete input model and no ghosts");
   }
-  // P=1 degenerates to the constant rank-0 map (M0 path, byte-identical);
+  // P=1 degenerates to the constant rank-0 map (single-rank baseline path, byte-identical);
   // P>1 requires an orthogonal fully-periodic box and partitions along the
   // longest edge. The ownership epoch persists across every run segment.
   RuntimeOwnership ownership(model.atoms, box, mpi);
@@ -1275,9 +1325,9 @@ void run_replicated(
   // Mode dispatcher (docs/standards/mpi-runtime.md): the
   // potential is parsed exactly once here; eligibility is decided from the
   // parsed cutoffs and the box; P=1 always keeps the existing path, P>1
-  // inputs that fail an M2a criterion keep the M1 replicated-full runtime as
+  // inputs that fail a local-domain criterion keep the replicated-full runtime as
   // the compatibility fallback (never a new error), and triclinic /
-  // non-periodic inputs at P>1 keep the M1 unsupported errors.
+  // non-periodic inputs at P>1 keep the replicated-full unsupported errors.
   if (model.atoms.counts.ghost_count != 0 ||
       model.atoms.counts.owned_count != model.atoms.counts.global_count) {
     throw std::logic_error(
@@ -1293,6 +1343,16 @@ void run_replicated(
   detail::validate_ensemble_environment(program, mpi);
   mpi.initialize_device();
   gpumd_compat::Box box = detail::make_box(model.box);
+
+  const bool force_m1_for_npt = program_uses_npt(program);
+  if (force_m1_for_npt) {
+    try {
+      static_cast<void>(detail::prepare_scaled_box(box, 1.0));
+    } catch (const std::exception& error) {
+      throw std::runtime_error(std::string("NPT initial box validation failed: ") +
+                               error.what());
+    }
+  }
 
   if (mpi.world_size() > 1) {
     if (!box.is_orthogonal) {
@@ -1330,7 +1390,7 @@ void run_replicated(
   if (mpi.is_root()) std::cout << "DMGMD_OVERLAP_CONFIG mode=" << gpumd_compat::overlap_name(overlap_mode)
     << " trace=" << overlap_trace << " poll_limit=8 stream=default\n";
   DomainEligibility eligibility;
-  {
+  if (!force_m1_for_npt) {
     const auto& params = potential->params();
     CutoffSet cutoffs;
     cutoffs.num_types = params.num_types;
@@ -1345,18 +1405,23 @@ void run_replicated(
         mpi.world_size(), model.box.h, radii, params.rc_radial_max);
   }
   if (mpi.is_root()) {
-    static const char* axis_names[3] = {"x", "y", "z"};
-    std::cout << "DMGMD_DOMAIN mode="
-              << (eligibility.eligible ? "m2a" : "m1-fallback")
-              << " axis="
-              << (eligibility.axis >= 0 ? axis_names[eligibility.axis] : "none")
-              << " d_dep=" << eligibility.d_dep << " d_coord=" << eligibility.d_coord;
-    if (eligibility.eligible) {
-      std::cout << " axis_thickness=" << eligibility.axis_thickness
-                << " slab_width=" << eligibility.slab_width;
+    if (force_m1_for_npt) {
+      std::cout << "DMGMD_DOMAIN mode=m1 reason=npt-m1-only ranks="
+                << mpi.world_size() << '\n';
+    } else {
+      static const char* axis_names[3] = {"x", "y", "z"};
+      std::cout << "DMGMD_DOMAIN mode="
+                << (eligibility.eligible ? "m2a" : "m1-fallback")
+                << " axis="
+                << (eligibility.axis >= 0 ? axis_names[eligibility.axis] : "none")
+                << " d_dep=" << eligibility.d_dep << " d_coord=" << eligibility.d_coord;
+      if (eligibility.eligible) {
+        std::cout << " axis_thickness=" << eligibility.axis_thickness
+                  << " slab_width=" << eligibility.slab_width;
+      }
+      std::cout << " ranks=" << mpi.world_size()
+                << " reason=" << eligibility.reason << '\n';
     }
-    std::cout << " ranks=" << mpi.world_size()
-              << " reason=" << eligibility.reason << '\n';
     std::cout.flush();
   }
 
@@ -1365,7 +1430,7 @@ void run_replicated(
               << (partition_mode == gpumd_compat::DomainPartitionMode::verify ? "verify" : "serial")
               << " scheduling=completed-halo-serial timing_scope=split-pipeline\n";
   }
-  if (eligibility.eligible) {
+  if (eligibility.eligible && !force_m1_for_npt) {
     run_local_domain(
         program, std::move(model), box, std::move(potential), eligibility, mpi);
     return;

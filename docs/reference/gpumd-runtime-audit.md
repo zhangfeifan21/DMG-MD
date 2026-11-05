@@ -24,7 +24,7 @@ main → Run::Run
 | get_filename_potential / read_xyz.cu:427 | 最后一个 potential 行决定读取 species 的文件 | 多 potential 存歧义；DMG-MD 明确拒绝多势 |
 | read_line2 / read_xyz.cu:155 | 等号/引号解析、大小写规则 | 语法与当前实现差异见兼容矩阵 |
 | Group::find_size/find_contents / model/group.cu:25 | contents 存全局数组下标 | labels 是持久字段，本地下标不得当身份 |
-| allocate_memory_gpu / read_xyz.cu:532 | 全 N type/mass/charge/position 与输出 | M2a 另按 local_count 分配 |
+| allocate_memory_gpu / read_xyz.cu:532 | 全 N type/mass/charge/position 与输出 | 局部域分解另按 local_count 分配 |
 | Velocity::initialize / main_gpumd/velocity.cu:312 | 全局 CPU 随机序列与动量修正 | 当前 root 按全局顺序生成并广播，不是 counter RNG |
 
 ## 解析与多 run
@@ -92,13 +92,13 @@ small-box（nep.cu:1141、nep_small_box.cuh）显式多 image、Newton atomic sc
 | --- | --- |
 | compat | src/gpumd_compat：最小数值子集，Origin 注释、保留数学/精度 |
 | input / entry | src/model_parser.cpp、run_parser.cpp、dmgmd_main.cpp；typed IR 与来源错误，每 rank 解析再核对 fingerprint |
-| M1 / formatter | src/runtime.cu：replicated-full、indexed ownership、共享兼容输出 |
+| 全量复制/ formatter | src/runtime.cu：replicated-full、indexed ownership、共享兼容输出 |
 | shared | src/runtime_internal.hpp：公共 helper、RankIoIsolation 与 formatter 声明 |
-| M2a | src/domain_runtime.cu、include/dmgmd/domain_layout.hpp：local owned/ghost、统一 rebuild、halo/迁移 |
+| 局部域分解| src/domain_runtime.cu、include/dmgmd/domain_layout.hpp：local owned/ghost、统一 rebuild、halo/迁移 |
 | NEP 分区 | src/gpumd_compat/domain_partition*、NEP::compute_domain：普通步 mask 与 oracle |
-| MPI | src/mpi_runtime.cu、include/dmgmd/mpi_runtime.hpp：GPU binding、collective/p2p、halo lifecycle；spatial_ownership.hpp 提供 M1 owner |
+| MPI | src/mpi_runtime.cu、include/dmgmd/mpi_runtime.hpp：GPU binding、collective/p2p、halo lifecycle；spatial_ownership.hpp 提供 全量复制owner |
 
-M2a、migration、halo 与 local neighbor 已在当前闭包内，不能再写成“未来组件”。
-M2b 和 3D 仍为[剩余计划](../plans/domain-decomposition.md)；实际 overlap 已由 O4 实现并
+局部域分解模式、migration、halo 与 local neighbor 已在当前闭包内，不能再写成“未来组件”。
+分阶段中间场交换方案与 3D 仍为[剩余计划](../plans/domain-decomposition.md)；实际 overlap 已由 O4 实现并
 验收，默认关闭。runtime 合同见
 [MPI](../standards/mpi-runtime.md)、[布局](../standards/data-layout.md)、[缓存](../standards/cache-validity.md)。

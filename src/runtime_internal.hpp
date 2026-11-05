@@ -1,7 +1,7 @@
 #pragma once
 
-// Internal sharing boundary between src/runtime.cu (the M1 replicated-full
-// path and the P=1 path) and src/domain_runtime.cu (the M2a local-domain
+// Internal sharing boundary between src/runtime.cu (the replicated-full
+// path and the P=1 path) and src/domain_runtime.cu (the local-domain
 // path). Everything the two runtimes share lives here: small CUDA helpers,
 // the box factory, the snapshot/thermo/measurement types, the rank I/O
 // isolation protocol, the kernels whose launch domains are fully
@@ -9,10 +9,11 @@
 // GPUMD-compatible output formatters plus the CPU velocity correction.
 //
 // NOT part of include/dmgmd: this header is allowed to depend on
-// gpumd_compat and on the .cu translation-unit layout. The M2a module
+// gpumd_compat and on the .cu translation-unit layout. The local-domain module
 // include/dmgmd/domain_layout.hpp stays pure CPU and must not include this.
 
 #include "dmgmd/domain_layout.hpp"
+#include "dmgmd/box_control.hpp"
 #include "dmgmd/ensemble_control.hpp"
 #include "dmgmd/model.hpp"
 #include "dmgmd/mpi_runtime.hpp"
@@ -40,6 +41,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -118,18 +120,33 @@ using Measurement = std::variant<DumpThermoCommand, DumpXyzCommand, DumpRestartC
 // Scan the whole input before any segment can create scientific output.
 inline void validate_ensemble_environment(const RunProgram& program, MpiRuntime& mpi)
 {
+  const bool npt = program_uses_npt(program);
   const bool stateful = std::any_of(program.commands.begin(), program.commands.end(),
       [](const Command& command) {
         const auto* ensemble = std::get_if<EnsembleCommand>(&command.data);
         return ensemble && (ensemble->kind == EnsembleKind::nvt_nhc ||
-                            ensemble->kind == EnsembleKind::nvt_bdp);
+                            ensemble->kind == EnsembleKind::nvt_bdp ||
+                            ensemble->kind == EnsembleKind::npt_scr);
       });
-  if (!stateful) return;
+  if (!stateful && !npt) return;
   for (const auto& option : std::array<std::pair<const char*, const char*>, 4>{{
            {"DMGMD_DOMAIN_PARTITION", "off"}, {"DMGMD_DOMAIN_OVERLAP", "off"},
            {"DMGMD_DOMAIN_SCHEDULE", "split"}, {"DMGMD_OVERLAP_TRACE", "0"}}}) {
     const char* value = std::getenv(option.first);
+    if (npt) {
+      const std::string spelling = value ? std::string("set:") + value : "unset";
+      std::uint64_t fingerprint = UINT64_C(1469598103934665603);
+      for (const unsigned char byte : spelling) {
+        fingerprint ^= byte;
+        fingerprint *= UINT64_C(1099511628211);
+      }
+      mpi.assert_same_fingerprint(fingerprint, option.first);
+    }
     if (value && std::string(value) != option.second) {
+      if (npt) {
+        throw std::runtime_error(std::string("NPT requires ") + option.first + "=" +
+                                 option.second + " (got '" + value + "')");
+      }
       throw std::runtime_error(std::string("new NVT ensembles require ") +
                                option.first + "=" + option.second);
     }
@@ -137,7 +154,8 @@ inline void validate_ensemble_environment(const RunProgram& program, MpiRuntime&
   const bool stochastic = std::any_of(program.commands.begin(), program.commands.end(),
       [](const Command& command) {
         const auto* ensemble = std::get_if<EnsembleCommand>(&command.data);
-        return ensemble && ensemble->kind == EnsembleKind::nvt_bdp;
+        return ensemble && (ensemble->kind == EnsembleKind::nvt_bdp ||
+                            ensemble->kind == EnsembleKind::npt_scr);
       });
   if (stochastic) {
     const char* value = std::getenv("DMGMD_ENSEMBLE_SEED");
@@ -173,6 +191,53 @@ std::optional<double> ensemble_velocity_factor(
     } catch (const std::exception& exception) {
       message[0] = 0.0;
       error = exception.what();
+    }
+  }
+  mpi.broadcast_doubles(message.data(), message.size());
+  ++communication.collective_calls;
+  communication.mpi_input_bytes_global += sizeof(double) * message.size();
+  communication.mpi_output_bytes_global +=
+      sizeof(double) * message.size() * static_cast<std::uint64_t>(mpi.world_size());
+  if (message[0] != 1.0) {
+    throw std::runtime_error(mpi.broadcast_string(std::move(error)));
+  }
+  return message[1];
+}
+
+inline std::optional<double> ensemble_box_factor(
+    const EnsembleController& controller, const ThermoState& thermo,
+    const gpumd_compat::Box& box, int step, int steps,
+    std::uint64_t global_step, MpiRuntime& mpi,
+    CommunicationVolume& communication)
+{
+  if (!controller.has_barostat()) return std::nullopt;
+  std::array<double, 2> message{{1.0, 1.0}};
+  std::string error;
+  if (mpi.is_root()) {
+    double factor = std::numeric_limits<double>::quiet_NaN();
+    const double p_inst =
+        (thermo.values[2] + thermo.values[3] + thermo.values[4]) * 0.3333333333333333;
+    try {
+      factor = controller.barostat_scale(
+          &thermo.values, box.get_volume(), step, steps, global_step);
+      if (factor != 1.0) {
+        static_cast<void>(prepare_scaled_box(box, factor));
+      }
+      message[1] = factor;
+    } catch (const std::exception& exception) {
+      message[0] = 0.0;
+      std::ostringstream detail;
+      detail << (controller.configuration().kind == EnsembleKind::npt_scr
+                     ? "npt_scr" : "npt_ber")
+             << " box preflight failed step=" << global_step
+             << " P_GPa=" << controller.configuration().target_pressure_gpa
+             << " P_inst_internal=" << p_inst
+             << " T_target=" << controller.target_temperature(step, steps)
+             << " V_pre_scale=" << box.get_volume()
+             << " gaussian=" << controller.last_barostat_gaussian()
+             << " factor=" << factor
+             << ": " << exception.what();
+      error = detail.str();
     }
   }
   mpi.broadcast_doubles(message.data(), message.size());
@@ -637,7 +702,7 @@ __global__ void normalize_global_thermo(
 // ---------------------------------------------------------------------------
 // Shared host functions (defined in src/runtime.cu, used by both runtimes).
 // The formatters and the CPU velocity correction operate on the root's full
-// identity model and a global-order HostSnapshot, so the M2a gathering path
+// identity model and a global-order HostSnapshot, so the local-domain gathering path
 // reuses them byte-for-byte.
 // ---------------------------------------------------------------------------
 
@@ -686,7 +751,7 @@ void write_restart(
 
 }  // namespace detail
 
-// M2a local-domain runtime (src/domain_runtime.cu). Takes ownership of the
+// local-domain runtime (src/domain_runtime.cu). Takes ownership of the
 // exactly-once parsed NEP (deferred workspace) and the eligibility decision.
 void run_local_domain(
     const RunProgram& program,

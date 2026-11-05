@@ -60,6 +60,6 @@ v1.0 新增 NHC/BDP 的独立 oracle、统计、MPI 与 restart 验收位于
 不代表完整系综或 v1.0 发布覆盖。
 
 O2 的 compat 中心选择修改同样要求本套单 rank golden 与 long_nve 重验，不更新 golden 或
-放宽容差。P1/M1 对显式分区开关的同步 fallback 由 MPI domain runner 专项验证；
+放宽容差。P1/全量复制对显式分区开关的同步 fallback 由 MPI domain runner 专项验证；
 分区逐原子量、有效中间产物及 poison 的验收合同见
 [串行分区标准](../../docs/standards/domain-partition.md)。

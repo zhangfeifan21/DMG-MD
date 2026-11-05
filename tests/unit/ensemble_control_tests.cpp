@@ -1,6 +1,7 @@
 #include "dmgmd/ensemble_control.hpp"
 #include "gpumd_compat/common.cuh"
 #include "gpumd_compat/thermostat_svr.hpp"
+#include "gpumd_compat/npt_scr.hpp"
 
 #include <array>
 #include <cmath>
@@ -49,7 +50,7 @@ std::uint64_t bits(double value)
   return result;
 }
 
-// Frozen scalar expressions from the pre-controller M1/M2a Berendsen blocks.
+// Frozen scalar expressions from the pre-controller replicated-full/local-domain Berendsen blocks.
 // Runtime A/B scientific-file hashes additionally check the CUDA host build.
 double legacy_target(const dmgmd::EnsembleCommand& ensemble, int step, int steps)
 {
@@ -133,6 +134,124 @@ void test_berendsen_factor()
   std::cout << "PASS factor-one/disabled-coupling/missing-thermo case=" << ++cases << '\n';
 }
 
+void test_npt_ber_scalar_contract()
+{
+  const dmgmd::EnsembleCommand configuration{
+      dmgmd::EnsembleKind::npt_ber, 300, 600, 50, -2.5, 1.0, 1.0};
+  const dmgmd::EnsembleController controller(configuration);
+  expect(controller.has_barostat(), "npt_ber controller lacks barostat");
+  const std::array<double, 8> thermo{{300.0, 0.0, 1.25, 2.75, 8.5, 0.0, 0.0, 0.0}};
+  // Frozen scalar fixture evaluated from the pinned cpu_pressure_isotropic
+  // sequence: mean=(p0+p1+p2)*0.3333333333333333, target=P/160.2177,
+  // pc=(1/(3*tau_p*B))*160.2177, scale=1-pc*(target-mean).
+  expect(bits(controller.barostat_scale(&thermo, 1000.0, 0, 1, 17)) ==
+             UINT64_C(0x406c0b740da740da),
+         "npt_ber scalar fixture differs from pinned pressure equation");
+  const auto temp_factor = controller.after_force(&thermo, 0, 2);
+  expect(temp_factor && *temp_factor > 0.0, "npt_ber Berendsen temperature feedback missing");
+
+  const dmgmd::EnsembleController fixed_box({
+      dmgmd::EnsembleKind::npt_ber, 300, 300, 10, -5.0, 2000.0001, 10.0});
+  expect(bits(fixed_box.barostat_scale(&thermo, 1000.0, 0, 1, 1)) == bits(1.0),
+         "B>2000 did not disable the barostat exactly");
+
+  auto zero_temperature = thermo;
+  zero_temperature[0] = 0.0;
+  bool rejected_zero_temperature = false;
+  try {
+    static_cast<void>(controller.after_force(&zero_temperature, 0, 2));
+  } catch (const std::runtime_error& error) {
+    rejected_zero_temperature =
+        std::string(error.what()).find("instantaneous temperature") != std::string::npos;
+  }
+  expect(rejected_zero_temperature, "npt_ber accepted zero kinetic temperature");
+
+  const dmgmd::EnsembleController invalid_scale({
+      dmgmd::EnsembleKind::npt_ber, 300, 300, 10, 1e9, 1.0, 1.0});
+  auto low_pressure = thermo;
+  low_pressure[2] = low_pressure[3] = low_pressure[4] = 0.0;
+  bool rejected_scale = false;
+  try {
+    static_cast<void>(invalid_scale.barostat_scale(&low_pressure, 1000.0, 0, 1, 23));
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    rejected_scale = message.find("step=23") != std::string::npos &&
+                     message.find("P_GPa=1e+09") != std::string::npos &&
+                     message.find("P_inst_internal=0") != std::string::npos &&
+                     message.find("factor=") != std::string::npos;
+  }
+  expect(rejected_scale, "invalid box factor lacks detailed failure context");
+  std::cout << "PASS npt_ber scalar contract case=" << ++cases << '\n';
+}
+
+void test_npt_scr_single_step_oracles()
+{
+  // Layer one is a formula-only oracle. The Gaussian is injected and is not
+  // evidence for production RNG behavior; the expected value is independently
+  // frozen from the pinned equation with internal pressure units.
+  constexpr double injected_gaussian = 1.0348526110957657;
+  const double injected_scale = gpumd_compat::npt_scr_isotropic_scale(
+      -2.5 / 1.602177e+2, (1.0 / (3.0 * 2.0 * 10.0)) * 1.602177e+2,
+      (0.1 + 0.2 + 0.3) * 0.3333333333333333,
+      300.0, 1000.0, injected_gaussian);
+  expect(std::abs(injected_scale - 1.5827460335479948) < 2.0e-15,
+         "fixed-Gaussian pressure/volume/temperature/unit oracle changed");
+  expect(gpumd_compat::npt_scr_isotropic_scale(2.0, 1.0, 0.0, 300.0, 1000.0, -100.0) < 0.0,
+         "fixed-Gaussian negative scale fixture did not exercise rejection domain");
+
+  // Layer two exercises the real controller-owned SvrState: BDP first, then
+  // pressure gasdev. N=1 makes BDP's ndeg=3 noise consume gasdev's first
+  // sample and one gamdev(1) uniform, leaving its paired Gaussian cached for
+  // the pressure draw.
+  const dmgmd::EnsembleCommand configuration{
+      dmgmd::EnsembleKind::npt_scr, 300, 300, 100, -2.5, 10, 2};
+  dmgmd::EnsembleController controller(configuration, 1, 0.01, true, 12345678u);
+  expect(controller.uses_root_state() && controller.has_barostat(),
+         "npt_scr must use root RNG state and a barostat");
+  const std::array<double, 8> thermo{{250.0, 0.0, 0.1, 0.2, 0.3, 0.0, 0.0, 0.0}};
+  const auto bdp_factor = controller.after_force(&thermo, 0, 1);
+  expect(bdp_factor && std::abs(*bdp_factor - 0.96235819655887289) < 2.0e-15,
+         "npt_scr first BDP factor differs from independent seeded oracle");
+  const double scr_factor = controller.barostat_scale(&thermo, 1000.0, 0, 1, 1);
+  expect(std::abs(scr_factor - 1.5827460335479948) < 2.0e-15,
+         "npt_scr pressure draw/order differs from independent seeded oracle");
+
+  // pc==0 suppresses the noise contribution, but the pressure Gaussian must
+  // still be consumed. The next BDP factor distinguishes the advanced cached
+  // stream from one where the fixed-box pressure draw was skipped.
+  const dmgmd::EnsembleCommand fixed_configuration{
+      dmgmd::EnsembleKind::npt_scr, 300, 300, 100, 0, 2001, 2};
+  dmgmd::EnsembleController fixed(fixed_configuration, 1, 0.01, true, 12345678u);
+  static_cast<void>(fixed.after_force(&thermo, 0, 1));
+  expect(bits(fixed.barostat_scale(&thermo, 1000.0, 0, 1, 1)) == bits(1.0),
+         "npt_scr B>2000 did not yield an exact fixed box");
+  const auto next_bdp = fixed.after_force(&thermo, 0, 1);
+  expect(next_bdp && std::abs(*next_bdp - 0.88910040747385666) < 2.0e-15,
+         "npt_scr B>2000 failed to consume the pressure Gaussian/cache");
+
+  const dmgmd::EnsembleCommand invalid_configuration{
+      dmgmd::EnsembleKind::npt_scr, 300, 300, 100, 1e9, 1, 1};
+  dmgmd::EnsembleController invalid(invalid_configuration, 1, 0.01, true, 12345678u);
+  auto invalid_thermo = thermo;
+  invalid_thermo[2] = invalid_thermo[3] = invalid_thermo[4] = 0.0;
+  bool rejected = false;
+  try {
+    static_cast<void>(invalid.barostat_scale(&invalid_thermo, 1000.0, 0, 1, 9));
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    rejected = message.find("npt_scr") != std::string::npos &&
+               message.find("step=9") != std::string::npos &&
+               message.find("P_GPa=1e+09") != std::string::npos &&
+               message.find("P_inst_internal=0") != std::string::npos &&
+               message.find("T_target=300") != std::string::npos &&
+               message.find("V_pre_scale=1000") != std::string::npos &&
+               message.find("gaussian=") != std::string::npos &&
+               message.find("factor=") != std::string::npos;
+  }
+  expect(rejected, "npt_scr invalid scale did not fail with complete context");
+  std::cout << "PASS npt_scr fixed-Gaussian/RNG-cache/safety oracles case=" << ++cases << '\n';
+}
+
 void test_segment_lifecycle()
 {
   dmgmd::EnsembleCommand configuration{dmgmd::EnsembleKind::nvt_ber, 100, 200, 50};
@@ -185,8 +304,7 @@ void test_no_state_allocation()
 
 void test_unimplemented_kinds()
 {
-  for (const auto kind : {dmgmd::EnsembleKind::npt_ber, dmgmd::EnsembleKind::npt_scr,
-                          static_cast<dmgmd::EnsembleKind>(999)}) {
+  for (const auto kind : {static_cast<dmgmd::EnsembleKind>(999)}) {
     bool rejected = false;
     try {
       const dmgmd::EnsembleController controller({kind, 300, 300, 100});
@@ -194,10 +312,20 @@ void test_unimplemented_kinds()
     } catch (const std::invalid_argument&) {
       rejected = true;
     }
-    expect(rejected, "unimplemented controller was accepted");
+    expect(rejected, "unknown controller kind was accepted");
     std::cout << "PASS unsupported-controller case=" << ++cases
               << " kind=" << static_cast<int>(kind) << '\n';
   }
+  bool bad_scr_bulk_rejected = false;
+  try {
+    static_cast<void>(dmgmd::EnsembleController(
+        {dmgmd::EnsembleKind::npt_scr, 300, 300, 100, 0, 0, 10},
+        1, 0.01, true, 123));
+  } catch (const std::invalid_argument& error) {
+    bad_scr_bulk_rejected = std::string(error.what()).find("B > 0") != std::string::npos;
+  }
+  expect(bad_scr_bulk_rejected, "npt_scr controller accepted an invalid bulk modulus");
+  std::cout << "PASS npt_scr constructor guards case=" << ++cases << '\n';
 }
 
 void test_seed_parser()
@@ -407,6 +535,8 @@ int main()
   try {
     test_temperature_schedule();
     test_berendsen_factor();
+    test_npt_ber_scalar_contract();
+    test_npt_scr_single_step_oracles();
     test_segment_lifecycle();
     test_no_state_allocation();
     test_unimplemented_kinds();

@@ -42,6 +42,9 @@ Origin file: src/force/neighbor.cuh
 Purpose: Cell-list / full-neighbor-list declarations and the ELL row-sorting
 kernel required by the NEP many-body reverse-edge binary search.
 
+DMG-MD B1 adaptation: a one-shot global rebuild notification handles box
+changes without altering the pinned neighbor arithmetic or row ordering.
+
 Adaptations for this replica are listed at the bottom of this header block.
 ----------------------------------------------------------------------------*/
 
@@ -156,7 +159,7 @@ static __global__ void gpu_sort_neighbor_list(const int N, const int* NN, int* N
   }
 }
 
-// M2a domain row sort: same rank-by-counting scheme, but the ordering key is
+// local-domain row sort: same rank-by-counting scheme, but the ordering key is
 // the candidate's global ID (docs/standards/mpi-runtime.md),
 // so the row order is independent of the local slot numbering and the many-body
 // reverse-edge binary search in gpu_find_force_many_body_domain can use the
@@ -200,7 +203,7 @@ static __global__ void gpu_sort_neighbor_list_domain(
 // full neighbor list only when any atom moved more than skin/2 relative to
 // the reference positions x0/y0/z0 (reference neighbor.cuh:194).
 //
-// DMG-MD domain additions (M2a): find_neighbor_domain separates the center
+// DMG-MD domain additions (local-domain): find_neighbor_domain separates the center
 // range (dependency centers whose rows are written) from the candidate domain
 // (all local slots, owned + ghosts) and sorts rows by global ID so the
 // many-body reverse-edge search stays well defined under a rank-local layout.
@@ -217,7 +220,13 @@ public:
     const GPU_Vector<int>& type, 
     const GPU_Vector<double>& position_per_atom);
 
-  // M2a domain interface ------------------------------------------------
+  // DMG-MD box-control adaptation: force exactly the next replicated-full/global list
+  // rebuild after the box changes, even when coordinate displacement alone
+  // remains within half the Verlet skin. Defaults false; cleared only after a
+  // successful global rebuild. No neighbor arithmetic or row order changes.
+  void notify_box_changed() { force_global_rebuild_ = true; }
+
+  // local-domain interface ------------------------------------------------
   // Builds the full Verlet rows for centers [center_begin, center_end) with
   // candidates taken from all num_candidates local slots, then sorts every
   // written row by the candidate's global ID. The runtime already resolved
@@ -251,13 +260,14 @@ public:
 
 private:
   double skin = 1.0;              // skin distance
-  size_t row_capacity_ = 0;       // M2a: ELL entries per row from initialize()
+  size_t row_capacity_ = 0;       // local-domain: ELL entries per row from initialize()
   std::uint64_t domain_generation_ = 0;
+  bool force_global_rebuild_ = false;
   GPU_Vector<int> cell_count;     // for cell list
   GPU_Vector<int> cell_count_sum; // for cell list
   GPU_Vector<int> cell_contents;  // for cell list
   GPU_Vector<double> x0, y0, z0;  // for checking atom distance
-  GPU_Vector<int> domain_overflow_; // M2a: Verlet row-capacity guard flag
+  GPU_Vector<int> domain_overflow_; // local-domain: Verlet row-capacity guard flag
   std::uint64_t domain_layout_epoch_ = std::numeric_limits<std::uint64_t>::max();
   int check_atom_distance(
     Box& box,
