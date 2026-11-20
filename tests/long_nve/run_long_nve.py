@@ -64,6 +64,8 @@ def nonnegative_integer(text: str) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
+    parser.add_argument("--reference-provenance", type=Path)
+    parser.add_argument("--reference-provenance-sha256")
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--mpiexec", type=Path, default=Path("mpiexec"))
     parser.add_argument("--devices", required=False, help="comma-separated CUDA IDs/UUIDs")
@@ -641,6 +643,54 @@ def restart_transition(
     }
 
 
+def validate_reference_provenance(reference: Path, receipt: Path, expected_receipt_sha: str) -> dict:
+    """Validate an explicit isolated reference against the pinned Git source."""
+    receipt = receipt.resolve()
+    if not expected_receipt_sha or baseline.sha256(receipt) != expected_receipt_sha:
+        raise baseline.BaselineError("reference provenance receipt hash mismatch")
+    data = json.loads(receipt.read_text())
+    root = receipt.parent
+    commit = baseline.load_manifest()["reference"]["commit"]
+    if data.get("source_commit") != commit or not data.get("source_unchanged"):
+        raise baseline.BaselineError("reference provenance source identity mismatch")
+    if reference.resolve() != (root / "source/src/gpumd").resolve():
+        raise baseline.BaselineError("reference binary path differs from isolated build")
+    for name, path, field in (("binary", reference, "binary_sha256"),
+                              ("source archive", root / "source.tar", "archive_sha256"),
+                              ("source before", root / "source-before.json", "source_before_sha256"),
+                              ("source after", root / "source-after.json", "source_after_sha256"),
+                              ("patch", root / "makefile.patch", "makefile_patch_sha256"),
+                              ("build log", root / "build.log", "build_log_sha256")):
+        if not path.is_file() or baseline.sha256(path) != data.get(field):
+            raise baseline.BaselineError(f"reference {name} hash mismatch")
+    if (root / "makefile.patch").read_bytes() != b"":
+        raise baseline.BaselineError("reference build patch must be empty")
+    if ("CUDA_ARCH=-arch=sm_89 gpumd" not in data.get("command", "")
+            or "release 12.8" not in data.get("nvcc", "")
+            or "13.3.0" not in data.get("host_compiler", "")
+            or "sm_89" not in data.get("arch_inventory", "")):
+        raise baseline.BaselineError("reference compiler or architecture mismatch")
+    before = json.loads((root / "source-before.json").read_text())
+    after = json.loads((root / "source-after.json").read_text())
+    if before != after or before.get("reference_head") != commit or before.get("archive_sha256") != data["archive_sha256"]:
+        raise baseline.BaselineError("reference source manifests differ or identify another archive")
+    files = before.get("files", [])
+    repo = DEFAULT_REFERENCE.resolve().parent.parent
+    tracked = subprocess.check_output(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", commit, "src"], text=True).splitlines()
+    if len(files) != 285 or data.get("source_file_count") != 285 or sorted(x["path"] for x in files) != sorted(tracked):
+        raise baseline.BaselineError("reference source manifest coverage mismatch")
+    for entry in files:
+        rel = entry["path"]
+        actual = root / "source" / rel
+        git_blob = subprocess.check_output(["git", "-C", str(repo), "show", f"{commit}:{rel}"])
+        if not actual.is_file() or baseline.sha256(actual) != entry["sha256"] or __import__("hashlib").sha256(git_blob).hexdigest() != entry["sha256"]:
+            raise baseline.BaselineError(f"reference source differs from locked Git blob: {rel}")
+    baseline.validate_reference(DEFAULT_REFERENCE.resolve(), baseline.load_manifest())
+    return {"receipt": str(receipt), "receipt_sha256": expected_receipt_sha,
+            "source_commit": commit, "source_manifest_sha256": data["source_after_sha256"],
+            "binary_sha256": data["binary_sha256"]}
+
+
 def main() -> int:
     args = parse_args()
     manifest = common.load_manifest()
@@ -662,7 +712,13 @@ def main() -> int:
         raise baseline.BaselineError(f"reference is not executable: {reference}")
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
         raise baseline.BaselineError(f"candidate is not executable: {candidate}")
-    baseline.validate_reference(reference, baseline.load_manifest())
+    if bool(args.reference_provenance) != bool(args.reference_provenance_sha256):
+        raise baseline.BaselineError("reference provenance path and SHA must be supplied together")
+    reference_provenance = (validate_reference_provenance(reference, args.reference_provenance,
+                            args.reference_provenance_sha256) if args.reference_provenance
+                            else None)
+    if reference_provenance is None:
+        baseline.validate_reference(reference, baseline.load_manifest())
 
     devices_text = args.devices or os.environ.get("CUDA_VISIBLE_DEVICES", "")
     devices = comma_list(devices_text) if devices_text else []
@@ -701,6 +757,7 @@ def main() -> int:
         "sections": sections,
         "reference": str(reference),
         "reference_sha256": baseline.sha256(reference),
+        "reference_provenance": reference_provenance,
         "candidate": str(candidate),
         "candidate_sha256": baseline.sha256(candidate),
         "mpiexec": str(mpiexec),

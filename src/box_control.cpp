@@ -67,4 +67,10 @@ gpumd_compat::Box prepare_scaled_box(const gpumd_compat::Box& box, double factor
   return candidate;
 }
 
+OwnedBoxScaleCandidate prepare_owned_box_scale(
+    const gpumd_compat::Box& box, double factor)
+{
+  return OwnedBoxScaleCandidate(prepare_scaled_box(box, factor), factor);
+}
+
 }  // namespace dmgmd::detail

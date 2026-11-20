@@ -1,6 +1,6 @@
 # 各向同性 NPT 控压器
 
-类别：实现合同与验收边界。更新日期：2026-11-04。NPT 路由限全量复制模式、各向同性、正交全周期盒；G-B 已通过。`npt_scr` 统计支持范围限于 216 原子 NEP-C、300 K/0 GPa、单节点冻结矩阵；NEP5/ZBL 只有另行记录的短程合同证据。阶段证据见 [NPT 矩阵报告](../status/validation/npt-validation.md#npt-matrix-20261104)、[B0 压力 oracle](../status/validation/npt-validation.md#pressure-oracle-20261103)、[B1 盒合同](../status/validation/npt-validation.md#box-contract-20261103)、[B2 Berendsen 报告](../status/validation/npt-validation.md#npt-ber-20261103) 和 [n3 最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
+类别：实现合同与验收边界。更新日期：2026-11-06。默认 NPT 路由限全量复制模式、各向同性、正交全周期盒；G-B 已通过。全量复制 G-B 的 `npt_scr` 统计支持限于 216 原子 NEP-C 冻结矩阵；独立的 5760 原子实验局部矩阵见[局部 NPT 标准](domain-npt.md)；NEP5/ZBL 只有另行记录的短程合同证据。阶段证据见 [NPT 矩阵报告](../status/validation/npt-validation.md#npt-matrix-20261104)、[B0 压力 oracle](../status/validation/npt-validation.md#pressure-oracle-20261103)、[B1 盒合同](../status/validation/npt-validation.md#box-contract-20261103)、[B2 Berendsen 报告](../status/validation/npt-validation.md#npt-ber-20261103) 和 [n3 最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
 
 ## 输入和边界
 
@@ -13,7 +13,7 @@ ensemble npt_scr T1 T2 Tdamp P B tau_p
 
 `T1/T2` 是 K，必须为有限正数；`Tdamp` 与 `tau_p` 是步数，必须为有限且不小于 1；目标压力 `P` 和控压体积模量 `B` 以 GPa 输入，`P` 可为负，`B` 必须为正。`B` 是 barostat 控制参数，不等同于所用材料实测的 bulk modulus。压力内部单位为 eV/Å³，输出 thermo 压力为 GPa，换算常数为 160.2177。12/18-token 各向异性形式、triclinic 和非周期盒不支持。
 
-NPT 只走全量复制模式。P1 使用全量复制模式；P2/P4 即使几何满足局部域分解条件也必须留在全量复制模式，报告 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`。直接进入局部域分解模式下的 NPT 路径必须失败关闭。适用矩阵为 P1/P2/P4、HostStaged/CudaAware；CudaAware 仅在 MPI/CUDA 环境自检通过时执行。NPT 不扩展到 LJ、EAM 或其他势。
+`DMGMD_DOMAIN_NPT=off`（默认）时，NPT 只走全量复制模式。P1 恒使用全量复制模式；P2/P4 即使几何满足局部域分解条件也必须留在全量复制模式，报告 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`。开关 off 时直接进入局部 NPT 路径必须失败关闭。显式 `rebuild`/`affine` 的实验局部路径、几何回退与运行中失败合同见[局部 NPT](domain-npt.md)，其验收独立于下列 G-B 结果。适用矩阵为 P1/P2/P4、HostStaged/CudaAware；CudaAware 仅在 MPI/CUDA 环境自检通过时执行。NPT 不扩展到 LJ、EAM 或其他势。
 
 现有 NVT `nvt_nhc`/`nvt_bdp` 的数值、root 状态、seed、run/restart 和通信合同不因 NPT 改动。`npt_scr` 按其算法组合 BDP 速度重标定与随机控压；这不表示 NHC 被用于 NPT，也不改变独立 `nvt_bdp` 的合同。
 
@@ -61,4 +61,4 @@ SCR 复用 BDP thermostat，并在 root 持有连续 RNG 流与 Gaussian 缓存�
 | B3 SCR 生产集成与冻结统计矩阵 | PASS；原18-look总体 INCONCLUSIVE 历史保留 | [n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104) |
 | B4/G-B 完整集成、错误与回归矩阵 | PASS | [NPT 矩阵报告](../status/validation/npt-validation.md#npt-matrix-20261104) |
 
-`npt_scr` 只在上文列出的冻结 NEP-C 单节点矩阵获得统计支持。该有限范围 PASS 不等于 v1.0 发布通过；C/D 尚未启动。
+`npt_scr` 的全量复制 G-B 与实验局部大盒结果分别限定于各自冻结 NEP-C 单节点矩阵；后者的精确条件见[局部 NPT 标准](domain-npt.md)。该有限范围 PASS 不等于 v1.0 发布通过；C/D 尚未启动。

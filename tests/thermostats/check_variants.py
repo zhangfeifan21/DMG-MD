@@ -66,7 +66,10 @@ def profile_and_run(dt_fs: float, damping_steps: float, steps: int = 100) -> tup
 def make_runner_args(args: argparse.Namespace) -> SimpleNamespace:
     return SimpleNamespace(
         candidate=args.candidate.resolve(),
-        reference=ROOT.parent / "gpumd-reference/src/gpumd",
+        reference=getattr(args, "reference", ROOT.parent / "gpumd-reference/src/gpumd").resolve(),
+        reference_provenance=getattr(args, "reference_provenance", None),
+        reference_provenance_sha256=getattr(args, "reference_provenance_sha256", None),
+        reference_identity=getattr(args, "reference_identity", None),
         devices=args.devices,
         ranks=[1, 2, 4],
         backends=list(BACKENDS),
@@ -234,6 +237,7 @@ def save_final(runner: thermostats.Runner, payload: dict, status: str, error: st
 
 
 def run(args: argparse.Namespace) -> int:
+    thermostats.validate_reference_options(args)
     args.candidate = args.candidate.resolve()
     if not args.candidate.is_file():
         raise RuntimeError(f"candidate binary does not exist: {args.candidate}")
@@ -242,6 +246,9 @@ def run(args: argparse.Namespace) -> int:
     if len(set(args.devices)) != len(args.devices) or len(args.devices) < 4:
         raise RuntimeError("--devices must contain at least four unique device IDs")
 
+    if not hasattr(args, "reference"):
+        args.reference = ROOT.parent / "gpumd-reference/src/gpumd"
+    args.reference_identity = thermostats.reference_identity(args)
     thermostat_manifest, long_manifest, base_manifest, fixtures = load_fixtures()
     parsed = make_runner_args(args)
     runner = thermostats.Runner(parsed, thermostat_manifest)
@@ -258,6 +265,7 @@ def run(args: argparse.Namespace) -> int:
         "long_nve_common_sha256": sha256(ROOT / "tests/long_nve/long_nve_common.py"),
         "reference": str(parsed.reference),
         "reference_executable_sha256": sha256(parsed.reference) if parsed.reference.is_file() else None,
+        "reference_identity": parsed.reference_identity,
         "fixtures": {
             name: {key: value for key, value in fixture.items() if key not in ("model", "potential")}
             for name, fixture in fixtures.items()
@@ -385,6 +393,9 @@ def run(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--reference", type=Path, default=ROOT.parent / "gpumd-reference/src/gpumd")
+    parser.add_argument("--reference-provenance", type=Path)
+    parser.add_argument("--reference-provenance-sha256")
     parser.add_argument("--devices", type=lambda value: value.split(","), default=["2", "4", "5", "7"])
     parser.add_argument("--work-root", type=Path, required=True, help="new evidence directory")
     args = parser.parse_args()

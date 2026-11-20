@@ -54,6 +54,24 @@ namespace detail {
 using gpumd_compat::Box;
 using gpumd_compat::GPU_Vector;
 
+enum class DomainNptMode { off, rebuild, affine };
+
+// Compare the raw setting before parsing so malformed or mismatched settings
+// cannot send different ranks down different collective paths.
+inline DomainNptMode domain_npt_mode(MpiRuntime& mpi)
+{
+  const char* value = std::getenv("DMGMD_DOMAIN_NPT");
+  const std::string local = value ? std::string("set:") + value : "unset";
+  const std::string root = mpi.broadcast_string(mpi.is_root() ? local : "");
+  if (!mpi.allreduce_all_passed(local == root, "domain NPT mode consistency")) {
+    throw std::runtime_error("DMGMD_DOMAIN_NPT differs between MPI ranks");
+  }
+  if (!value || std::string(value) == "off") return DomainNptMode::off;
+  if (std::string(value) == "rebuild") return DomainNptMode::rebuild;
+  if (std::string(value) == "affine") return DomainNptMode::affine;
+  throw std::invalid_argument("DMGMD_DOMAIN_NPT must be off, rebuild, or affine");
+}
+
 inline void check_cuda(cudaError_t status, const char* operation)
 {
   if (status != cudaSuccess) {

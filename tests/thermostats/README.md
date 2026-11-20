@@ -16,6 +16,7 @@ export PYTHONDONTWRITEBYTECODE=1
 cmake -S . -B /tmp/dmgmd-thermostats-build -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/dmgmd-thermostats-build -j8
 ctest --test-dir /tmp/dmgmd-thermostats-build --output-on-failure
+python3 tests/thermostats/test_reference_options.py
 ```
 
 CTest 注册 NHC fixture、SVR fixture、统计分析器及原有测试。NHC fixture 是三个独立 case，
@@ -50,6 +51,12 @@ python3 tests/thermostats/check_bdp_contract.py \
   --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7 \
   --work-root /tmp/thermostats-bdp-contract-new
 ```
+
+`run_thermostats.py` 和 `check_variants.py` 可用 `--reference` 指定隔离构建的参考程序，
+并成对提供 `--reference-provenance` 与 `--reference-provenance-sha256`。入口复用
+long-NVE 的归档、源码 Git blob、构建和二进制身份校验，记录验证结果，并在每次参考
+运行前复核二进制哈希。未提供 provenance 时仍要求原锁定参考身份；单缺一个参数时，
+在创建证据目录或执行 GPU 自检前拒绝。上述 CPU 测试覆盖这些入口约束。
 
 短程 case 是 2016/5184 原子的 NEP4 diamond；前者自然触发 P2/P4 全量复制回退路径，后者进入局部域分解模式。
 每个同 rank/backend 的重复要求科学输出文件逐字节一致；跨 rank 与 GPUMD NHC 比较使用

@@ -13,7 +13,7 @@ GPUMD 参考 commit 为 `9d23496e41319b9e2af5221a7df6285387401d1e`。本页声�
 及下表命令。恒温器的状态、随机数与统计限制见[系综标准](ensembles.md)。
 P1 恒走全量复制模式；P>1 只支持正交全周期，满足 large-box/slab 半径条件才走局部域分解模式，否则在已支持
 范围内 全量复制回退路径。详细条件见[MPI runtime](mpi-runtime.md)。
-局部域分解支持上述三种 NVT；NPT 只支持全量复制路径。`npt_scr` 的 G-B 已通过，但统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点各向同性正交全周期矩阵：base 为 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅 P1/HostStaged。NEP5/ZBL 只有另行记录的短程合同证据；NPT 与非 NEP 势的组合不支持。原注册18个 formal look 的总体 INCONCLUSIVE 历史结论保留；本次有限矩阵不证明普遍严格 NPT 采样、遍历性、RDMA 或跨节点支持。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)及[机器索引](../status/validation/npt-scr-n3-confirmation-index.json)。
+局部域分解支持上述三种 NVT；NPT 默认与既有生产验收范围为全量复制路径。显式 `DMGMD_DOMAIN_NPT=rebuild|affine` 为默认关闭的[实验局部 NPT](domain-npt.md)，独立 DN4 统计审核已通过，限于 单节点 NEP4-C、5760 原子、300 K/0 GPa、各向同性正交全周期体系；base 为 P1/HostStaged/off 与 P2/P4 两后端各自的 off、rebuild、affine，half 仅 P1/HostStaged/off、P2/HostStaged/affine、P4/CudaAware/affine；详见[局部 NPT 标准](domain-npt.md)。`npt_scr` 的 G-B 已通过，但统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点各向同性正交全周期矩阵：base 为 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅 P1/HostStaged。NEP5/ZBL 只有另行记录的短程合同证据；NPT 与非 NEP 势的组合不支持。原注册18个 formal look 的总体 INCONCLUSIVE 历史结论保留；本次有限矩阵不证明普遍严格 NPT 采样、遍历性、RDMA 或跨节点支持。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)及[机器索引](../status/validation/npt-scr-n3-confirmation-index.json)。
 
 每作业恰好一个 potential。GPUMD 的多 potential 追加及方向参数不在 DMG-MD 范围；
 NEP3、temperature/dipole/polarizability/charge 模型均拒绝。白名单以外的命令/ensemble
@@ -118,8 +118,8 @@ ANN num_neurons 0
 | time_step | `time_step DT [MAX_DISTANCE]` | DT 为有限实数 fs，默认 1 fs；可选最大距离>0 Å，按全局 owned 最大速度限步。NHC/BDP/NPT 要求固定有限正步长且不接受 MAX_DISTANCE；旧系综负 DT 边界未验收 |
 | ensemble | `ensemble nve` / `ensemble nvt_ber T1 T2 TAU` | T1/T2>0 K，TAU≥1；目标按 step/steps 插值；run 必须已有 ensemble |
 | ensemble | `ensemble nvt_nhc T1 T2 Tdamp` / `ensemble nvt_bdp T1 T2 Tdamp` | 温度有限且>0 K，Tdamp 有限且≥1，单位步数；目标同上。root 链/RNG、段首重置、默认 seed 见[系综标准](ensembles.md) |
-| ensemble | `ensemble npt_ber T1 T2 Tdamp P B tau_p` | 8-token 各向同性；T 为 K，Tdamp/tau_p 为步数，P/B 为 GPa；P 可负、B 有限且>0；仅 NEP/NEP-ZBL、正交全周期全量复制模式，P>1 固定走全量复制回退路径。B2 已验收，见[控压器标准](barostat.md) |
-| ensemble | `ensemble npt_scr T1 T2 Tdamp P B tau_p` | G-B PASS；统计支持仅限上述 NEP-C 单节点冻结矩阵。18个原注册 formal look 的总体 INCONCLUSIVE 历史保留；不外推至其他势、RDMA、跨节点或普遍严格 NPT；见[最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)与[NPT矩阵](../status/validation/npt-validation.md#npt-matrix-20261104) |
+| ensemble | `ensemble npt_ber T1 T2 Tdamp P B tau_p` | 8-token 各向同性；T 为 K，Tdamp/tau_p 为步数，P/B 为 GPa；P 可负、B 有限且>0；仅 NEP/NEP-ZBL、正交全周期全量复制模式，默认 P>1 走全量复制回退路径；实验局部开关见上文。B2 已验收，见[控压器标准](barostat.md) |
+| ensemble | `ensemble npt_scr T1 T2 Tdamp P B tau_p` | G-B PASS；全量复制统计支持限于上述 216 原子冻结矩阵，另有[实验局部 5760 原子冻结矩阵](domain-npt.md)通过。18个原注册 formal look 的总体 INCONCLUSIVE 历史保留；不外推至其他势、RDMA、跨节点或普遍严格 NPT；见[最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)与[NPT矩阵](../status/validation/npt-validation.md#npt-matrix-20261104) |
 | run | `run STEPS` | int；0/负步数 parser 未拒绝，未作为验证过的动力学兼容行为 |
 | dump_thermo | `dump_thermo INTERVAL` | int>0；thermo.out append |
 | dump_xyz | `dump_xyz INTERVAL FILE [OPTIONS/QUANTITIES]` | interval>0；见下表；同段可多条 |

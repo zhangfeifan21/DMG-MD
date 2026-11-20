@@ -64,6 +64,41 @@ target_include_directories(dmgmd_box_control_tests PRIVATE ${PROJECT_SOURCE_DIR}
 target_link_libraries(dmgmd_box_control_tests PRIVATE dmgmd_runtime)
 add_test(NAME dmgmd.box_control COMMAND $<TARGET_FILE:dmgmd_box_control_tests>)
 set_tests_properties(dmgmd.box_control PROPERTIES SKIP_RETURN_CODE 77)
+add_executable(dmgmd_owned_box_control_tests unit/owned_box_control_tests.cu)
+target_link_libraries(dmgmd_owned_box_control_tests PRIVATE dmgmd_runtime)
+add_test(NAME dmgmd.owned_box_control COMMAND $<TARGET_FILE:dmgmd_owned_box_control_tests>)
+set_tests_properties(dmgmd.owned_box_control PROPERTIES SKIP_RETURN_CODE 77)
+add_executable(dmgmd_owned_box_preflight_tests mpi/owned_box_preflight_tests.cu)
+target_link_libraries(dmgmd_owned_box_preflight_tests PRIVATE dmgmd_runtime)
+add_executable(dmgmd_domain_owned_thermo_poison_tests mpi/domain_owned_thermo_poison_tests.cu)
+target_link_libraries(dmgmd_domain_owned_thermo_poison_tests PRIVATE dmgmd_runtime)
+set_target_properties(dmgmd_domain_owned_thermo_poison_tests PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+add_executable(dmgmd_domain_scr_scalar_mpi npt/domain_scr_scalar_mpi.cpp)
+target_link_libraries(dmgmd_domain_scr_scalar_mpi PRIVATE dmgmd_ensemble_control MPI::MPI_CXX)
+add_library(dmgmd_domain_npt_pmpi SHARED npt/domain_npt_pmpi.cpp)
+target_link_libraries(dmgmd_domain_npt_pmpi PRIVATE MPI::MPI_CXX)
+add_test(NAME dmgmd.domain_npt_geometry_oracle
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_geometry_oracle.py)
+add_test(NAME dmgmd.domain_npt_rounding_cell_oracle
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_rounding_cell_oracle.py)
+add_test(NAME dmgmd.domain_npt_runner
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_npt_runner.py)
+add_test(NAME dmgmd.domain_npt_contracts_runner
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_npt_contracts_runner.py)
+add_test(NAME dmgmd.domain_npt_migration_runner
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_npt_migration.py)
+add_test(NAME dmgmd.domain_npt_affine_cache_runner
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_affine_cache_runner.py)
+add_test(NAME dmgmd.domain_npt_statistics
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_statistics.py)
+add_test(NAME dmgmd.domain_npt_statistics_integration
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_statistics_integration.py)
+add_test(NAME dmgmd.domain_npt_statistics_proofs
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_statistics_proofs.py)
+add_test(NAME dmgmd.domain_npt_statistics_batch
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_statistics_batch.py)
+add_test(NAME dmgmd.domain_npt_pressure_oracle
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/npt/test_domain_pressure_oracle.py)
 add_executable(dmgmd_box_control_host_tests unit/box_control_host_tests.cu)
 target_link_libraries(dmgmd_box_control_host_tests PRIVATE dmgmd_runtime)
 add_test(NAME dmgmd.box_control_host COMMAND $<TARGET_FILE:dmgmd_box_control_host_tests>)

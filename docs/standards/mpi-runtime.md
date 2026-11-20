@@ -7,7 +7,7 @@
 模式名称：**全量复制模式**（英语 `replicated-full`；普通路径日志为 `m1-fallback`，NPT 路由日志为 `m1`）、**局部域分解模式**（英语 `local-domain`；路径日志为 `m2a`）、**分阶段中间场交换方案**（英语 `staged-field exchange`，尚未实现）以及**单 rank 基线**（英语 `single-rank baseline`）。日志和测试数据中的机器字段为合同内容，正文使用上述可读名称。
 
 `run_replicated` 每 rank 只加载一次 NEP 参数，deferred workspace 在选定路径后分配。
-NPT 始终使用全量复制模式。对于 NVE/NVT，P1 使用全量复制模式；P>1 满足正交全周期、各方向厚度>2.5*(rc_radial_max+1)、slab_width≥d_coord 且半径可证明时采用局部域分解模式，否则回退到全量复制模式。
+NPT 默认使用全量复制模式；显式 `DMGMD_DOMAIN_NPT=rebuild|affine` 的实验路径见[局部 NPT 合同](domain-npt.md)。对于 NVE/NVT，P1 使用全量复制模式；P>1 满足正交全周期、各方向厚度>2.5*(rc_radial_max+1)、slab_width≥d_coord 且半径可证明时采用局部域分解模式，否则回退到全量复制模式。
 P>1 triclinic/非周期直接 unsupported。非 NPT 路由时，root 输出：
 
 ```text
@@ -58,8 +58,9 @@ notification to the replicated-full/global NEP neighbor cache. P=1 retains
 isotropic scale. The next global Verlet build consumes the notification and
 clears it only after rebuilding. Neighbor setup recomputes `thickness_*` through
 the existing `get_num_bins` path. This primitive is now used by the supported
-isotropic NPT routes: all NPT runs use the full-replication path, while the
-local-domain entry rejects NPT before dynamics or halo updates. Detailed B1
+isotropic NPT default routes. With `DMGMD_DOMAIN_NPT=off`, the local-domain
+entry rejects NPT before dynamics or halo updates; the opt-in owned transaction
+is specified separately in [domain NPT](domain-npt.md). Detailed B1
 acceptance evidence remains in the validation report.
 
 For either supported NPT ensemble, this operation runs after VV2, thermo and
@@ -71,7 +72,7 @@ scaled. Targeted results are recorded in
 
 ### NPT 路由与控制状态（B2–B4/G-B）
 
-`npt_ber` 与已通过 G-B 的 `npt_scr` 只能使用全量复制模式的全局盒变更原语；P>1 无论几何是否满足局部域分解资格条件均由 dispatcher 强制全量复制模式，并输出 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`。局部域分解路径入口必须在任何动力学/halo 更新前拒绝 NPT，不能复制缩放逻辑到局部域分解模式。SCR 的统计支持限于 216 原子 NEP-C、300 K/0 GPa、单节点冻结矩阵：base 为 P1/HostStaged 与 P2/P4 两后端，half-dt 仅 P1/HostStaged；原18-look总体 INCONCLUSIVE 历史仍保留。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
+默认 `DMGMD_DOMAIN_NPT=off` 时，`npt_ber` 与已通过 G-B 的 `npt_scr` 使用全量复制模式的全局盒变更原语；P>1 无论几何是否满足局部域分解资格条件均由 dispatcher 强制全量复制模式，并输出 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`。开关 off 的局部入口在任何动力学/halo 更新前拒绝 NPT。显式实验开关使用独立 owned 两阶段事务，范围见[局部 NPT](domain-npt.md)。SCR 的统计支持限于 216 原子 NEP-C、300 K/0 GPa、单节点冻结矩阵：base 为 P1/HostStaged 与 P2/P4 两后端，half-dt 仅 P1/HostStaged；原18-look总体 INCONCLUSIVE 历史仍保留。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
 
 盒缩放因子是 rank 0 单一状态，成功后向所有 rank 广播同一个标量；每 rank 对完整位置数组做相同仿射缩放，再刷新盒逆、partition 轴与 global neighbor cache。不得每 rank 独立算压力随机数。压力采样与 thermostat/box 更新的时点见[控压器标准](barostat.md)。SCR 的 root RNG/BDP→pressure-noise 调用序列按已验收 B3 实现与 B4 记录执行；该验收不表示支持 RDMA、跨节点或局部域分解模式下的 NPT。
 

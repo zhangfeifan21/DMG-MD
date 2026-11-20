@@ -43,11 +43,19 @@ B0–B4 与 G-B 已通过。B3 原注册18个 formal looks 的总体 INCONCLUSIV
 - 每段 `run` 重建链/RNG/cache；`restart.xyz` 不保存这些隐藏状态，跨 rank 恢复是新作业，
   不承诺 NHC/BDP 轨迹连续。详细合同见[系综标准](docs/standards/ensembles.md)与
   [兼容矩阵](docs/standards/compatibility-matrix.md)。
-- NPT 仅限各向同性、正交全周期盒与全量复制模式；P>1 强制 全量复制模式，局部域分解模式不提供 NPT。`npt_scr` 的最终统计支持只覆盖上述冻结 NEP-C 单节点矩阵，不代表跨节点、RDMA、普遍严格 NPT 或遍历性。
+- 默认 NPT 限各向同性、正交全周期盒与全量复制模式；P>1 默认回退。显式实验局部 NPT 的已验证有限范围另见下节与局部 NPT 标准。`npt_scr` 的最终统计支持只覆盖上述冻结 NEP-C 单节点矩阵，不代表跨节点、RDMA、普遍严格 NPT 或遍历性。
   结论与证据见[最终确认](docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)、[机器索引](docs/status/validation/npt-scr-n3-confirmation-index.json)、[控压器标准](docs/standards/barostat.md)与
   [NPT 矩阵报告](docs/status/validation/npt-validation.md#npt-matrix-20261104)。原18-look INCONCLUSIVE 结论不变。
 - 统计结论限于验收体系；额外 harmonic 诊断总 K 通过、轴向均值 INCONCLUSIVE，
   不作普遍遍历性承诺。性能门仍为 PENDING-D4，跨节点与 release 长程未完成。
+
+## 2026-11-06 局部 NPT 实验开发
+
+已按用户授权完成 DN0–DN4 实验代码及有限范围验收。`DMGMD_DOMAIN_NPT=off|rebuild|affine`
+默认 off，既有 v1.0 P0 支持和 SCR 216 原子统计范围不自动扩大。显式实验模式允许
+满足几何与组合约束的 NEP 局部 NPT；强制重建与保守形变缓存可分别运行，段首、旧力、
+root RNG 和 halo readiness 合同见 [局部 NPT 标准](docs/standards/domain-npt.md)。
+大盒 SCR 统计支持仅限 单节点 NEP4-C、5760 原子、300 K/0 GPa、各向同性正交全周期体系；base 为 P1/HostStaged/off 与 P2/P4 两后端各自的 off、rebuild、affine，half 仅 P1/HostStaged/off、P2/HostStaged/affine、P4/CudaAware/affine；最终审核见 [DN 验证记录](docs/status/validation/domain-npt-validation.md#dn4-final-20261116)。DN5 性能与默认采用未通过，跨节点未验收。
 
 ## 当前并行基线：全量复制模式/局部域分解模式
 
@@ -231,6 +239,36 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
   `fnm --version`、`fnm list`，并在加载 fnm 环境后记录 `node --version`、`npm --version` 和
   `npx --version`。
 
+## Git 与基线管理
+
+- 优先使用现有 Git 仓库作为版本基线。
+- 开始修改前，使用 `git status --short` 了解工作区状态。
+- 如果已有有效 Git 历史，不额外创建文件哈希、基线快照、校验清单或备份目录。
+- 优先使用 `git diff`、`git status` 和现有提交历史确认文件变化，不重复建立 Git 已经提供的版本追踪能力。
+- 保留任务开始前已有的未提交修改和未跟踪文件。
+- 禁止擅自执行 `git reset --hard`、`git clean` 或其他可能丢失用户数据的回退操作。
+- 只有 Git 无法覆盖的数据、明确的完整性需求或高风险不可逆操作，才考虑额外快照或哈希。
+  数值 golden、测试 manifest 和跨引擎势文件转换等已有明确要求的验证材料，按相关任务的既有合同维护。
+- 不得提交或推送，除非维护者明确要求。
+
+## 最小改动原则
+
+- 优先修改现有实现，而不是建立新抽象。
+- 不为假设中的未来需求建立基础设施。
+- 不创建未要求的工作日志、验证报告或临时文档；项目或任务明确要求的证据记录优先更新现有文件。
+- 避免为验证机制再建立验证机制。
+- 只修改完成当前任务所必需的文件。
+
+## 测试与验证
+
+- 验证工作必须与实际修改的风险相称。
+- 优先运行与改动直接相关的现有测试。
+- 一个稳定的修改阶段通常只需要一轮对应验证。
+- 验证通过后停止，不为了增加信心而反复测试。
+- 文档和注释修改默认不触发完整测试套件。
+- 安全、数据迁移、公共 API 等高风险修改，以及项目明确要求的检查，不受上述限制。
+- 验证失败时分析原因，不盲目反复运行相同测试。
+
 ## 构建与测试
 
 原生部署从本仓库根目录加载 `../env/md-mpi.sh`；Docker 使用仓库
@@ -248,8 +286,6 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 测试：
 
     ctest --test-dir build --output-on-failure
-
-修改生产代码前后应检查 `git status` 和 `git diff`，保留用户已有修改。不得使用破坏性 Git 操作，不得提交或推送，除非维护者明确要求。
 
 ### GPU 测试环境
 
@@ -330,3 +366,10 @@ GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，
 7. 检查 diff，确认未修改 `../gpumd-reference` 和无关文件。
 
 若任务会改变 NEP 数学、数据布局、精度、原子所有权、通信半径或兼容性承诺，应先完成证据和 golden test 设计，再请求维护者确认实现方向。
+
+## 完成条件
+
+- 用户要求的行为已经实现。
+- 完成与风险相称的验证。
+- 检查最终 diff，没有无关改动，并保留任务开始前已有的未提交修改和未跟踪文件。
+- 满足以上条件后立即结束任务。

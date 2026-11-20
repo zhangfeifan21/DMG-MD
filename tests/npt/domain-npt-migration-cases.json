@@ -1,0 +1,165 @@
+{
+  "schema": "dmgmd.domain-npt.migration-cases.v1",
+  "status": "APPROVED_FOR_EXECUTION",
+  "box_A": [
+    80,
+    24,
+    24
+  ],
+  "dt_fs": 1.0,
+  "steps": 4,
+  "temperature_K": 300,
+  "temperature_damping_steps": 1e+30,
+  "target_pressure_GPa": 10000,
+  "bulk_modulus_GPa": 425,
+  "pressure_damping_steps": 10000000,
+  "seed": 12345678,
+  "cases": {
+    "micro": {
+      "purpose": "Sub-skin geometric crossings retain affine manager and epoch.",
+      "atoms": [
+        [
+          19.95,
+          3,
+          3,
+          0.1,
+          0,
+          0
+        ],
+        [
+          39.85,
+          9,
+          9,
+          0.1,
+          0,
+          0
+        ],
+        [
+          59.75,
+          15,
+          15,
+          0.1,
+          0,
+          0
+        ],
+        [
+          79.7,
+          21,
+          21,
+          0.1,
+          0,
+          0
+        ]
+      ],
+      "expected": "affine: at least one geometric crossing with no rebuild or migration"
+    },
+    "crossings": {
+      "purpose": "One-step multi-slab and periodic-end crossings, then repeated owner changes.",
+      "atoms": [
+        [
+          5,
+          12,
+          12,
+          0,
+          0,
+          0
+        ],
+        [
+          18.75,
+          12,
+          12,
+          20,
+          0,
+          0
+        ],
+        [
+          25,
+          12,
+          12,
+          -18,
+          0,
+          0
+        ],
+        [
+          50,
+          12,
+          12,
+          40,
+          0,
+          0
+        ],
+        [
+          68.75,
+          12,
+          12,
+          -45,
+          0,
+          0
+        ],
+        [
+          37.5,
+          6,
+          12,
+          0,
+          0,
+          0
+        ],
+        [
+          10,
+          18,
+          12,
+          5,
+          0,
+          0
+        ],
+        [
+          75,
+          12,
+          12,
+          -55,
+          0,
+          0
+        ]
+      ],
+      "expected": "P4: non-neighbor migration and periodic boundary migration; each P2/P4 local mode: at least one atom migrates more than once and periodic boundary is crossed"
+    },
+    "quiet": {
+      "purpose": "Box rebuild occurs without ownership changes while actual box changes.",
+      "atoms": [
+        [
+          8,
+          3,
+          3,
+          0.01,
+          0,
+          0
+        ],
+        [
+          28,
+          9,
+          9,
+          -0.01,
+          0,
+          0
+        ],
+        [
+          48,
+          15,
+          15,
+          0.01,
+          0,
+          0
+        ],
+        [
+          68,
+          21,
+          21,
+          -0.01,
+          0,
+          0
+        ]
+      ],
+      "expected": "rebuild: at least one no-migration rebuild"
+    }
+  }
+}

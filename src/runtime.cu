@@ -1344,8 +1344,10 @@ void run_replicated(
   mpi.initialize_device();
   gpumd_compat::Box box = detail::make_box(model.box);
 
-  const bool force_m1_for_npt = program_uses_npt(program);
-  if (force_m1_for_npt) {
+  const auto domain_npt = detail::domain_npt_mode(mpi);
+  const bool uses_npt = program_uses_npt(program);
+  const bool force_m1_for_npt = uses_npt && domain_npt == detail::DomainNptMode::off;
+  if (uses_npt) {
     try {
       static_cast<void>(detail::prepare_scaled_box(box, 1.0));
     } catch (const std::exception& error) {
@@ -1403,6 +1405,11 @@ void run_replicated(
     const DomainRadii radii = compute_domain_radii(cutoffs);
     eligibility = evaluate_domain_eligibility(
         mpi.world_size(), model.box.h, radii, params.rc_radial_max);
+    if (eligibility.eligible && uses_npt && domain_npt == detail::DomainNptMode::affine &&
+        !affine_builder_geometry_safe(model.box.h, params.rc_radial_max)) {
+      eligibility.eligible = false;
+      eligibility.reason = "affine-cell-index-bound";
+    }
   }
   if (mpi.is_root()) {
     if (force_m1_for_npt) {
@@ -1431,6 +1438,11 @@ void run_replicated(
               << " scheduling=completed-halo-serial timing_scope=split-pipeline\n";
   }
   if (eligibility.eligible && !force_m1_for_npt) {
+    if (uses_npt && mpi.is_root()) {
+      std::cout << "DMGMD_DOMAIN_NPT mode="
+                << (domain_npt == detail::DomainNptMode::rebuild ? "rebuild" : "affine")
+                << '\n';
+    }
     run_local_domain(
         program, std::move(model), box, std::move(potential), eligibility, mpi);
     return;

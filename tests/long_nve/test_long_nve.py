@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -59,6 +60,67 @@ class LongNveTests(unittest.TestCase):
         self.assertEqual(derived["cells"], release_water["cells"])
         self.assertEqual(derived["atoms"], release_water["atoms"])
         self.assertEqual(derived["model_sha256"], release_water["model_sha256"])
+
+    def test_reference_provenance_rejects_tampering(self) -> None:
+        sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "src"
+            source.mkdir(parents=True)
+            binary = source / "gpumd"
+            binary.write_bytes(b"binary")
+            files = []
+            for number in range(285):
+                path = source / f"file{number:03d}.cu"
+                path.write_bytes(f"source-{number}".encode())
+                files.append({"path": f"src/{path.name}", "sha256": sha(path)})
+            for name in ("source.tar", "build.log"):
+                (root / name).write_bytes(name.encode())
+            (root / "makefile.patch").write_bytes(b"")
+            manifest = {"reference_head": "locked", "archive_sha256": sha(root / "source.tar"), "files": files}
+            for name in ("source-before.json", "source-after.json"):
+                (root / name).write_text(json.dumps(manifest))
+            receipt = root / "provenance.json"
+            data = {"source_commit": "locked", "source_unchanged": True, "source_file_count": 285,
+                    "binary_sha256": sha(binary), "archive_sha256": sha(root / "source.tar"),
+                    "source_before_sha256": sha(root / "source-before.json"),
+                    "source_after_sha256": sha(root / "source-after.json"),
+                    "makefile_patch_sha256": sha(root / "makefile.patch"),
+                    "build_log_sha256": sha(root / "build.log"),
+                    "command": "make CUDA_ARCH=-arch=sm_89 gpumd", "nvcc": "release 12.8",
+                    "host_compiler": "g++ 13.3.0", "arch_inventory": "sm_89"}
+            receipt.write_text(json.dumps(data))
+            expected = sha(receipt)
+            def git_output(command, **kwargs):
+                if "ls-tree" in command:
+                    return "\n".join(entry["path"] for entry in files)
+                rel = command[-1].split(":", 1)[1]
+                number = int(Path(rel).stem.removeprefix("file"))
+                return f"source-{number}".encode()
+            with unittest.mock.patch.object(runner.baseline, "load_manifest", return_value={"reference": {"commit": "locked"}}), \
+                 unittest.mock.patch.object(runner.baseline, "validate_reference"), \
+                 unittest.mock.patch.object(runner.subprocess, "check_output", side_effect=git_output):
+                runner.validate_reference_provenance(binary, receipt, expected)
+                original_binary = binary.read_bytes()
+                binary.write_bytes(original_binary + b"x")
+                with self.assertRaises(runner.baseline.BaselineError):
+                    runner.validate_reference_provenance(binary, receipt, expected)
+                binary.write_bytes(original_binary)
+                changed = source / "file000.cu"
+                changed.write_bytes(b"tampered")
+                with self.assertRaises(runner.baseline.BaselineError):
+                    runner.validate_reference_provenance(binary, receipt, expected)
+                manifest["files"][0]["sha256"] = sha(changed)
+                for name in ("source-before.json", "source-after.json"):
+                    (root / name).write_text(json.dumps(manifest))
+                data["source_before_sha256"] = sha(root / "source-before.json")
+                data["source_after_sha256"] = sha(root / "source-after.json")
+                receipt.write_text(json.dumps(data))
+                with self.assertRaises(runner.baseline.BaselineError):
+                    runner.validate_reference_provenance(binary, receipt, sha(receipt))
+                receipt.write_text(receipt.read_text() + " ")
+                with self.assertRaises(runner.baseline.BaselineError):
+                    runner.validate_reference_provenance(binary, receipt, expected)
 
     def test_retry_count_must_be_nonnegative(self) -> None:
         self.assertEqual(runner.nonnegative_integer("0"), 0)

@@ -46,6 +46,10 @@ int main()
             "candidate volume mismatch");
     require(candidate.float_h[0] == 15.0f && candidate.float_h[4] == 18.0f &&
                 candidate.float_h[8] == 21.0f, "float copy was not refreshed");
+    const auto owned_candidate = dmgmd::detail::prepare_owned_box_scale(box, 1.5);
+    require(owned_candidate.factor() == 1.5 && owned_candidate.box().cpu_h[0] == 15.0 &&
+                owned_candidate.box().cpu_h[4] == 18.0 && owned_candidate.box().cpu_h[8] == 21.0,
+            "owned transaction candidate did not preserve box and factor");
     require(box.cpu_h[0] == 10.0 && box.cpu_h[4] == 12.0 && box.cpu_h[8] == 14.0,
             "candidate preparation mutated the original box");
 

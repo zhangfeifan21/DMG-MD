@@ -109,6 +109,66 @@ __global__ void update_unwrapped_range(
   }
 }
 
+// The image update and position wrap share the same actual branch. Saturation
+// is a fail-closed marker consumed by the affine displacement inspection.
+__global__ void wrap_affine_positions(int owned, int stride, Box box,
+                                      double* position, int* images)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= owned) return;
+  double x = position[atom];
+  double y = position[stride + atom];
+  double z = position[2 * stride + atom];
+  double sx = box.cpu_h[9] * x + box.cpu_h[10] * y + box.cpu_h[11] * z;
+  double sy = box.cpu_h[12] * x + box.cpu_h[13] * y + box.cpu_h[14] * z;
+  double sz = box.cpu_h[15] * x + box.cpu_h[16] * y + box.cpu_h[17] * z;
+  constexpr int limit = 1000000;
+  if (box.pbc_x == 1) {
+    if (sx < 0.0) { sx += 1.0; if (images[atom] > -limit) --images[atom]; }
+    else if (sx > 1.0) { sx -= 1.0; if (images[atom] < limit) ++images[atom]; }
+  }
+  if (box.pbc_y == 1) {
+    if (sy < 0.0) { sy += 1.0; if (images[stride + atom] > -limit) --images[stride + atom]; }
+    else if (sy > 1.0) { sy -= 1.0; if (images[stride + atom] < limit) ++images[stride + atom]; }
+  }
+  if (box.pbc_z == 1) {
+    if (sz < 0.0) { sz += 1.0; if (images[2 * stride + atom] > -limit) --images[2 * stride + atom]; }
+    else if (sz > 1.0) { sz -= 1.0; if (images[2 * stride + atom] < limit) ++images[2 * stride + atom]; }
+  }
+  position[atom] = box.cpu_h[0] * sx + box.cpu_h[1] * sy + box.cpu_h[2] * sz;
+  position[stride + atom] = box.cpu_h[3] * sx + box.cpu_h[4] * sy + box.cpu_h[5] * sz;
+  position[2 * stride + atom] = box.cpu_h[6] * sx + box.cpu_h[7] * sy + box.cpu_h[8] * sz;
+}
+
+__global__ void inspect_affine_displacement(
+    int owned, int stride, Box box, double lx0, double ly0, double lz0,
+    const double* position, const double* reference, const int* images,
+    unsigned long long* maximum_squared_bits, unsigned int* invalid)
+{
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom >= owned) return;
+  const double lengths[3] = {box.cpu_h[0], box.cpu_h[4], box.cpu_h[8]};
+  const double initial[3] = {lx0, ly0, lz0};
+  double squared = 0.0;
+  for (int d = 0; d < 3; ++d) {
+    const int i = d * stride + atom;
+    const double x = position[i], q = reference[i];
+    const int image = images[i];
+    if (!isfinite(x) || !isfinite(q) || x < 0.0 || x > lengths[d] ||
+        q < 0.0 || q > initial[d] || image <= -1000000 || image >= 1000000) {
+      atomicOr(invalid, 1u);
+      return;
+    }
+    const double u = initial[d] * (x / lengths[d] + static_cast<double>(image) - q / initial[d]);
+    squared += u * u;
+  }
+  if (!isfinite(squared) || squared < 0.0) {
+    atomicOr(invalid, 1u);
+    return;
+  }
+  atomicMax(maximum_squared_bits, __double_as_longlong(squared));
+}
+
 __global__ void find_owned_thermo_sums_range(
     int owned_count,
     int stride,
@@ -179,6 +239,9 @@ enum DomainDecisionReason : std::uint32_t {
   kOwnerRoutingNeeded = 1u << 0,
   kContinuityInvalid = 1u << 1,
   kDisplacementLimit = 1u << 2,
+  kAffineInvalid = 1u << 3,
+  kAffineBudget = 1u << 4,
+  kBoxRebuild = 1u << 5,
 };
 
 enum class DomainDecisionState : std::uint8_t {
@@ -284,6 +347,8 @@ struct DomainDeviceAtoms {
   GPU_Vector<double> unwrapped;
   GPU_Vector<double> previous_position;
   GPU_Vector<double> epoch_displacement;
+  GPU_Vector<double> affine_reference_position;
+  GPU_Vector<int> affine_images;
   GPU_Vector<double> thermo;
   GPU_Vector<int> send_slots[2];  // per face: owned slots of the send list
   GPU_Vector<int> recv_slots[2];  // per face: ghost slot per stream index
@@ -307,6 +372,18 @@ struct DomainState {
   std::uint64_t refreshed_epoch = 0;
   DomainDecisionState decision_state = DomainDecisionState::undetermined;
   bool neighbor_cache_valid = false;
+  bool pending_box_rebuild = false;
+  DomainNptMode npt_mode = DomainNptMode::off;
+  std::array<double, 3> affine_reference_length{};
+  std::uint64_t box_generation = 0;
+  std::uint64_t halo_box_generation = 0;
+  std::uint64_t neighbor_generation = 0;
+  std::uint64_t neighbor_workspace_generation = 0;
+  std::uint64_t neighbor_layout_generation = 0;
+  std::uint64_t reference_box_generation = 0;
+  std::uint64_t neighbor_reference_box_generation = 0;
+  std::uint64_t halo_layout_generation = 0;
+  BoxScaleWorkspace box_scale_workspace;
   bool detailed_logging = false;
   bool timing_enabled = false;
   bool trace_enabled = false;
@@ -706,7 +783,8 @@ void upload_domain_layout(
     const ExchangePlan& plan,
     bool track_unwrapped,
     DomainDeviceAtoms& device,
-    bool reset_epoch_displacement)
+    bool reset_epoch_displacement,
+    bool track_affine)
 {
   const std::size_t local = layout.local_count();
   const std::size_t owned = layout.owned_count();
@@ -756,6 +834,10 @@ void upload_domain_layout(
   if (reset_epoch_displacement) {
     device.epoch_displacement.resize_reuse(
         std::max<std::size_t>(3 * local, 1), 0.0);
+    if (track_affine) {
+      device.affine_reference_position.resize_reuse(std::max<std::size_t>(3 * local, 1));
+      device.affine_images.resize_reuse(std::max<std::size_t>(3 * local, 1), 0);
+    }
   } else if (device.epoch_displacement.size() != std::max<std::size_t>(3 * local, 1)) {
     throw std::logic_error("epoch displacement shape changed without a rebuild");
   }
@@ -765,6 +847,8 @@ void upload_domain_layout(
     device.mass.copy_from_host(mass.data(), local);
     device.charge.copy_from_host(charge.data(), local);
     device.position.copy_from_host(position.data(), 3 * local);
+    if (reset_epoch_displacement && track_affine)
+      device.affine_reference_position.copy_from_host(position.data(), 3 * local);
     device.velocity.copy_from_host(velocity.data(), 3 * local);
   }
   if (track_unwrapped) {
@@ -967,7 +1051,12 @@ void exchange_halo_membership(
   const std::uint64_t allocations_before =
       gpumd_compat::gpu_vector_allocation_count();
   upload_domain_layout(
-      state.layout, state.plan, state.track_unwrapped, state.device, true);
+      state.layout, state.plan, state.track_unwrapped, state.device, true,
+      state.npt_mode == DomainNptMode::affine);
+  if (state.npt_mode == DomainNptMode::affine) {
+    for (int d = 0; d < 3; ++d) state.affine_reference_length[d] = box.cpu_h[4 * d];
+  }
+  state.reference_box_generation = state.box_generation;
   ensure_workspace(nep, state);
   state.neighbor_cache_valid = false;
   ++state.layout_uploads;
@@ -983,6 +1072,9 @@ void exchange_halo_membership(
   ++state.epoch;
   state.mapping_epoch = state.epoch;
   state.refreshed_epoch = state.epoch;
+  state.halo_layout_generation = state.epoch;
+  state.halo_box_generation = state.box_generation;
+  state.halo_ready_step = step;
   log_domain_layout(state, step);
 }
 
@@ -1015,12 +1107,16 @@ HaloExchangeToken begin_ghost_positions(
 }
 
 void refresh_ghost_positions(DomainState& state, MpiRuntime& mpi, CommunicationVolume& communication,
+                             std::uint64_t step,
                              P2pTimingEvents* timing = nullptr)
 {
   const auto halo = begin_ghost_positions(state, mpi, communication, timing);
   // O3 keeps synchronous scheduling: no computation while halo is in flight.
   mpi.finish_halo(halo);
   state.refreshed_epoch = state.mapping_epoch;
+  state.halo_layout_generation = state.mapping_epoch;
+  state.halo_box_generation = state.box_generation;
+  state.halo_ready_step = step;
 }
 
 void log_domain_migration(
@@ -1234,9 +1330,23 @@ void launch_domain_force(
   if (state.mapping_epoch != state.epoch || state.refreshed_epoch != state.epoch) {
     throw std::logic_error("domain force uses a stale layout or halo mapping");
   }
+  if (state.halo_layout_generation != state.epoch ||
+      state.halo_box_generation != state.box_generation) {
+    throw std::logic_error("domain force uses stale box or layout halo generation");
+  }
+  if (!overlap_mpi && state.halo_ready_step != step) {
+    throw std::logic_error("domain force uses stale halo step");
+  }
   if (neighbor_action == gpumd_compat::DomainNeighborAction::confirmed_reuse &&
       !state.neighbor_cache_valid) {
     throw std::logic_error("domain force reuse was not confirmed by a valid cache");
+  }
+  if (neighbor_action == gpumd_compat::DomainNeighborAction::confirmed_reuse &&
+      (state.neighbor_layout_generation != state.epoch ||
+       state.neighbor_reference_box_generation != state.reference_box_generation ||
+       state.neighbor_generation != nep.domain_neighbor_generation() ||
+       state.neighbor_workspace_generation != nep.domain_workspace_generation())) {
+    throw std::logic_error("domain force uses stale neighbor generation");
   }
   if (state.executed_steps != 0 || state.decision_state != DomainDecisionState::undetermined) {
     const DomainDecisionState expected =
@@ -1361,6 +1471,12 @@ void launch_domain_force(
       state.device.force, state.device.virial, state.device.global_id, neighbor_action, state.epoch, context);
   for (auto event : events) if (event) check_cuda(cudaEventDestroy(event), "destroy overlap trace event");
   state.neighbor_cache_valid = true;
+  if (neighbor_action == gpumd_compat::DomainNeighborAction::must_rebuild) {
+    state.neighbor_generation = nep.domain_neighbor_generation();
+    state.neighbor_workspace_generation = nep.domain_workspace_generation();
+    state.neighbor_layout_generation = state.epoch;
+    state.neighbor_reference_box_generation = state.reference_box_generation;
+  }
 }
 
 void launch_domain_verlet(DomainState& state, bool first_half, double time_step)
@@ -1654,6 +1770,8 @@ void run_domain_segment(
   const std::uint64_t allocation_start =
       gpumd_compat::gpu_vector_allocation_count();
   std::uint64_t thermo_steps = 0;
+  std::uint64_t cache_reuses = 0, cache_rebuilds = 0;
+  std::uint64_t affine_invalid_rebuilds = 0, affine_budget_rebuilds = 0, box_rebuilds = 0;
   int thermo_count = 0;
   int restart_count = 0;
   for (const Measurement& measurement : measurements) {
@@ -1711,13 +1829,21 @@ void run_domain_segment(
   // bootstrap call builds rows. Consecutive run segments reuse the already
   // proven neighbor cache instead of forcing a redundant rebuild.
   const auto setup_started = begin_detailed_timing(state.timing_enabled);
+  if (state.pending_box_rebuild) {
+    // A segment starts by recomputing force, so the preceding force is no
+    // longer needed. Route using the committed box before that force call.
+    do_migration(state, nep, box, mpi, state.uncounted_volume, global_step);
+    ++state.rebuild_steps;
+    state.pending_box_rebuild = false;
+  }
   state.decision_state = state.neighbor_cache_valid
                              ? DomainDecisionState::confirmed_reuse
                              : DomainDecisionState::must_rebuild;
   launch_domain_force(
       state, box, nep, state.neighbor_cache_valid
                            ? gpumd_compat::DomainNeighborAction::confirmed_reuse
-                           : gpumd_compat::DomainNeighborAction::must_rebuild);
+                           : gpumd_compat::DomainNeighborAction::must_rebuild,
+      false, state.executed_steps);
   if (state.timing_enabled) {
     segment_timing.setup_host = elapsed_since(setup_started);
   }
@@ -1799,8 +1925,13 @@ void run_domain_segment(
       const int owned = checked_int(state.owned_count(), "owned_count");
       const int local = checked_int(state.local_count(), "local_count");
       if (owned > 0) {
-        wrap_positions<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
-            owned, local, box, state.device.position.data());
+        if (state.npt_mode == DomainNptMode::affine) {
+          wrap_affine_positions<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+              owned, local, box, state.device.position.data(), state.device.affine_images.data());
+        } else {
+          wrap_positions<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+              owned, local, box, state.device.position.data());
+        }
         check_cuda(cudaGetLastError(), "wrap owned positions");
       }
     }
@@ -1846,8 +1977,77 @@ void run_domain_segment(
     // Thus max_rank(m_rank) > limit iff any rank's m_rank > limit. Empty
     // ranks contribute zero, and equality still reuses the cache. Combine
     // this predicate with routing/invalid reasons before the sole collective.
-    if (local_max_squared > displacement_limit_squared) {
-      local_reasons |= kDisplacementLimit;
+    if (state.npt_mode == DomainNptMode::affine) {
+      double alpha = std::numeric_limits<double>::infinity();
+      double maximum_length = 0.0;
+      double minimum_length = std::numeric_limits<double>::infinity();
+      bool bounded = true;
+      for (int d = 0; d < 3; ++d) {
+        const double current = box.cpu_h[4 * d];
+        const double reference = state.affine_reference_length[d];
+        bounded = bounded && std::isfinite(current) && std::isfinite(reference) &&
+                  current >= 1e-3 && reference >= 1e-3 && current <= 1e6 && reference <= 1e6;
+        alpha = std::min(alpha, std::nextafter(current / reference, 0.0));
+        maximum_length = std::max({maximum_length, current, reference});
+        minimum_length = std::min({minimum_length, current, reference});
+      }
+      const double reach = state.d_dep - kNeighborSkin;
+      bounded = bounded && std::isfinite(reach) && reach >= 1e-3 && reach <= 1e6;
+      // The reference builder uses int bin coordinates and their product.
+      // Round each upper estimate up and leave two bins for arithmetic error.
+      long double bin_product = 1.0L;
+      if (bounded) {
+        for (int d = 0; d < 3; ++d) {
+          const long double upper_bins = std::ceil(
+              2.0L * static_cast<long double>(state.affine_reference_length[d]) /
+              static_cast<long double>(reach + kNeighborSkin)) + 2.0L;
+          bin_product *= upper_bins;
+          bounded = bounded && upper_bins <= std::numeric_limits<int>::max() &&
+                    bin_product <= std::numeric_limits<int>::max() / 4;
+        }
+      }
+      // The float MIC has one conversion, one box subtraction and at most
+      // one MIC correction per component. This envelope also leaves room for
+      // float squared-distance rounding and double cell-index arithmetic.
+      const double float_error = 256.0 * std::numeric_limits<float>::epsilon() * maximum_length;
+      // The counter is capped at 10^6; this covers the double operations in
+      // the fractional lift and norm even at that cap.
+      const double lift_error = 1024.0 * std::numeric_limits<double>::epsilon() *
+                                maximum_length * 1000002.0;
+      const double infinity = std::numeric_limits<double>::infinity();
+      const double half_box_limit = std::nextafter(
+          std::nextafter(reach + kNeighborSkin, infinity) + float_error, infinity);
+      bounded = bounded && std::isfinite(alpha) && alpha > 0.0 &&
+                std::isfinite(float_error) && std::isfinite(lift_error) &&
+                minimum_length * 0.5 > half_box_limit;
+      double affine_squared = 0.0;
+      if (bounded && state.owned_count() != 0) {
+        state.device.decision_max_squared.resize_reuse(1, 0ULL);
+        state.device.decision_reasons.resize_reuse(1, 0U);
+        const int owned = checked_int(state.owned_count(), "owned_count");
+        const int local = checked_int(state.local_count(), "local_count");
+        inspect_affine_displacement<<<(owned + kThreads - 1) / kThreads, kThreads>>>(
+            owned, local, box, state.affine_reference_length[0], state.affine_reference_length[1],
+            state.affine_reference_length[2], state.device.position.data(),
+            state.device.affine_reference_position.data(), state.device.affine_images.data(),
+            state.device.decision_max_squared.data(), state.device.decision_reasons.data());
+        check_cuda(cudaGetLastError(), "inspect affine displacement");
+        unsigned long long bits = 0;
+        unsigned int invalid = 0;
+        state.device.decision_max_squared.copy_to_host(&bits, 1);
+        state.device.decision_reasons.copy_to_host(&invalid, 1);
+        std::memcpy(&affine_squared, &bits, sizeof(affine_squared));
+        bounded = invalid == 0;
+      }
+      const double displacement = std::nextafter(std::sqrt(affine_squared) + lift_error,
+                                                 std::numeric_limits<double>::infinity());
+      if (!bounded) local_reasons |= kAffineInvalid;
+      else if (!affine_budget_allows_reuse(alpha, displacement, reach,
+                                            float_error, float_error, kNeighborSkin))
+        local_reasons |= kAffineBudget;
+    } else if (local_max_squared > displacement_limit_squared || state.pending_box_rebuild) {
+      if (local_max_squared > displacement_limit_squared) local_reasons |= kDisplacementLimit;
+      if (state.pending_box_rebuild) local_reasons |= kBoxRebuild;
     }
     const std::uint32_t global_reasons =
         mpi.allreduce_or_u32(local_reasons, communication);
@@ -1855,7 +2055,16 @@ void run_domain_segment(
       throw std::runtime_error(
           "an owned atom has a non-finite or unsupported multi-box displacement");
     }
-    const bool rebuild = (global_reasons & kDisplacementLimit) != 0;
+    const bool rebuild = (global_reasons & (kDisplacementLimit | kAffineInvalid |
+                                            kAffineBudget | kBoxRebuild)) != 0;
+    if (rebuild) {
+      ++cache_rebuilds;
+      if (global_reasons & kAffineInvalid) ++affine_invalid_rebuilds;
+      if (global_reasons & kAffineBudget) ++affine_budget_rebuilds;
+      if (global_reasons & kBoxRebuild) ++box_rebuilds;
+    } else {
+      ++cache_reuses;
+    }
     state.decision_state = rebuild ? DomainDecisionState::must_rebuild
                                    : DomainDecisionState::confirmed_reuse;
     const TimedStepClass step_class =
@@ -1887,6 +2096,7 @@ void run_domain_segment(
             state.timing_enabled ? &segment_timing : nullptr);
       }
       ++state.rebuild_steps;
+      state.pending_box_rebuild = false;
       neighbor_action = gpumd_compat::DomainNeighborAction::must_rebuild;
       if (state.timing_enabled) accounted_host += elapsed_since(rebuild_started);
       if (state.trace_enabled) trace.rebuild_end_ns = monotonic_ns();
@@ -1895,14 +2105,15 @@ void run_domain_segment(
       // coordinates are refreshed through the cached face plan.
       if (state.trace_enabled) trace.halo_begin_ns = monotonic_ns();
       if (state.overlap_mode == gpumd_compat::DomainOverlapMode::off)
-        refresh_ghost_positions(state, mpi, communication, state.timing_enabled ? &halo_events : nullptr);
+        refresh_ghost_positions(state, mpi, communication, state.executed_steps + 1,
+                                state.timing_enabled ? &halo_events : nullptr);
+      state.pending_box_rebuild = false;
       if (state.trace_enabled) trace.halo_end_ns = monotonic_ns();
     }
     // 8. Domain NEP: dependency-center neighbor/descriptor/partial, owned
     // radial force / many-body / ZBL, all with the local stride.
     if (state.trace_enabled) trace.nep_begin_ns = monotonic_ns();
     const bool overlap = !rebuild && state.overlap_mode != gpumd_compat::DomainOverlapMode::off;
-    if (!overlap) state.halo_ready_step = state.executed_steps + 1;
     launch_domain_force(state, box, nep, neighbor_action, !rebuild, state.executed_steps + 1,
                         overlap ? &mpi : nullptr, state.timing_enabled ? &halo_events : nullptr);
     if (state.trace_enabled) {
@@ -1959,6 +2170,45 @@ void run_domain_segment(
           return controller.after_force(thermo ? &thermo->values : nullptr, step, steps);
         })) {
       scale_velocity(*factor);
+    }
+    const auto box_factor = controller.has_barostat()
+        ? ensemble_box_factor(controller, thermo.value(), box, step, steps,
+                              global_step + 1, mpi, communication)
+        : std::nullopt;
+    if (box_factor && *box_factor != 1.0) {
+      std::optional<OwnedBoxScaleCandidate> candidate;
+      bool valid = true;
+      try {
+        candidate = prepare_owned_box_scale(box, *box_factor);
+        std::array<double, 9> h{};
+        std::copy_n(candidate->box().cpu_h, 9, h.begin());
+        const auto thickness = box_thickness(h);
+        valid = box_is_large_box(thickness, nep.params().rc_radial_max) &&
+                thickness[static_cast<std::size_t>(state.axis)] / state.world_size >= state.d_coord;
+        if (valid && state.npt_mode == DomainNptMode::affine)
+          valid = affine_builder_geometry_safe(h, nep.params().rc_radial_max);
+        if (valid) valid = preflight_owned_scale(
+            state.device.position, state.box_scale_workspace, *candidate,
+            state.owned_count(), state.local_count()) == BoxScaleStatus::ok;
+      } catch (const std::exception&) {
+        valid = false;
+      }
+      if (mpi.allreduce_or_u32(valid ? 0u : 1u, communication) != 0u) {
+        std::ostringstream message;
+        message << "domain NPT box preflight failed step=" << global_step + 1
+                << " lx=" << (candidate ? candidate->box().cpu_h[0] : 0.0)
+                << " ly=" << (candidate ? candidate->box().cpu_h[4] : 0.0)
+                << " lz=" << (candidate ? candidate->box().cpu_h[8] : 0.0)
+                << " axis=" << state.axis
+                << " slab_width=" << (candidate ? std::abs(candidate->box().cpu_h[4 * state.axis]) / state.world_size : 0.0)
+                << " required=" << state.d_coord;
+        throw std::runtime_error(message.str());
+      }
+      commit_owned_scale(box, state.device.position, state.box_scale_workspace, *candidate,
+                         state.owned_count(), state.local_count());
+      state.axis_length = std::abs(box.cpu_h[4 * state.axis]);
+      ++state.box_generation;
+      state.pending_box_rebuild = true;
     }
     if (state.timing_enabled) {
       check_cuda(cudaEventRecord(integration_events[5]),
@@ -2124,6 +2374,11 @@ void run_domain_segment(
           << " thermo_skipped_steps=" << (steps - thermo_steps)
           << " migration_steps=" << (state.migration_steps - migration_start)
           << " rebuild_steps=" << (state.rebuild_steps - rebuild_start)
+          << " cache_reuses=" << cache_reuses
+          << " cache_rebuilds=" << cache_rebuilds
+          << " affine_invalid_rebuilds=" << affine_invalid_rebuilds
+          << " affine_budget_rebuilds=" << affine_budget_rebuilds
+          << " box_rebuilds=" << box_rebuilds
           << " layout_uploads=" << (state.layout_uploads - layout_start)
           << " workspace_updates=" << (state.workspace_updates - workspace_start)
           << " capacity_growth_events="
@@ -2170,10 +2425,11 @@ void run_local_domain(
 {
   using gpumd_compat::NEP;
   validate_runtime_ensembles(program);
-  if (program_uses_npt(program)) {
+  const auto npt_mode = detail::domain_npt_mode(mpi);
+  detail::validate_ensemble_environment(program, mpi);
+  if (program_uses_npt(program) && npt_mode == detail::DomainNptMode::off) {
     throw std::runtime_error("run_local_domain rejects NPT ensembles; NPT is M1-only");
   }
-  detail::validate_ensemble_environment(program, mpi);
   const auto total_started = std::chrono::steady_clock::now();
   HostAtoms& identity = model.atoms;  // full replicated host model (static
                                       // metadata plus the root's output identity)
@@ -2183,6 +2439,14 @@ void run_local_domain(
   }
 
   detail::DomainState state;
+  state.npt_mode = program_uses_npt(program) ? npt_mode : detail::DomainNptMode::off;
+  if (state.npt_mode == detail::DomainNptMode::affine) {
+    std::array<double, 9> h{};
+    std::copy_n(box.cpu_h, 9, h.begin());
+    if (!mpi.allreduce_all_passed(affine_builder_geometry_safe(h, nep.params().rc_radial_max),
+                                  "affine neighbor geometry"))
+      throw std::runtime_error("domain affine neighbor geometry exceeds safe cell-index bounds");
+  }
   state.rank = mpi.world_rank();
   state.world_size = mpi.world_size();
   state.axis = eligibility.axis;
@@ -2467,7 +2731,13 @@ void run_local_domain(
           const std::uint64_t allocations_before =
               gpumd_compat::gpu_vector_allocation_count();
           detail::upload_domain_layout(
-              state.layout, state.plan, state.track_unwrapped, state.device, false);
+              state.layout, state.plan, state.track_unwrapped, state.device, false,
+              state.npt_mode == detail::DomainNptMode::affine);
+          // This upload restores ghost coordinates from the host layout,
+          // which need not be the last halo refresh. Resolve readiness at
+          // the next segment force before trusting those coordinates.
+          if (state.npt_mode != detail::DomainNptMode::off && state.executed_steps != 0)
+            state.pending_box_rebuild = true;
           ++state.layout_uploads;
           if (gpumd_compat::gpu_vector_allocation_count() != allocations_before) {
             ++state.capacity_growth_events;

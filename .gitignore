@@ -6,6 +6,7 @@
 build/
 build-*/
 /artifacts/
+/tests/npt/artifacts/
 cmake-build-*/
 CMakeCache.txt
 CMakeFiles/

@@ -273,3 +273,122 @@ was applied after the sole analysis completed, and all six runner CPU tests
 passed. The temporary source snapshot and maintenance receipt were removed under
 the final-results-only retention request. The concise result is recorded in the
 [NPT regression report](../../docs/status/validation/npt-validation.md#npt-regression-20261104).
+
+## Experimental local-domain NPT
+
+The [DN0 contract](../../docs/standards/domain-npt.md) and
+[domain manifest](domain-manifest.json) specify the contract. DN0–DN4 were accepted within the finite scope in the
+[final validation record](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116). CPU-only independent ideal-geometry and route checks:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/test_domain_geometry_oracle.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/test_domain_npt_runner.py
+```
+
+`run_domain_npt.py` is a short differential smoke, not the full matrix. Give it
+an immutable large-box fixture directory containing `model.xyz`, `nep.txt`, and
+`run.in`; the latter must produce `thermo.out` and `trajectory.xyz`, including
+force, potential and virial columns. It runs off/rebuild/affine at each requested
+P/backend, enforces actual route records and the existing baseline tolerances,
+and retains input/output hashes and logs. Example after environment and GPU gate:
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/npt/run_domain_npt.py --candidate /absolute/path/dmg-md \
+  --fixture /absolute/path/fixture --work-root /tmp/domain-npt-smoke-new \
+  --devices 0,1,2,3 --ranks 2,4 --backends HostStaged,CudaAware
+```
+
+The [migration cases](domain-npt-migration-cases.json) define a separate 72-job
+matrix for manager ownership under actual box changes. It compares BER/SCR at
+P2/P4 with both backends and all three modes, replays full migration records
+against each frame's current box, and requires micro-crossing reuse, repeated
+and multi-slab/PBC migration, and rebuilds without migration. These artificial
+short trajectories test the runtime contract. Run after the environment gate:
+
+```bash
+source ../env/md-mpi.sh
+python3 tests/npt/run_domain_npt_migration.py --candidate /absolute/path/dmg-md \
+  --work-root /tmp/domain-npt-migration-new --devices 0,1,2,3
+```
+
+`dmgmd_domain_owned_thermo_poison_tests` is a separate MPI test target that
+calls the actual local-domain thermo implementation with poisoned ghosts,
+non-global strides, an empty rank, and multiple reduction patches. Execute
+P1/P2/P4 on both backends. `dmgmd_owned_box_preflight_tests` uses the production
+uint32 OR to check collective rejection without partial commit at P2/P4.
+
+The [large-box statistical registration](domain-statistics-registration.json) was frozen and the 152 registered chains and one final analysis completed. The final audit reports integrity PASS and scientific PASS for its explicitly registered NEP4-C, 5760-atom single-node matrix; see the [validation record](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116) for exact base and half-step conditions and limitations. Its separate finite-temperature NVT response is a
+scientific reference; neither the controller's input bulk modulus nor the static
+zero-temperature EOS substitutes for that measurement.
+
+The frozen family contains 151 simultaneous intervals: the previous 116 plus
+absolute temperature and pressure mean intervals for all 16 SCR conditions and
+temperature intervals for the three NVT volumes. They use the same precision and
+complete-block gates, and the registered 300 K ± 6 K and 0 GPa ± 0.1 GPa bounds.
+The simultaneous coverage is approximate and depends on sufficiently independent
+blocks, truncated autocorrelation estimates, and the percentile bootstrap; it is
+not an unconditional finite-sample guarantee. Constant chains or constant squared
+deviations do not establish ESS and are INCONCLUSIVE.
+With adequate precision an interval wholly outside its allowed range is FAIL;
+one crossing a boundary is INCONCLUSIVE. A direct empirical ECDF excess is FAIL.
+An insufficient-precision interval or a one-sided curvature upper bound above
+its limit is INCONCLUSIVE. Any FAIL makes the overall result FAIL; otherwise any
+INCONCLUSIVE makes it INCONCLUSIVE.
+
+For the diagnostic fixture used in the example, create a new directory with
+`python3 tests/npt/prepare_domain_npt_fixture.py --output /tmp/domain-npt-fixture --ensemble npt_ber --steps 20`;
+choose `npt_scr` in a separate directory for SCR. These short diagnostics do
+not enter the registered sampling data.
+
+The exploratory cost interface is separate from formal records:
+
+```bash
+python3 tests/npt/domain_statistics.py prepare --output /tmp/domain-stat-inputs-new
+python3 tests/npt/domain_statistics.py pilot --inputs /tmp/domain-stat-inputs-new \
+  --candidate /absolute/path/dmg-md --output /tmp/domain-pilot-new \
+  --devices 0,1 --ranks 2 --backend HostStaged --mode rebuild --steps 1000
+```
+
+`pilot.json` reports both the maximum rank run-loop time and end-to-end wall
+time; it is marked pilot and cannot be loaded as formal data. The frozen registration
+has 128 SCR chains and 24 independent NVT response chains. `freeze` refuses the
+unapproved draft and binds the candidate, input inventory, software, job list,
+four-GPU environment proof, RNG and deterministic gates, native ACF helper, and linked library identities. `run` executes one registered job into a new
+folder and requires the proof's device identities and environment. The one-shot
+`analyze_domain_statistics.py` rejects incomplete or changed evidence and atomically
+claims a marker in the evidence directory before analysis. The registration,
+source and analyzer must be frozen together, and
+no pilot trajectory may enter this evidence set.
+
+Once the complete deterministic reports are available, the proof generator
+validates their original artifacts and the independently prepared jittered
+pressure reference before publishing either proof:
+
+```bash
+python3 tests/npt/domain_statistics.py proof \
+  --evidence /absolute/path/final-v1 --candidate /absolute/path/dmg-md \
+  --pressure-fixture /absolute/path/ber-fixture --output /absolute/path/new-proofs
+```
+
+The fixed pressure method and its preserved original reference failure are
+recorded in [domain-manifest.json](domain-manifest.json); proof generation does
+not itself approve the draft registration or start sampling.
+
+Formal freezes claim a registration-SHA directory under
+`artifacts/domain-npt/statistics-claims/`. Each registered job claims one output
+path before execution; the sole final analysis checks those claims and claims its
+own look. Failed or interrupted claims remain and cannot be retried by changing
+the output directory or copying the freeze/evidence. This is an operational guard,
+not protection against an operator manually altering the ledger.
+
+After the registration and all deterministic proofs are approved and frozen,
+`domain_statistics.py batch` can execute the frozen jobs serially with the same
+arguments as `run`, except that `--output` names a new batch directory and
+`--job` is omitted. It records commands and per-job state in `progress.json`,
+validates each completed record and its input/output hashes before advancing,
+and invokes the final analyzer once only after the complete matrix. A failed
+job or analysis stops the batch; the existing output directory cannot be reused,
+and this entry point does not resume or retry jobs. `COMPLETE` means execution
+and analysis finished; inspect the recorded analysis status for the scientific
+PASS, FAIL, or INCONCLUSIVE result.

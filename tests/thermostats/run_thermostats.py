@@ -40,6 +40,31 @@ def sha(data):
     return hashlib.sha256(data.encode() if isinstance(data, str) else data).hexdigest()
 
 
+def validate_reference_options(args):
+    """Reject incomplete explicit provenance before any work directory or GPU gate."""
+    receipt = getattr(args, "reference_provenance", None)
+    receipt_sha = getattr(args, "reference_provenance_sha256", None)
+    if bool(receipt) != bool(receipt_sha):
+        raise ValueError("--reference-provenance and --reference-provenance-sha256 must be supplied together")
+
+
+def reference_identity(args):
+    """Validate an optional isolated reference, or the original locked reference."""
+    validate_reference_options(args)
+    reference = Path(args.reference).resolve()
+    receipt = getattr(args, "reference_provenance", None)
+    if receipt:
+        # Reuse the existing strict archive, Git-blob and compiler provenance gate.
+        sys.path.insert(0, str(ROOT / "tests/long_nve"))
+        import run_long_nve
+        identity = run_long_nve.validate_reference_provenance(
+            reference, Path(receipt).resolve(), args.reference_provenance_sha256)
+        return {"kind": "isolated-provenance", "path": str(reference), **identity}
+    commit = baseline.validate_reference(reference, baseline.load_manifest())
+    return {"kind": "locked-reference", "path": str(reference),
+            "binary_sha256": baseline.sha256(reference), "source_commit": commit}
+
+
 def model_text(case, seed):
     """Explicit independent Gaussian velocities; no velocity command/COM removal."""
     rng = random.Random(seed)
@@ -79,6 +104,9 @@ def run_text(ensemble, profile, half_dt=False, ramp=False):
 
 class Runner:
     def __init__(self, args, manifest):
+        validate_reference_options(args)
+        if getattr(args, "reference_provenance", None) and not getattr(args, "reference_identity", None):
+            args.reference_identity = reference_identity(args)
         self.args, self.manifest = args, manifest
         self.root = args.work_root.resolve()
         self.root.mkdir(parents=True, exist_ok=False)
@@ -107,12 +135,18 @@ class Runner:
             temporary.write_text(json.dumps({
                 "started_at": self.started, "candidate": str(self.args.candidate),
                 "candidate_sha256": self.binary_hash, "manifest_sha256": self.manifest_hash,
+                "reference_identity": getattr(self.args, "reference_identity", None),
                 "records": self.records}, indent=2, allow_nan=False) + "\n")
             temporary.replace(self.root / "results.json")
 
     def execute(self, label, ensemble, case, ranks, backend, profile, seed=1,
                 reference=False, half_dt=False, ramp=False, model=None, run=None,
                 extra_env=None, expect_error=None, potential=None):
+        if reference:
+            identity = getattr(self.args, "reference_identity", None)
+            if (not identity or Path(identity["path"]).resolve() != Path(self.args.reference).resolve()
+                    or baseline.sha256(self.args.reference) != identity["binary_sha256"]):
+                raise RuntimeError("validated reference identity changed before oracle execution")
         stage = self.root / label
         stage.mkdir(parents=True, exist_ok=False)
         generated = model is None
@@ -219,7 +253,9 @@ def short_matrix(runner, ensembles):
         for case in ("fallback", "domain"):
             oracle = None
             if ensemble == "nvt_nhc":
-                baseline.validate_reference(runner.args.reference, baseline.load_manifest())
+                if not getattr(runner.args, "reference_identity", None):
+                    runner.args.reference_identity = reference_identity(runner.args)
+                    runner.save()
                 oracle = runner.execute(f"oracle-{ensemble}-{case}", ensemble, case, 1, "HostStaged", profile, reference=True)
             p1 = None
             for ranks in runner.args.ranks:
@@ -341,6 +377,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--reference", type=Path, default=ROOT.parent / "gpumd-reference/src/gpumd")
+    parser.add_argument("--reference-provenance", type=Path)
+    parser.add_argument("--reference-provenance-sha256")
     parser.add_argument("--devices", type=lambda s: s.split(","), default=["0", "1", "2", "3"])
     parser.add_argument("--ranks", type=lambda s: [int(v) for v in s.split(",")], default=[1, 2, 4])
     parser.add_argument("--backends", nargs="+", default=["HostStaged", "CudaAware"])
@@ -354,7 +392,10 @@ def main():
     args = parser.parse_args()
     if args.parallel_seeds < 1:
         parser.error("--parallel-seeds must be positive")
+    validate_reference_options(args)
     args.candidate, args.reference = args.candidate.resolve(), args.reference.resolve()
+    if args.reference_provenance or ("short" in args.sections and "nvt_nhc" in args.ensembles):
+        args.reference_identity = reference_identity(args)
     manifest = json.loads((SUITE / "manifest.json").read_text())
     runner = Runner(args, manifest)
     for section in args.sections:

@@ -1,6 +1,7 @@
 #include "runtime_internal.hpp"
 
 #include <iostream>
+#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,30 @@ int main(int argc, char** argv)
 {
   try {
     dmgmd::MpiRuntime mpi(argc, argv);
+    if (!dmgmd::affine_budget_allows_reuse(1.0, 0.01, 5.0, 0.001, 0.001, 1.0) ||
+        dmgmd::affine_budget_allows_reuse(0.5, 0.0, 5.0, 0.0, 0.0, 1.0) ||
+        dmgmd::affine_budget_allows_reuse(2.0, 0.0, 5.0, 0.6, 0.5, 1.0) ||
+        dmgmd::affine_budget_allows_reuse(1.0, 0.5, 5.0, 0.0, 0.0, 1.0) ||
+        dmgmd::affine_budget_allows_reuse(std::numeric_limits<double>::quiet_NaN(),
+                                         0.0, 5.0, 0.0, 0.0, 1.0))
+      throw std::runtime_error("affine scalar budget failed its boundary cases");
+    unsetenv("DMGMD_DOMAIN_NPT");
+    if (dmgmd::detail::domain_npt_mode(mpi) != dmgmd::detail::DomainNptMode::off)
+      throw std::runtime_error("unset domain NPT must default to off");
+    for (const auto& [setting, expected] : {
+             std::pair{"off", dmgmd::detail::DomainNptMode::off},
+             std::pair{"rebuild", dmgmd::detail::DomainNptMode::rebuild},
+             std::pair{"affine", dmgmd::detail::DomainNptMode::affine}}) {
+      setenv("DMGMD_DOMAIN_NPT", setting, 1);
+      if (dmgmd::detail::domain_npt_mode(mpi) != expected)
+        throw std::runtime_error(std::string("incorrect domain NPT mode: ") + setting);
+    }
+    setenv("DMGMD_DOMAIN_NPT", "invalid", 1);
+    bool invalid_rejected = false;
+    try { static_cast<void>(dmgmd::detail::domain_npt_mode(mpi)); }
+    catch (const std::invalid_argument&) { invalid_rejected = true; }
+    if (!invalid_rejected) throw std::runtime_error("invalid domain NPT mode accepted");
+    unsetenv("DMGMD_DOMAIN_NPT");
     for (const auto& [name, kind] : {
              std::pair{"npt_ber", dmgmd::EnsembleKind::npt_ber},
              std::pair{"npt_scr", dmgmd::EnsembleKind::npt_scr}}) {

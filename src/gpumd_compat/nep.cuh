@@ -206,6 +206,8 @@ public:
   // (include/dmgmd/domain_layout.hpp).
   const ParaMB& params() const { return paramb; }
   const ZBL& zbl_params() const { return zbl; }
+  std::uint64_t domain_neighbor_generation() const { return neighbor.domain_generation(); }
+  std::uint64_t domain_workspace_generation() const { return workspace_generation_; }
 
   // When set, the periodic neighbor-occupancy record (legacy: appended to
   // neighbor.out every 1000 large-box calls, including the first) is routed

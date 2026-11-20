@@ -183,6 +183,29 @@ struct DomainEligibility {
   std::string reason;          // stable machine-readable token
 };
 
+// Scalar part of the affine cache proof. Inputs are already conservative:
+// alpha is a lower bound on stretch, and the remaining quantities are upper
+// bounds. This helper does not establish those bounds or authorize reuse on
+// its own. Strict inequality matches the neighbor builder's strict cutoff.
+[[nodiscard]] inline bool affine_budget_allows_reuse(
+    double alpha, double displacement, double reach, double force_error,
+    double build_error, double skin)
+{
+  if (!std::isfinite(alpha) || !std::isfinite(displacement) ||
+      !std::isfinite(reach) || !std::isfinite(force_error) ||
+      !std::isfinite(build_error) || !std::isfinite(skin) ||
+      alpha <= 0.0 || displacement < 0.0 || reach <= 0.0 ||
+      force_error < 0.0 || build_error < 0.0 || skin <= 0.0) return false;
+  const double inf = std::numeric_limits<double>::infinity();
+  const auto up = [inf](double x) { return std::nextafter(x, inf); };
+  const double inverse_stretch = up(1.0 / alpha);
+  const double compression_ratio = std::max(0.0, up(inverse_stretch - 1.0));
+  const double compression = up(compression_ratio * reach);
+  const double force_margin = up(force_error / std::min(alpha, 1.0));
+  const double used = up(up(up(up(2.0 * displacement) + compression) + force_margin) + build_error);
+  return std::isfinite(used) && used < skin;
+}
+
 // Face area |b x c| etc. and thickness = volume / area, matching the pinned
 // Box::get_area / get_expanded_box formulas exactly (orthogonal or not).
 [[nodiscard]] inline std::array<double, 3> box_thickness(
@@ -219,6 +242,30 @@ struct DomainEligibility {
 {
   const double limit = 2.5 * (rc_radial_max + 1.0);
   return thickness[0] > limit && thickness[1] > limit && thickness[2] > limit;
+}
+
+// Conservative bound for the signed cell-index intermediates used by the
+// local neighbor builder, including its +/-2-bin stencil.
+[[nodiscard]] inline bool affine_builder_geometry_safe(
+    const std::array<double, 9>& h, double radial_cutoff)
+{
+  const double build_radius = radial_cutoff + kNeighborSkin;
+  if (!std::isfinite(build_radius) || build_radius < 1.0 || build_radius > 1e6)
+    return false;
+  for (int d = 0; d < 3; ++d) {
+    if (!std::isfinite(h[4 * d]) || h[4 * d] < 1e-3 || h[4 * d] > 1e6) return false;
+  }
+  const auto thickness = box_thickness(h);
+  long double product = 1.0L;
+  for (double length : thickness) {
+    if (!std::isfinite(length) || length <= 0.0) return false;
+    const long double upper = std::ceil(2.0L * static_cast<long double>(length) /
+                                        static_cast<long double>(build_radius)) + 2.0L;
+    product *= upper;
+    if (upper > std::numeric_limits<int>::max() ||
+        product > std::numeric_limits<int>::max() / 4) return false;
+  }
+  return true;
 }
 
 // local-domain eligibility for an orthogonal, fully periodic box. The caller has

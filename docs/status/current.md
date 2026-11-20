@@ -1,5 +1,7 @@
 # DMG-MD 当前状态
 
+2026-11-16：DN0–DN4 已在[局部 NPT 标准](../standards/domain-npt.md)所列单节点 5760 原子 NEP4-C 冻结矩阵完成；[最终审核](validation/domain-npt-validation.md#dn4-final-20261116)为完整性 PASS、科学 PASS。152 条链与唯一一次分析完成，151 个注册区间全部生成且通过。该结论不扩大原 216 原子全量复制 G-B 的独立范围；实验开关仍默认 off，DN5 性能/采用与跨节点未验收。下文带日期的旧运行状态均为历史快照。
+
 类别：实现状态索引。核对日期：2026-11-05；当前 HEAD：`80c5768`（工作区含未提交代码与文档更新）。各历史阶段身份见对应报告。
 
 2026-10-30 新增独立产品化计划：[DMG-MDv1.0开发流程](../plans/dmg-md-v1.0-development-workflow.md)（IN PROGRESS）。
@@ -168,3 +170,141 @@ water/P4 有探索支持，carbon_1m/高重建/空 early 不支持外推。C/B w
 
 完整 revision/dirty 身份、环境和命令留在各报告；旧报告中的“下一阶段”表示当时交接，
 当前优先级以本页与剩余计划为准。
+
+## 局部 NPT 实验开发（2026-11-06）
+
+DN0–DN4 的默认关闭实验路径及验收工具已进入实现与实测阶段，`DMGMD_DOMAIN_NPT=off`
+保持原路由；`rebuild`/`affine` 的合同见[局部 NPT](../standards/domain-npt.md)。
+最终候选的 NEP-C 大盒短程、复用计数、独立压力、错误、输出/restart、多势和通信矩阵，
+完整 nightly、需求审计补入的 thermo/迁移门，以及 NHC/BDP 六套既有回归均已通过；
+其单节点范围、重启计数纠错和审核限制见[DN 验证记录](validation/domain-npt-validation.md)。
+大盒 SCR 注册和唯一执行 freeze 已完成。2026-11-09 09:41 技术快照为 116/152 条链 PASS，
+第 117 条停滞但进程当时仍存活。10:06 单次有界 GDB 观察后已 detach；Open MPI 新接受的
+TCP 握手接收超时重试机制与停滞相符，但对端身份及唯一根因未获证明。用户授权技术恢复后，
+原批次 10:27 已停止，七个原 PID 均退出；旧进度为 116 技术 PASS、1 中断 FAIL、STOPPED，
+analysis 为 null。计划保留 116 条完整链，第 117 条用原输入及 seed 在干净目录完整重跑，
+再完成剩余 35 条。第 117 条第二次完整尝试已于 10:44:49 启动，使用相同 candidate、输入、
+seed 和环境；旧失败证据已归档，旧 batch 进度仍为 STOPPED。第 117 条已技术 PASS，剩余
+35 条续跑曾启动；2026-11-10 16:01:20 的历史快照中前 142 条技术 PASS、第 143 条运行中。
+第 142、143 条各对一个已核验 rank 的六个线程单次调整 CPU 亲和以缓解调度竞争；未来作业不自动继承。
+第 143 条原始 record 和 claim 于 2026-11-10 08:50:31 UTC（16:50:31 北京时间）技术 PASS；
+旧续跑进度中的 RUNNING 已过期，旧外层驱动及 wrapper 退出码未观测。2026-11-11 01:45:40 UTC
+（09:45:40 北京时间）宿主快照显示，新恢复段第 144 条首次尝试因 CUDA 显存不足技术 FAIL，
+wrapper 和 driver 的真实退出码均为 1；监督器记录 driver 退出后，自身已在宿主观察中不存在，
+但自身 OS 退出码未由外部 wait 观察。其余已记录进程身份也均不存在；第 145–152 条尚未尝试。
+新恢复段为 STOPPED。用户随后授权第 144 条按原参数单次重跑，并要求不保留该次失败输出；
+失败输出已按用户要求清理且无备份；原参数重跑已于 02:33:03 UTC 启动。历史 R2 多段分析适配当时已完成独立静态审查和 9 项 CPU 测试；
+当时 root 只读协议及收据，尚未逐一审阅三个源码，该适配未执行。
+analysis 为 null、科学中途查看为零；这次显存不足不是科学 FAIL，也不代表 DN4 完成。
+2026-11-11 02:03 UTC（10:03 北京时间），第 144 条恢复方案已完成 root 源码审查和 CPU 测试；
+真实宿主资源检查因 GPU 7 可用显存低于 3072 MiB 而拒绝，未归档或启动新作业。root 已向用户
+询问一次重跑例外；用户随后已授权原参数重跑并要求不保留失败记录。当时补充登记仍为提案；该时点仍需资源满足；后续 R4 补充登记、清理和启动已完成。用户认为失败与共用服务器拥堵
+有关，该说明不等于已排除所有代码问题。
+2026-11-11 02:23:01 UTC 的宿主快照：R4 清理已完成，前 143 条保持；GPU 7 空闲 746 MiB，
+低于 3072 MiB 操作门，状态 CLEANED_AWAITING_RESOURCES。该时点未创建新 run/supervisor claim。清理收据和资源检查见
+[11 月 11 日恢复状态](validation/domain-npt-validation.md#statistics-recovery-20261111)。
+2026-11-11 02:50:43–02:51:03 UTC 的宿主观察确认 R4 supervisor 800712、driver 800993
+及第 144 条 wrapper/MPI/两 rank 存活，输出字节增长；143/152 技术完成，145–152 尚未尝试。
+第 144 条 rank 801343 的六个线程于 02:44:07 UTC 从 CPU 0/96 调整到 12/108，后观察确认掩码；
+这是技术快照，不是科学或性能验收。R4 最终分析适配完成独立和 root 审阅及 12 项 CPU 检查，尚未执行。
+2026-11-11 03:13:09–03:13:29 UTC 宿主快照：第 144 条已技术 PASS，当前第 145 条运行中，
+累计 144/152 技术完成，第 146–152 条未尝试；analysis 仍为 null。第 145 条一个 rank 的六线程
+已单次调整至 CPU 12/108，后观察核验进程身份并见输出增长；这是时间快照，不是科学验收。
+2026-11-11 04:18:45–04:19:05 UTC 宿主快照：第 145 条技术 PASS，第 146 条运行中，
+累计 145/152 技术完成，第 147–152 条未尝试；analysis 仍为 null。第 146 条一个 rank 的六线程
+单次调整至 CPU 12/108，后观察核验身份并见输出增长；这是时间快照，不是科学验收。
+2026-11-11 05:23:10–05:23:30 UTC 宿主快照：第 146 条技术 PASS，第 147 条运行中，
+累计 146/152 技术完成，第 148–152 条未尝试；analysis 仍为 null。第 147 条一个 rank 的六线程
+单次调整至 CPU 12/108，后观察核验身份并见输出增长；这是时间快照，不是科学验收。
+2026-11-11 06:26:48 UTC 宿主终态快照：第 147 条技术 PASS，第 148 条首次尝试 CUDA OOM，
+R4 STOPPED，监督器实测 driver 退出 1，八个旧身份均不存在；147/152 完成，149–152 未尝试。
+该快照时第 148 条重跑尚无授权；唯一分析未执行，DN4 统计仍 PENDING。
+2026-11-11 07:03:44 UTC 清理核验快照：用户已授权第 148 条按原参数单次重跑并删除失败输出；
+10 个失败文件及空目录已删除且无备份，147 条 claim 保留。07:03:30 GPU 7 空闲 816 MiB，
+低于每卡 8192 MiB 的操作门，R5 尚未启动；唯一分析未执行，DN4 统计仍 PENDING。R5 执行
+准备 9 项 CPU 检查、最终分析适配 18 项 CPU 检查及 root 审阅均已完成，实际分析尚未运行。
+2026-11-11 07:17:29 UTC 资源快照：GPU 7 空闲 1804 MiB，仍低于 8192 MiB；147 条 claim
+保留，旧 R4 身份和 R5 启动文件均不存在。07:08 预检已完成来源、清理、no-look 和宿主检查，
+在资源门拒绝；只读观察器 exit 0 不是 MD 退出码。R5 启动命令已准备但未执行；可选 CPU
+亲和工具已审阅，尚未 dry-run 或 apply，需运行后核验真实身份与负载。
+2026-11-11 07:25:28 UTC，原 GPU 7 空闲 1804 MiB，仍低于 8192 MiB；同一外部阻碍
+连续三轮后目标状态为 blocked。已完成清理不重复，148 原授权仍有效；恢复须原四卡各满足
+8192 MiB 并通过 fresh 全预检。第 148 条重跑、149–152 首次运行及唯一分析尚未启动。
+用户已恢复目标为 active；2026-11-11 07:39 UTC 新资源快照 GPU 7 空闲 246 MiB，
+恢复后阻碍计数从第 1 轮重新开始。已完成清理不重复，148 授权仍有效；R5 和分析尚未启动。
+2026-11-11 07:54:59 UTC 原设备显存满足操作门，R5 已实际单次启动第 148 条；
+08:14:21–08:14:41 UTC 宿主观察核验八个身份及输出增长，147/152 技术完成，149–152 未尝试。
+第 148 条一个 rank 的六线程经 dry-run 后单次调整至 CPU 12/108，目标当时运行正常；该快照
+不是科学或性能验收。goal active、资源阻碍计数归零；唯一分析尚未执行，DN4 统计仍 PENDING。
+2026-11-11 09:18:18 UTC 宿主终态快照：第 148 条技术 PASS，R5 在第 149 条启动前
+因显存资源门停止，监督器实测 driver 退出 1，supervisor 和 driver 已不存在。累计 148/152
+完成，第 149–152 条均未尝试；R6 首次续跑方案准备中，唯一分析未执行，DN4 统计仍 PENDING。
+2026-11-11 09:28:37 UTC 宿主快照：R6 supervisor 和 driver 存活，driver 有界等待原 GPU
+资源，等待第 149 条；148/152 技术完成，149–152 未尝试，analysis 为 null。启动 shell exit 0
+不是 MD 退出码。v6 最终分析方案已完成 22 项 CPU 检查及独立、root 审阅，尚未实际执行；
+可选 R6 亲和工具已审阅但未执行。goal active，本轮 progress，DN4 统计仍 PENDING。
+2026-11-11 09:42:16 UTC 宿主快照：R6 supervisor 和 driver 仍存活并等待资源，尚无 MD
+计算；第 149–152 条未尝试。相同资源条件连续三轮后 goal 为 blocked，但后台队列未停止，
+仍按原四卡各 ≥8192 MiB 的条件有界等待。148/152 技术完成，唯一分析尚未执行。
+用户已恢复 goal 为 active，先前 blocked 审计保留为历史。2026-11-12 02:26 UTC 宿主
+快照显示 R6 supervisor/driver 身份匹配且第 150 条运行；149/152 条技术完成，151–152 尚未
+尝试。第 149 条记录、claim、输入及原始输出哈希已核验，其七个已记录身份在宿主均已退出；
+唯一科学分析未执行，DN4 统计仍 PENDING。
+2026-11-12 02:31:45–02:32:05 UTC 宿主快照：第 150 条仍在运行，149/152 技术完成；
+目标 rank 六线程经 dry-run 后单次调整至 CPU 12/108，身份及其他绑定核验通过、输出增长。
+151–152 尚未尝试，analysis 为 null；此观察不构成科学或性能验收。
+2026-11-12 02:53 UTC 技术快照：第 150 条已 PASS，其六个已记录身份经宿主核验均已退出；
+累计 150/152 技术完成。02:53:13 UTC 宿主核验 R6 父进程身份存活，正在等待资源以首次启动第 151 条；
+02:52:48 GPU 7 空闲 2480 MiB，151–152 尚未尝试；
+唯一分析未执行，DN4 统计仍 PENDING。
+2026-11-12 03:03:31 UTC 宿主快照：R6 两个父进程身份存活，等待第 151 条资源，
+GPU 7 空闲 2480 MiB；150/152 技术完成，151–152 尚未尝试。观察器 session 6463 exit 0
+仅表示观察器退出，不是 MD 或 driver 退出。本轮第 150 条完成，goal active，新的等待计数为 1。
+2026-11-12 03:08:54 UTC 宿主快照：R6 父进程身份匹配且存活，仍等待第 151 条资源；
+GPU 7 空闲 2480 MiB，150/152 技术完成，analysis 为 null。新阻碍为连续第 2 轮，goal 仍 active；
+这是后台资源等待，尚无 MD 计算。
+2026-11-12 03:13:48 UTC 宿主快照：第 151 条资源条件连续第 3 轮未满足，goal 实际
+状态为 blocked；R6 两个父进程仍存活并继续后台有界等待，没有 MD 计算。150/152 技术完成，
+151–152 尚未尝试，唯一分析未执行。
+用户恢复 goal 为 active；2026-11-12 06:53:02 UTC 宿主快照确认 R6 第 151 条运行中，
+150/152 技术完成，第 152 条未尝试，analysis 为 null。原资源阻碍已解除并重新计数为 0；
+先前 blocked 审计保留为历史，唯一科学分析未执行。
+2026-11-12 07:00:32–07:00:52 UTC 宿主快照：第 151 条运行，150/152 技术完成；
+目标 rank 六线程经 dry-run 后单次调整至 CPU 12/108，身份与其他绑定核验通过、输出增长。
+第 152 条未尝试，analysis 为 null；此技术观察不构成科学或性能验收。
+2026-11-12 08:01:02 UTC 宿主快照：第 151 条技术 PASS，151/152 技术完成；R6 父进程
+身份匹配且存活，队列等待资源以首次启动第 152 条，当前无 MD 计算。新的资源等待计数从
+第 1 轮开始，goal active；唯一分析未执行，DN4 统计仍 PENDING。
+2026-11-12 08:11:23 UTC 宿主快照：第 152 条资源条件连续第 3 轮未满足，goal 实际
+状态为 blocked；R6 两个父进程仍存活并继续后台有界等待，没有 MD 计算。151/152 技术完成，
+第 152 条尚未尝试，唯一分析未执行，DN4 统计仍 PENDING。
+2026-11-12 08:55:48 UTC，R6 等待 owner 的安全交接已完成，原父进程经宿主核验退出；
+151/152 技术完成，第 152 条未尝试。按用户要求准备设备 3,0,2,6 的 R7 短测；最新单次
+资源观察 GPU 3 空闲 660 MiB，短测尚未启动。唯一科学分析未执行，DN4 统计仍 PENDING。
+2026-11-12 09:05 UTC，R7 设备技术验证器已在独立 session 启动并等待资源；这不是
+正式第 152 条采样，152 仍未尝试。151/152 技术完成，唯一科学分析未执行。
+2026-11-12 09:16 UTC 宿主快照：R7 设备验证器及其父进程身份匹配且存活，在创建
+claim 前等待资源；GPU 3 空闲 3074 MiB，短测尚未开始，第 152 条未尝试。执行 v14 与最终
+分析 v7 准备分别完成 14/28 项 CPU 检查和独立、root 审阅；均不构成实际运行或科学验收。
+2026-11-12 09:29:14 UTC 宿主快照：R7 设备验证器及父进程仍存活，GPU 3 空闲
+2728 MiB，验证器在 claim 前继续等待；151/152 技术完成，第 152 条未尝试。该资源条件
+连续第 3 轮未满足，blocked 建议待 root 调用目标工具确认；当前队列未停止，唯一分析未执行。
+2026-11-12 09:32:16 UTC 宿主快照：goal 工具实际返回 blocked；R7 设备验证器及父进程
+仍存活，验证器继续后台有界等待 GPU 3 资源。151/152 技术完成，第 152 条未尝试；没有
+正式 MD 或科学分析运行，DN4 统计仍 PENDING。
+授权、归档、进程及审核器证据见[11 月 11 日恢复状态](validation/domain-npt-validation.md#statistics-recovery-20261111)。
+科学门仍为 PENDING，原 216 原子 G-B 科学结论不外推，DN5 尚未执行。
+
+2026-11-13: The user resumed the goal. The original R7 device validator completed environment and rank-probe commands with return code 0, then its field parser rejected the digit in the P2P key. Its parent OS exit was not observed. The golden and differential checks remain unattempted; a hash-bound continuation and compatible evidence gates are in preparation. Formal job 152 and the single scientific analysis have not started; 151/152 chains are technically complete and DN4 statistics remains PENDING.
+
+2026-11-13 01:51 UTC: The technical device-validation continuation was started under its recorded supervisor and is waiting for resources before its claim. This is a point-in-time status: 151/152 chains are technically complete, formal job 152 remains unattempted, and the single scientific analysis has not started. DN4 statistics remains PENDING.
+
+2026-11-13 01:54 UTC: The authorized conditional queue is live and waiting for completion of the technical device validation. If the reviewed evidence and resource checks pass, it will start the first attempt of job 152 once. At this snapshot, 151/152 chains are technically complete, job 152 has not started, and scientific analysis remains unexecuted; DN4 statistics is PENDING.
+
+2026-11-13 02:00 UTC: The goal was marked blocked after the resumed device validation again encountered insufficient GPU memory (GPU 3: 2106 MiB free against the 8192 MiB gate). The existing validation continuation and conditional queue remain live with bounded 24-hour waits; if the technical and resource checks pass, the queue can start the first attempt of job 152. At this snapshot 151/152 chains are technically complete, job 152 is unattempted, and the unique scientific analysis has not started. This November 13 blocker is separate from the earlier November 12 history; DN4 statistics remains PENDING.
+
+2026-11-13 06:12 UTC: Root confirmed the first R8 job 152 running on the original registered devices 7,0,2,6 with CudaAware/affine and seed 308; the actual MPI ranks and domain route were observed. The earlier R7 technical validation failure remains historical. At this snapshot 151/152 chains are technically complete, the last chain is running, and the single scientific analysis has not started. The goal tool still reports blocked from the earlier resource wait; user-directed execution has resumed, and DN4 statistics remains PENDING.
+
+2026-11-13 06:22 UTC: Root confirmed the one-time rank 0 CPU affinity adjustment for running R8 job 152: six threads moved from CPUs 0/96 to 12/108 on node 0, while GPU 7 remained on node 1. The 10-second follow-up observed active rank execution and growing output; this is a scheduling observation, not a benchmark or scientific acceptance. The v8 final-analysis adapter has root and independent preparation reviews and 29 passing CPU checks; its sole scientific analysis remains unapproved and unexecuted pending actual chain and driver completion. DN4 statistics remains PENDING.
+
+2026-11-13 09:18 UTC: All 152 registered chains have completed technically. The last R8 record, claim, frozen inputs, raw output and logs passed identity checks; the supervisor recorded driver return code 0 and all eight recorded process identities had exited. This is not a scientific result. The user resumed the goal; the sole final analysis and DN4 statistical acceptance remain pending, with 29 requirements PROVEN and one PENDING. Historical limits, including unobserved outer process exits, remain in force.

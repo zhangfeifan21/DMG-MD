@@ -1,6 +1,6 @@
 # DMG-MD 文档
 
-类别：文档索引。更新日期：2026-11-05。
+类别：文档索引。更新日期：2026-11-06。
 
 项目正按 [v1.0 开发流程](plans/dmg-md-v1.0-development-workflow.md)推进正式版：
 Gate 0、A0–A6/G-A 与 B0–B4/G-B 已完成；B3 原注册18个 formal look 的总体 INCONCLUSIVE 历史保留，独立确认通过，B4 测试维护和文档收口也已通过。`npt_scr` 的统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点全量复制模式各向同性正交全周期盒：base 为 P1/HostStaged 与 P2/P4 双后端，half-dt 仅 P1/HostStaged；NEP5/ZBL 仅有另行记录的短程合同证据。LJ、EAM/alloy、C/D 阶段与发布交付仍未完成。先看[逐 Step 进度](plans/dmg-md-v1.0-progress.md)、
@@ -26,6 +26,8 @@ O 系列是与 v1.0 产品化独立的性能主线。按优化目标查看[通�
 
 - 产品：[架构决策](standards/architecture-decisions.md)、[输入/输出兼容矩阵](standards/compatibility-matrix.md)、[系综与恒温器](standards/ensembles.md)、[各向同性 NPT 控压器](standards/barostat.md)。
 - Runtime：[MPI 双路径与通信记账](standards/mpi-runtime.md)、[数据布局](standards/data-layout.md)、[缓存有效性证明](standards/cache-validity.md)。
+- 实验局部 NPT：[变盒、缓存与验收合同](standards/domain-npt.md)、[DN0–DN4 验证记录](status/validation/domain-npt-validation.md)。开关默认关闭；DN4 科学审核通过，范围限于 单节点 NEP4-C、5760 原子、300 K/0 GPa、各向同性正交全周期体系；base 为 P1/HostStaged/off 与 P2/P4 两后端各自的 off、rebuild、affine，half 仅 P1/HostStaged/off、P2/HostStaged/affine、P4/CudaAware/affine。
+- 实验形变缓存：[浮点误差、cell 扫描与两跳闭包证明](standards/domain-npt-rounding-proof.md)。
 - O2–O4/O6.5/O8.5/O8.6/O9/O11：[NEP 分区与实验重叠](standards/domain-partition.md)、[halo 生命周期](standards/halo-lifecycle.md)。
 - O8：[局部域分解模式 thermo 消费者、按需执行与诊断就绪](standards/thermo-demand.md)。
 - 验证：[Golden Test 原则](standards/golden-test-standard.md)、[三引擎对照](standards/cross-engine-reference.md)、[CPU 采样](standards/cpu-sampling.md)。
@@ -83,6 +85,7 @@ O2/O3 的局部成本 A/B 随各自验收记录保存，不构成实际 overlap 
 | P0 | [MPI CPU 核数与 NUMA 绑定](plans/mpi-cpu-binding.md) | IN PROGRESS；DMG-MD 入口已验收，跨引擎/调度器仍待验收 |
 | P0 | [LAMMPS 多 GPU benchmark](plans/lammps-multigpu-benchmark.md) | IN PROGRESS；静态/smoke 完成，动力学与正式矩阵待完成 |
 | 条件性 | [通信与计算性能优化 O10](plans/communication-computation-overlap.md) | O10 暂缓、PROPOSED；O11 的公共服务器建议仅属历史探索，专用服务器 benchmark 用于后续性能参考与采用判断，当前默认不变 |
+| 后续性能扩展 | [多 GPU 控压器](plans/multi-gpu-barostat.md) | IN PROGRESS；DN0–DN4 已在有限范围通过，实验开关默认 off；DN5 性能与采用待执行，不改变 v1.0 P0 发布门 |
 | 辅助 | [CPU 使用率研究](plans/cpu-usage-study.md) | IN PROGRESS；C0/C1 完成，O5 窄 C2 已测，完整 C2/C3 待执行 |
 | 后续 | [域分解扩展](plans/domain-decomposition.md)、[风险与待办](plans/risk-and-backlog.md) | PROPOSED / IN PROGRESS；分阶段中间场交换方案、release 等未完成 |
 | 暂缓 | [双物理节点 I/O 验收](plans/multi-node-io.md) | PROPOSED；按维护者决定暂缓 |

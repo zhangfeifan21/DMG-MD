@@ -2,6 +2,8 @@
 
 类别：现行标准及充分条件证明。核对日期：2026-10-23。
 
+本页描述默认固定盒路径。默认关闭的局部 NPT 变盒事务、参考盒度量与独立 generation 合同见[局部 NPT](domain-npt.md)；实验路径的验证范围见[DN 验证记录](../status/validation/domain-npt-validation.md)。
+
 实现入口：`src/domain_runtime.cu` 的 `DomainState`、`inspect_domain_cache` 与
 `run_domain_segment`。Neighbor 接受已决议的 reuse/rebuild action。每步协议/计时见
 [MPI runtime](mpi-runtime.md)，布局见[data-layout](data-layout.md)，实施实测见

@@ -1,0 +1,291 @@
+{
+  "schema": "dmgmd.domain-npt.contract.v1",
+  "status": "DN0_FROZEN_DETERMINISTIC; STATISTICAL_REGISTRATION_APPROVED",
+  "default_mode": "off",
+  "modes": [
+    "off",
+    "rebuild",
+    "affine"
+  ],
+  "ensembles": [
+    "npt_ber",
+    "npt_scr"
+  ],
+  "ranks": [
+    1,
+    2,
+    4
+  ],
+  "backends": [
+    "HostStaged",
+    "CudaAware"
+  ],
+  "route": {
+    "local_ranks": [
+      2,
+      4
+    ],
+    "required_tokens": [
+      "mode=m2a",
+      "DOMAIN_NPT"
+    ],
+    "p1": "existing replicated path",
+    "initial_ineligible": "replicated fallback",
+    "runtime_ineligible": "collective failure before commit"
+  },
+  "tolerance_sources": {
+    "field_comparisons": "tests/baseline/manifest.json:tolerances",
+    "mpi_domain": "tests/mpi/run_mpi_domain.py",
+    "pressure": "tests/thermo/run_pressure_oracle.py",
+    "pressure_finite_difference": "tests/npt/run_domain_pressure_oracle.py: FD_ATOL_GPA and FD_RTOL; tests/npt/domain-pressure-oracle.md"
+  },
+  "required_cases": [
+    "static_energy_force_all_virial_pressure",
+    "uniform_box_and_volume_derivative",
+    "rebuild_affine_off_differential",
+    "old_force_next_vv1_and_output",
+    "segment_start_and_npt_nve_nvt_switch",
+    "scr_fixed_box_rng",
+    "restart_p1_p2_p4",
+    "initial_fallback",
+    "runtime_geometry_failure",
+    "rank_configuration_mismatch",
+    "empty_rank",
+    "owned_thermo_ghost_poison",
+    "manager_migration_under_box_change",
+    "communication_counts",
+    "typewise_nep5_zbl_two_hop_pbc"
+  ],
+  "statistics": {
+    "status": "APPROVED_ONE_SHOT; EXECUTION_FREEZE_REQUIRED",
+    "sampling_authorized": true,
+    "registration": "tests/npt/domain-statistics-registration.json",
+    "requirements": [
+      "large-box fixture and independent EOS or sampler identity",
+      "burn-in and complete chain lengths",
+      "seed sets",
+      "ESS and autocorrelation estimator",
+      "error budgets and multiplicity",
+      "fixed stopping rule",
+      "base and half timestep",
+      "same-algorithm replicated reference",
+      "independent material compressibility"
+    ],
+    "approval_evidence": {
+      "schema": "dmgmd.domain-npt.statistics-approval-evidence.v1",
+      "source_draft_registration_sha256": "09ffee0e7ba0ed66ed70374267f98bc16284431ac372cca37f4cbaa06329fca0",
+      "source_draft_manifest_sha256": "aa8ef909c7e19bf4f34fbb82c27cf361037badf0a9291f237ef112452cb58fe7",
+      "evidence": {
+        "candidate": {
+          "path": "artifacts/domain-npt/final-v1/candidate/dmg-md",
+          "sha256": "5a460ad845597f62623e33657abd7e1a81af6b94e908b98a5768ae5e5b88158e"
+        },
+        "candidate_build_receipt": {
+          "path": "artifacts/domain-npt/final-v1/candidate/build-receipt.json",
+          "sha256": "4bc2fd74703058a151fbb2a74e18e712acd7cdf13b1cd29c6362cc5de5810307"
+        },
+        "rng_proof": {
+          "path": "artifacts/domain-npt/final-v1/proofs/rng-proof.json",
+          "sha256": "4b2d889c6cb4d664f0da4c81a1638e0c494d106808ae064bcf2c531611d40931"
+        },
+        "deterministic_proof": {
+          "path": "artifacts/domain-npt/final-v1/proofs/deterministic-proof.json",
+          "sha256": "4146430241c232fcc02beb74d82b4b0c48976dab262cd9f14e4480cd42c13d8e"
+        },
+        "pressure_full_audit": {
+          "path": "artifacts/domain-npt/final-v1/pressure-full-audit.json",
+          "sha256": "4d123540a14d4cfada750380b4508f7419c2a9acf232b243b4e1181df6eef135"
+        },
+        "pressure_full_report": {
+          "path": "artifacts/domain-npt/final-v1/pressure/results.json",
+          "sha256": "0642e5f9408baf062c177dc1c523a1f8273f5937b729125ef67f13d1b231f7ec"
+        },
+        "pressure_jitter_reference": {
+          "path": "artifacts/domain-npt/final-v1/pressure-jitter-reference/results.json",
+          "sha256": "db663d5fc8dc8561d34943b18952d12c86caaf70885e4d5ab01a65be675b8716"
+        },
+        "pressure_original_failed_reference": {
+          "path": "artifacts/domain-npt/final-v1/pressure-reference/results.json",
+          "sha256": "98d03d56cf649a1cecc1eccd227363cd7ac9aef9db4bc54a184b30c623ebd1e0"
+        },
+        "final_evidence_audit": {
+          "path": "artifacts/domain-npt/final-v1/final-evidence-audit.json",
+          "sha256": "e38ef7806861c27634141bf98fa12ab97cfe53ac7410031396feb1d4d694df2c"
+        },
+        "thermostat_audit_v2": {
+          "path": "artifacts/domain-npt/final-v1/thermostat-regression-audit-v2.json",
+          "sha256": "8984b20bb891704241f8a132b661ddd574e875f19d548150befb86a4ba31c7c9"
+        },
+        "original_thermostat_audit_fail": {
+          "path": "artifacts/domain-npt/final-v1/thermostat-regression-audit.json",
+          "sha256": "2f6178c5d47b10ce772ba83f5d41eadc5e76c3ea1e59cd73cbc395e0694a258c"
+        },
+        "thermostat_restart_correction": {
+          "path": "artifacts/domain-npt/final-v1/thermostat-restart-count-correction.json",
+          "sha256": "ba0e47caa92a5958a067a4ae9aee00cccaf8e6f936fc013a98e052dffa0de4a1"
+        },
+        "approved_thermostat_queue": {
+          "path": "artifacts/domain-npt/final-v1/thermostats-queue-results.json",
+          "sha256": "e0ce83e56c65c3909a2165d0f734736e102045515120484c0b5a4e260368b9ac"
+        },
+        "thermostat_approval": {
+          "path": "artifacts/domain-npt/final-v1/thermostats-approval.json",
+          "sha256": "a001e9bad388f642f365426447c7e0b956aa3865ec9fe90842ceff36a0d4f119"
+        },
+        "cpu_test_receipt_historical": {
+          "path": "artifacts/domain-npt/final-v1/cpu-test-receipt.json",
+          "sha256": "bdc1260609e5281f35a9dc634bb9554abf9c8ac244694bcf93d6ce30c16e958e"
+        },
+        "cpu_domain_log_historical": {
+          "path": "artifacts/domain-npt/final-v1/logs/ctest-domain-npt-final-cpu-v3.log",
+          "sha256": "dc433d89f574f8f8cae066525b18adb16a9617e4184b1a6c3cabbbdb4d66583f"
+        },
+        "cpu_geometry_supplement_log": {
+          "path": "artifacts/domain-npt/final-v1/logs/domain-geometry-negative-closure.log",
+          "sha256": "f9322a6212a36010c15c0f6bd7dcd61e8e972dc0e73ec0c4ba6050afa013bdc7"
+        },
+        "acf_helper_receipt": {
+          "path": "artifacts/domain-npt/final-v1/acf-helper-build-audit/receipt.json",
+          "sha256": "f46f3f1b37d7785c01b80b270dfa2d7e5771fa6ca01fe14b3052ef54d12c2576"
+        },
+        "acf_helper_independent_build": {
+          "path": "artifacts/domain-npt/final-v1/acf-helper-build-audit/dmgmd_autocorrelation",
+          "sha256": "493c791ff8ea3ae5a0ac4642fabe8d672e7f3c7d16cd75a10c263d2a05136864"
+        },
+        "environment_proof": {
+          "path": "artifacts/domain-npt/final-v1/environment-proof.json",
+          "sha256": "490e876ca7b8106b0b6f1e5d542599fdf4220b3f657c98bb828f73fb17386389"
+        },
+        "gpu_thermo_preflight_build_receipt": {
+          "path": "artifacts/domain-npt/final-v1/thermo-preflight-followup/build-receipt.json",
+          "sha256": "094b474767f09b9f9f999d78e1a22b056c03c65a9eadb7e7ca88158ce7b46161"
+        },
+        "gpu_thermo_preflight_report": {
+          "path": "artifacts/domain-npt/final-v1/thermo-preflight-followup/runs/results.json",
+          "sha256": "f90c658569084ec839d20afa2223ec334736e47e1658a121596ff40ed545dcf0"
+        },
+        "gpu_box_migration_report": {
+          "path": "artifacts/domain-npt/final-v1/migration-npt/results.json",
+          "sha256": "4e0ab962ba1bf2b21333de79db6b7f6095d3b99e9cc10c28d63fe1da5c81b3e1"
+        },
+        "nightly_report": {
+          "path": "artifacts/domain-npt/final-v1/nightly-fresh-reference.json",
+          "sha256": "276607586627c35225ff37b5341a7625ad328995b55691e64dc221a6e35344be"
+        },
+        "reference_provenance": {
+          "path": "artifacts/domain-npt/final-v1/reference-cuda12.8-fresh/provenance.json",
+          "sha256": "5138c6acd2a531e8d67056ed0268ab4bc33ccf5c495b65f0c96c5aeb194c6963"
+        },
+        "acf_helper_formal": {
+          "path": "build-dn/tests/dmgmd_autocorrelation",
+          "sha256": "493c791ff8ea3ae5a0ac4642fabe8d672e7f3c7d16cd75a10c263d2a05136864"
+        }
+      },
+      "current_analysis_and_runner_source_sha256": {
+        "tests/npt/domain_statistics.py": "681bdbe1f05074e0ae9ff87315b7541273852d6aaf07738701a0c056e396bcbc",
+        "tests/npt/run_domain_npt.py": "10e65f9a294f49c2d292da0bf3c4d89a61aeeae27f30d99a1f4a7ea47207a49f",
+        "tests/npt/generate_inputs.py": "c67b8e96f7d46ffd43325f92879015edc7a8d36fbee5a83a991031081394541b",
+        "tests/npt/analyze_statistics.py": "da0b26270c5c9330deec1b30c96179d516a5b0c2f95b973e6431cd2e77520496",
+        "tests/npt/paired_confirmation_math.py": "1653e4151195bdf7ca92e5f7612823a2270563b9f21b22fe2ea144d7ad43dd1a",
+        "tests/npt/analyze_domain_statistics.py": "1fec902d4de06fecda4e6014678ac05827eb5348cd672ab9b91e65c285ce969a",
+        "tests/npt/run_domain_pressure_oracle.py": "61bb188f262e598ecc8980eb9105790514ee67ebf72c37cee2b4081ff45036f9",
+        "tests/npt/run_domain_npt_contracts.py": "84a29a44d0245ab9d520e183601fafb115c9e2cc169cb78ea0e8763a87a5272c",
+        "tests/npt/run_domain_npt_negatives.py": "11febc968fd40f0f5fffcff0107ffbf5eff79c8d1061e9077df1eb507b2beaf8",
+        "tests/npt/run_domain_npt_pmpi.py": "94eea0a042da68f6c6dae94e2c99f1edb758fb498536d6d94e7d9011a7b51316",
+        "tests/npt/run_domain_npt_variants.py": "bbe93ac27c6f38d089080b2c8787a8e9410e3bf5c8ce8fa4e87c60e6ac7876f0",
+        "tests/npt/run_domain_affine_cache.py": "c98e4255005179c5dc2c5f48ca420f73ed986514aab2262b548dcae386e775a7",
+        "tests/npt/run_domain_scr_scalar.py": "87b3bfef269a9981babec9bcef4a32cb5b3133ef55e19c7940c2419d9feeb9cd",
+        "tests/npt/check_migration_numerics.py": "1d04d6ff23bea04b0c14b86e3d09580cda99b3ed290cc7065372185b7140aba8",
+        "tests/baseline/run_baselines.py": "e675877202f02ae6aa279dda47d40d7fa442f52a5422a004f86826415ac11d3f",
+        "tests/baseline/manifest.json": "da3d7f30bd612a34b8f343bdf9c477f1a45dee8fe3a1ae0bf317e02e57ec27c5",
+        "tests/npt/capture_environment_proof.py": "3c5ef8bfa29483fe7478c17af399c4ddf4046ff9286970b8066b95ab4cb8d462",
+        "tests/thermostats/sample_statistics.py": "0b85ecee1b7ec7aee19d5b350ec5bdc7a5e23d635874843e68a50aa5faee6b67",
+        "tests/thermostats/autocorrelation.cpp": "3453c32097ae4e80e8bbcd20fb805159614802bf694a6a32d24ce9cb1c2ac1b9",
+        "tests/mpi/check_environment.py": "7e229d67521ad11983b4f588060fbef9acadacbc53cfa7d07b59ebd8fcbea3d2"
+      },
+      "historical_cpu_receipt_scope": "The receipt is historical, not an identity claim for all current files. Changed files are listed explicitly; subsequent geometry evidence and GPU supplements remain separately bound.",
+      "historical_cpu_receipt_mismatches": {
+        "tests/CMakeLists.txt": {
+          "receipt_sha256": "ddd132c68f2f242cd45ca1f0f555bac2bd5739757ee1237a84701108dfb61eb8",
+          "current_sha256": "c6cf429da38f991ce4e7643f5bb70f514780d9378606e68597d7af7c4f698e10"
+        },
+        "tests/npt/domain_geometry_oracle.py": {
+          "receipt_sha256": "f034eaa8464d852c6ea4d52565a46888fba293c04787de8789ce981be915e33e",
+          "current_sha256": "6fd04387039e090e882bb6b8ed3c76602800d8fe12eb849751d5d52e5f7ba8c6"
+        },
+        "tests/npt/test_domain_geometry_oracle.py": {
+          "receipt_sha256": "53b55bc6afbf0e45082873d2d599646fe3bc2fe1068eda2f2313b678bef89c1d",
+          "current_sha256": "8b234924879b827b01f632ee275ddf52c8a6f075cbb6b3187851230f53fd6705"
+        }
+      },
+      "candidate_receipt_scope": "Production candidate and its source snapshot are bound by the build receipt; its historical tests/CMakeLists.txt differs from current and is not represented as current.",
+      "historical_failures": "Original high-symmetry pressure reference FAIL and initial thermostat audit FAIL are retained; independent jitter pressure audit and separately recorded restart-count correction/v2 audit are the later supporting evidence.",
+      "audit_limits": "Final nightly audit does not independently bind execution log integrity or replay all trajectory-derived values; NVT audit does not hash original short/protocol logs or replay full numerical trajectories. These limits remain in the cited audit reports.",
+      "execution": "One complete 152-chain batch, no interim statistical looks, extension, seed substitution, chain restart or retry; one final analysis. Freeze binds inputs, software, candidate, libraries, environment and unique ledger before execution.",
+      "approval_scope": "The root reviewer approved the complete fixed 152-chain protocol after verifying all 46 bound evidence and software identities and the unchanged scientific fields. Execution is authorized only after the required immutable execution freeze; approved files remain unchanged during execution and progress/results are recorded externally in the registration-SHA ledger."
+    },
+    "approved_registration_sha256": "d0b2e97e5d768d772f14887ec87d9791f51a29ba610b545b30ba45f33cd22801"
+  },
+  "pressure_oracle": {
+    "status": "FULL_MATRIX_AND_INDEPENDENT_AUDIT_PASS",
+    "fixture": "tests/npt/artifacts/domain-dn/ber-fixture",
+    "jitter": {
+      "seed": 20261106,
+      "generator": "Python random.Random, independent uniform per atom and axis",
+      "amplitude_A": 0.01
+    },
+    "log_scale_centers": [
+      -0.008,
+      0.0,
+      0.008
+    ],
+    "h_log_scale": [
+      0.001,
+      0.0005
+    ],
+    "scales": [
+      -0.009,
+      -0.0085,
+      -0.008,
+      -0.0075,
+      -0.007,
+      -0.001,
+      -0.0005,
+      0.0,
+      0.0005,
+      0.001,
+      0.007,
+      0.0075,
+      0.008,
+      0.0085,
+      0.009
+    ],
+    "p1_off_repeats": 2,
+    "local_ranks": [
+      2,
+      4
+    ],
+    "backends": [
+      "HostStaged",
+      "CudaAware"
+    ],
+    "modes": [
+      "rebuild",
+      "affine"
+    ],
+    "fd_atol_GPa": 0.01,
+    "fd_rtol": 0.002,
+    "finite_difference_formula": "-dE/dln(scale)/(3V) = trace(W)/(3V)",
+    "reference_report": "artifacts/domain-npt/final-v1/pressure-jitter-reference/results.json",
+    "reference_report_sha256": "db663d5fc8dc8561d34943b18952d12c86caaf70885e4d5ab01a65be675b8716",
+    "full_report": "artifacts/domain-npt/final-v1/pressure/results.json",
+    "full_report_sha256": "0642e5f9408baf062c177dc1c523a1f8273f5937b729125ef67f13d1b231f7ec",
+    "independent_audit": "artifacts/domain-npt/final-v1/pressure-full-audit.json",
+    "independent_audit_sha256": "4d123540a14d4cfada750380b4508f7419c2a9acf232b243b4e1181df6eef135",
+    "basis": "Original symmetric crystal P1 finite difference failed; P1 jitter reference passed both steps at all three centers under unchanged threshold. Float descriptor and site-energy evaluation and high symmetry motivate jitter, not a rigorous float error bound. Original failure remains valid.",
+    "original_reference": "artifacts/domain-npt/final-v1/pressure-reference/results.json",
+    "statistics_authorized": true,
+    "local_finite_difference": "Each of 8 rank/backend/mode configurations independently checks all 6 center/h derivatives and pressure direction against the same fixed threshold",
+    "statistics_authorization_basis": "Authorization derives from all completed prerequisite acceptance gates and root approval of the complete registered protocol; execution still requires the immutable execution freeze. The pressure oracle alone does not authorize statistical sampling."
+  }
+}
