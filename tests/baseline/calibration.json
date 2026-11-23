@@ -74,7 +74,7 @@
   },
   "metadata": {
     "cuda_visible_devices": "0",
-    "executable": "/fdata/zhangyifei/zhangyifei/newmd/gpumd-reference/src/gpumd",
+    "executable": "../gpumd-reference/src/gpumd",
     "executable_sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414",
     "generated_utc": "2026-09-02T04:00:27.046042+00:00",
     "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Tue_May_27_02:21:03_PDT_2025\nCuda compilation tools, release 12.9, V12.9.86\nBuild cuda_12.9.r12.9/compiler.36037853_0",

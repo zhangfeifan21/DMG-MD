@@ -201,7 +201,7 @@ def restart_semantics_check(stage: Path) -> dict:
     if trajectory["natoms"] != restart["natoms"]:
         raise RuntimeError("restart/trajectory atom counts differ at the shared final snapshot")
     canonical_lattice = [format(float(value), ".6g") for value in trajectory["fields"]["Lattice"].split()]
-    restart_lattice_tokens = restart["fields"]["Lattice"].split()
+    restart_lattice_tokens = [format(float(value), ".6g") for value in restart["fields"]["Lattice"].split()]
     if canonical_lattice != restart_lattice_tokens:
         raise RuntimeError("restart Lattice is not the %g serialization of the final trajectory snapshot")
     def property_offsets(frame: dict) -> dict:
@@ -224,13 +224,13 @@ def restart_semantics_check(stage: Path) -> dict:
             if trow[0] != rrow[0]:
                 raise RuntimeError(f"trajectory/restart atom order differs at row {atom}")
             expected = [format(float(value), ".6g") for value in trow[start_t:start_t + width_t]]
-            actual = rrow[start_r:start_r + width_r]
+            actual = [format(float(value), ".6g") for value in rrow[start_r:start_r + width_r]]
             if expected != actual:
                 raise RuntimeError(f"restart {prop} is not the %g serialization at atom row {atom}: "
                                    f"expected {expected}, got {actual}")
     thermo_lat = thermo[9:18]
     return {"restart_matches_final_trajectory_snapshot": True,
-            "restart_format": "C %g, six significant digits",
+            "restart_format": "C %.17g (double precision), compared at .6g for trajectory consistency",
             "lattice_serialization": "exact .6g token match",
             "position_serialization": "exact .6g token match for every atom",
             "velocity_serialization": "exact .6g token match for every atom",

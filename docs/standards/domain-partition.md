@@ -1,43 +1,34 @@
 # 局部域分解普通步 NEP 分区与实验重叠
 
-类别：现行实验接口合同。默认关闭。O2 serial/verify 默认仍先完成 halo；O4 可显式将
-early 提交放在 begin 与 finish 之间，沿用同一默认 stream。
-方向于 2026-10-15 获维护者确认；本页保存已落地的闭包与缓存合同，
-剩余优化见[分阶段性能计划](../plans/communication-computation-overlap.md)。
-O2 证据见 [O2 状态](../status/validation/communication-computation-overlap.md#overlap-partition-20261015)，O4 范围与验收见
-[O4 状态](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)。
+局部域分解求力要用到其他 rank 的边界坐标。有些原子的两层邻居都由本 rank 负责，可以在收到新边界坐标前开始计算。分区（O2）找出这些原子和所需的辅助中心。串行分区先交换完坐标，再分两批求力。重叠调度（O4）借助 O3 的通信接口，在发起和完成交换之间提交第一批计算。两批计算沿用同一默认 CUDA 流。
+
+分区和重叠默认关闭。维护者于 2026-10-15 确认上述方向。[分区验收](../status/validation/communication-computation-overlap.md#overlap-partition-20261015) · [重叠验收](../status/validation/communication-computation-overlap.md#overlap-o4-20261016) · [后续工作](../plans/communication-computation-overlap.md)
 
 ## 选择与生命周期
 
-`DMGMD_DOMAIN_PARTITION=off|serial|verify`，默认 `off`；非法值或各 rank 配置不一致拒绝。
-overlap=off 时，`serial` 仅在 局部域分解普通步、全局 confirmed_reuse、本步 halo 已完成通信且 unpack 对默认
-stream 后续计算有序可见时生效。P=1/全量复制模式、段首 force、rebuild/迁移、空 interior/空 rank、
-未证明模型走原 full 同步路径。`verify` 使用相同分区，另执行同快照未分区 oracle 和 poison
-诊断，不能用于性能测量。支持范围为现有普通 NEP4/5、NEP-ZBL，`model_type=0`、无 B projection。
+用 `DMGMD_DOMAIN_PARTITION=off|serial|verify` 选择分区，默认 `off`。程序拒绝非法值或各 rank 配置不一致的作业。关闭重叠时，`serial` 只在采用局部域分解且全体 rank 确认复用缓存（`confirmed_reuse`）的普通步生效。本步通信须已完成，解包后的坐标须按默认流顺序对后续计算可见。
 
-O4 另选 `DMGMD_DOMAIN_OVERLAP=off|wait|poll`，默认 off。wait/poll 必须同时选择
-partition=serial 或 verify；非法值与 rank 不一致配置在调度前拒绝。verify+overlap 用于
-正确性，不用于成本测量。P1/全量复制记录同步 full fallback；局部域分解各 rank 按自身 I 选择 full/overlap。
-`DMGMD_OVERLAP_TRACE=0|1` 默认 0，启用要求 overlap 非 off；各 rank 必须一致。
+P1、全量复制模式、段首求力、重建或迁移步、没有内部中心或负责原子的 rank，以及未证明适用的模型，均走完整同步路径（`full`）。支持范围为普通 NEP4/5、NEP-ZBL，且 `model_type=0`、无 B projection。`verify` 使用同一分区，另在同快照跑未分区对照并检查故意填入的无效值（poison）。性能测量应关闭 `verify`。
 
-实验调度由 `DMGMD_DOMAIN_SCHEDULE=split|producer|producer-compact|producer-geometry` 选择，
-默认 `split`，非法值和 rank 不一致在数据面调度前拒绝。O8.5 增加 `producer`，O8.6 增加
-两条紧凑调度（见下节）。`producer` 是显式实验选择；partition=off 时仍执行完整
-full，P1/全量复制模式、setup/rebuild/迁移、空 interior/local 和未证明模型沿用原 fallback。
-`DMGMD_SCHEDULE_CONFIG` 保存实际选择，不能以请求开关代替实际拆分证据。
+用 `DMGMD_DOMAIN_OVERLAP=off|wait|poll` 启用重叠，默认 `off`。`wait` 和 `poll` 要求分区为 `serial` 或 `verify`。程序在调度前拒绝非法值和各 rank 不一致的配置。P1 和全量复制模式记录同步 `full` 回退。局部域分解的每个 rank 按各自的内部中心集合 I 选择完整计算或重叠。`DMGMD_OVERLAP_TRACE=0|1` 默认 `0`，只有开启重叠才能启用，且各 rank 必须一致。
 
-`NEP::compute_domain` 保留未选择的完整 局部域分解路径；可选 `DomainForceContext` 传入模式、
-ordinary 标志、本步编号和 halo_ready_step。runtime 在 `refresh_ghost_positions` 返回后
-发布本步 ready token；这是 MPI completion + O3 unpack event 物理完成的证明，不是单独用
-`refreshed_epoch` 推断本步完成。`DomainForceTicket` 只在一次 compute 内存在，绑定 step/call/key/halo generation，分别检查
-posted、early、matching halo-ready、late、finalize。prepare 的 owned-ready 不能授权读取 ghost；
-原 serial 的本步 ready 检查保留。runtime 经 `DomainForceContext` 注入 begin/finish/clear
-回调，finish 返回物理完成证明，NEP 不直接调用 MPI。workspace resize/重入 compute 拒绝；
-early 前与 finish 后检查 key 与输入/workspace/mask view，runtime 检查 layout/map/position。
-没有对外逃逸的异步 force ticket。通信接口见 [halo 生命周期](halo-lifecycle.md)。
+用 `DMGMD_DOMAIN_SCHEDULE=split|producer|producer-compact|producer-geometry` 选择每批计算的范围。默认 `split` 把中间量与最终力都分两批。`producer`（O8.5）只提前过滤邻居和生成部分中心的描述符。`producer-compact` 与 `producer-geometry`（O8.6）再把要生成中间量的中心收集到紧凑索引中。
 
-owned 为 O=[0,owned)，dependency 为 D=[0,owned+dep)，L=local_count。owned=0 时 D 为空。
-V 是未按 typewise cutoff 过滤、含 skin 带的实际完整 Verlet 行：
+非法值或各 rank 配置不同时，程序在开始调度前拒绝运行。关闭分区、P1、全量复制模式、初始化、重建、迁移、内部中心或本地槽位为空，以及未证明模型，都沿用 `full`。日志 `DMGMD_SCHEDULE_CONFIG` 记录实际选择。核验是否真的分批执行还需查看运行诊断。
+
+### 一次求力如何确认数据就绪
+
+未选择分区时，`NEP::compute_domain` 走完整的局部计算。使用分区时，运行时通过 `DomainForceContext` 传入模式、普通步标志、步号和 `halo_ready_step`。在串行路径中，`refresh_ghost_positions` 返回后才发布本步就绪凭证，依据是 MPI 请求和 CUDA 解包操作均已完成。缓存周期的 `refreshed_epoch` 单独不足以证明本步就绪。
+
+在重叠路径中，运行时经 `DomainForceContext` 注入发起、完成和清零的回调。NEP 通过回调推进，无需直接调用 MPI。`DomainForceTicket` 只在本次求力内存在，绑定 step、call、key 和 halo generation。它依次检查 posted、early、匹配的 halo-ready、late 及 finalize。准备阶段的 `owned-ready` 只允许读取负责原子，完成回调才提供读取边界副本所需的证明。串行仍检查本步就绪凭证。
+
+求力中拒绝工作区 resize 或重入。提交第一批计算前和完成通信后，检查缓存键及输入、工作区、掩码视图。运行时同时检查布局、映射和位置。求力凭证留在本次计算内。[halo 生命周期](halo-lifecycle.md)
+
+### 如何划分两批计算
+
+把最终需要计算力的负责原子记作 `O=[0,owned)`，把要计算中间量的负责原子和依赖副本记作 `D=[0,owned+dep)`。当 `owned=0` 时 D 为空。设 `L=local_count`，V 表示实际的完整 Verlet 邻居行。V 包含 skin 余量内的邻居，尚未按类型对截断半径（typewise cutoff）过滤。
+
+先找出邻居全部在 O 内的中心 S。若中心 i 及其邻居都在 S 内，i 的两层依赖都可以从本地原子取到，归入 I。其余最终力中心为 B。计算 I 的最终力还要准备中心 i 及其邻居的中间量，这些中心合称 E。D 中其余中间量到第二批计算，记作 H。
 
 ```
 S = {c in O | V(c) subset O}
@@ -45,9 +36,9 @@ I = {i in S | V(i) subset S}       B = O \ I
 E = union({i} union V(i), i in I)  H = D \ E
 ```
 
-分类只读 V/global ID，不读 ghost 坐标。GPU 先检查 count/capacity、slot 范围、自边和 gid
-严格行序，再生成 mask；非法结构失败退出，不回退到仍会越界的 full kernel。
-E 是 I 的辅助 producer 并集，属于 O；E\I 可以是最终 boundary 中心。
+分类只读 V 和全局 ID。GPU 检查邻居数与容量、槽位范围、自边以及 gid 是否严格按行排序，再生成掩码。非法邻居表会导致完整计算越界，因此一旦发现便退出。
+
+E 完全属于 O。E 中不在 I 的中心只提前计算中间量，其最终力仍归到第二批。
 
 ## 读写、布局与唯一性
 
@@ -71,10 +62,9 @@ radial→many_body→ZBL 的累加顺序。Fp/sums/有效 partial 每步由唯�
 无效 ELL 尾部的旧值，也不额外清零生产 workspace。反边仍逐步按 gid 查找本步 angular ordinal。
 ghost PE 只是 scratch，不积分、不归约/输出，ghost force/virial 无最终写入。
 
-O4 日程为：prepare（包括必要分类/分配）→begin（含 pack/source-ready/post）→clear once
-→early(E/I)→finish 或有限 progress 后 finish→物理 unpack→late(H/B)→finalize。
-主线程在 early enqueue 后立即进入 MPI；无新增 stream 或 progress thread。相同 stream
-使 H2D/unpack 排在 early 后；CudaAware output device sync 也会等待 early，不能据此删掉它。
+重叠调度在发出通信前完成分类和分配。程序打包坐标，等发送源就绪后发出通信请求，清零输出一次并提交第一批计算 E/I。主线程随后进入 MPI，可以直接完成通信，也可以先做有限次数的进度查询再完成。接收的数据实际解包到 ghost 槽位后，才执行第二批计算 H/B 并结束本次求力。
+
+现行调度沿用默认 CUDA 流和 MPI 初始化线程。H2D 和解包在同一流上排在第一批计算之后。`CudaAware` 保留接收后的设备同步，该同步也会等待第一批计算。
 
 ### O8.5 producer 调度
 
@@ -172,10 +162,9 @@ generation、workspace generation、O/D/L、CPU/float box 矩阵和 PBC。势参
 重建原 局部域分解cache/eligibility 或创建新实例，不能只替换 pointer 或绕过 runtime 的全局判定。
 缓存不是靠地址、capacity 或 shape 判断身份。
 
-O4 prepare 在任何 halo post 前执行：confirmed-reuse Neighbor 的非空中心分支不读取坐标；
-完整 V/gid 分类不消费 ghost。空 owned 的 neighbor reference 更新必须延至 finish 后。
-cache miss 分类的 GPU/D2H 等待及 mask 分配发生在 begin 前；cache hit 只检查 key。
-setup/rebuild/迁移保持同步 full，下一次普通步重新分类；冻结期不分配生产 workspace。
+重叠路径先准备分区，再发出边界交换。确认复用时，`Neighbor` 的非空中心分支无需读取坐标。分类只用完整 V 和 gid。负责原子为空时，邻居参考数据延至交换完成后更新。
+
+缓存未命中时，发起交换前完成 GPU 分类、D2H 等待和掩码分配。命中时只检查缓存键。初始化、重建与迁移仍走同步完整计算，下一次普通步重新分类。本次求力所用数据冻结后，工作区保持原样。
 
 只有全局 confirmed_reuse 且连续位移平方 ≤ skin²/4 才能复用；阈值等号与原代码一致。
 不从当前 R/A、陈旧 ghost 坐标或 geometric owner 扩大 I。小位移跨 slab/周期面时 manager
@@ -223,7 +212,7 @@ pipeline 各执行 early/late 一次，grid 仍为完整 owned/dependency 范围
 只作 trial 内统计。额外 launch API、分类、同步和 MPI 各自报告，不能与 GPU kernel
 时间相加来拼出整步墙钟。Nsight Compute 须记录 replay/cache/clock control；计数器
 不可用时微架构归因为 INCONCLUSIVE，不据寄存器数或阶段包络推断 cache/occupancy 瓶颈。
-采集、逐步匹配和离线重算入口见[benchmark 工具](../../tests/benchmark/README.md#o6-稳态-kernel-归因)。
+采集、逐步匹配和离线重算入口见[benchmark 工具](../../tests/benchmark/README.md#诊断入口)。
 
 ### O6.5 隔离快照重放
 
@@ -284,13 +273,9 @@ stage checkpoint 保存 schedule，禁止靠父 shell export 隐式选择。
 
 ## O4 诊断与调度成本
 
-wait：early enqueue 后一次 finish。poll：同位置最多 8 次 progress；观察 reusable 或收发
-均完成时提前退出，然后始终 finish，不忙等 CUDA。两者均在 MPI 初始化线程执行。
-`DMGMD_OVERLAP_CONFIG` 记录实际模式；`DMGMD_OVERLAP_SUMMARY` 每段累计真实 early 次数、
-progress 次数、finish 墙钟与线程 CPU 纳秒。finish 时间含剩余通信、可见性围栏、early 与
-unpack 等待，不能解释为纯网络时间；也不能当完整线程 CPU 利用率。O4 的旧
-`nep_device` 是包含 begin/halo/early/late 的 pipeline 包围区间，旧 halo 区间与它相交，
-不能相加当阶段总和；`halo_transfer_wait` 也可包含 early/可见性等待。
+提交第一批计算后，`wait` 直接调用一次 `finish`。`poll` 先调用至多 8 次 `progress`。观察到槽位可复用，或发送与接收均已结束时，提前退出查询，随后仍调用 `finish`。两者都在 MPI 初始化线程执行，且不会忙等 CUDA。
+
+`DMGMD_OVERLAP_CONFIG` 记录实际模式。`DMGMD_OVERLAP_SUMMARY` 每段累计第一批计算实际执行次数、查询次数、`finish` 墙钟和当前线程 CPU 纳秒。`finish` 含剩余通信、可见性同步、第一批计算和解包等待。应按调用成本解释。`nep_device` 覆盖发起交换、边界收发以及两批计算，和旧 halo 区间相交。`halo_transfer_wait` 也可能含第一批计算和可见性等待。
 
 `cumulative_calls` 只计真实 early；finish wall/CPU 则覆盖 overlap 请求模式下所有普通步
 的 halo 回调，包括空 interior/local 等 full fallback。poll 的最多 8 次上限是**每次

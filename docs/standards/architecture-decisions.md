@@ -1,81 +1,96 @@
 # 架构决策
 
-类别：现行标准。核对日期：2026-11-05。
+这里记录 DMG-MD 如何复现 GPUMD 的数值行为，以及每个 MPI 进程可以读写哪些原子。2026-11-20 核对时，程序仍按 D-010 选择并行模式。生产多卡改用 D-013 的规则，这项决策待实现。
 
-## D-001：仓库内复现数值核心
+<a id="d-001仓库内复现数值核心"></a>
+## 仓库内复现数值核心（D-001）
 
-GPUMD 锁定 `9d23496e41319b9e2af5221a7df6285387401d1e`。所需 tokenizer、Box、
-GPU_Vector、Neighbor、Potential、NEP loader/kernels 在 `src/gpumd_compat/` 内复现，
-命名空间为 gpumd_compat，头部记录 Origin 与裁剪说明。不编译、链接、include 或在 runtime
-调用 sibling reference；它只作只读审计/golden 源。NEP 数学、精度、累加和 launch 修改须
-连同 baseline/long_nve 验证，方向按 AGENTS 确认；分发遵守来源 GPLv3 许可证。
+DMG-MD 在 `src/gpumd_compat/` 内复现所需的 tokenizer、Box、GPU_Vector、Neighbor、Potential、NEP 加载器和 CUDA 核函数。代码使用 `gpumd_compat` 命名空间。文件头的 Origin 和裁剪说明指向 GPUMD 提交 `9d23496e41319b9e2af5221a7df6285387401d1e`。L20 短程 golden 使用的参考程序另见[兼容矩阵](compatibility-matrix.md)。
 
-原因：保留参考数值语义，同时消除构建对外部 checkout 的耦合。旧直接构建 reference 模式
-已于 2026-09-09 废除，历史由 Git 保存。
+仓库旁的 GPUMD 源码只供审计和生成 golden。DMG-MD 于 2026-09-09 停止直接构建参考代码。构建不得包含、编译或链接该目录的文件，运行时也不得调用其中的程序或库。旧构建方式保存在 Git 历史中。
 
-## D-002：身份、计数和权限分离
+改动 NEP 数学、精度、累加顺序或 kernel 启动参数前，按 AGENTS 的要求确认方向，并用 baseline 和 long_nve 验证。分发遵守源代码的 GPLv3 许可证。
 
-稳定 global_id 源自输入行号；global_count 只作元数据，local_count 是 SoA/ELL stride，
-capacity 仅为物理存储。全量复制reader owned_count=N，不代表 MPI 权威 owner；后者由 slab
-槽位集合决定。局部域分解以 local owned 前缀与 ghost 后缀表示权限，manager 可在 epoch 内暂时
-不同于 geometric owner。详见[布局](data-layout.md)与[缓存](cache-validity.md)。
+<a id="d-002身份计数和权限分离"></a>
+## 原子身份、数组长度和写入权限（D-002）
 
-## D-003：先解析再执行
+输入行号决定稳定身份 `global_id`。原子跨 rank 迁移时保留这个编号。`global_count` 记录全体系大小，`local_count` 决定本地 SoA 和 ELL 数组的分量步长，capacity 表示已分配的存储容量。
 
-每 rank 完整解析 run.in 为带来源位置的 typed IR，再读取 model、初始化 GPU 并执行。
-run/model/potential fingerprint 检查一致；当前不是 root-only parse/broadcast。
-未支持或未知命令在科学输出前报错，不增加 MPI 专用 run.in token。
+全量复制模式下，读取模型得到的 `owned_count=N` 只描述输入布局。各 rank 按空间分片（slab）对相应槽位负责。局部域分解模式把本 rank 负责的原子（owned）放在数组前部，邻居副本（ghost）放在后部。两次缓存重建之间，负责积分的进程可以与原子当前位置对应的进程不同。[数据布局](data-layout.md)、[缓存有效条件](cache-validity.md)
+
+<a id="d-003先解析再执行"></a>
+## 先解析完整输入再执行（D-003）
+
+每个 rank 先解析完整的 `run.in`，把命令、参数类型和来源位置存入中间表示（IR）。随后读取模型、初始化 GPU 并执行。各 rank 核对 run、model 和 potential 的指纹。当前各自解析输入，无须新增 MPI 专用的 `run.in` 关键字。遇到未知或未支持的命令，程序在写科学输出前报错。
 
 <a id="d-004--d-009-m1-保留完整-nep-scratch"></a>
-## D-004 / D-009：全量复制模式保留完整 NEP scratch
+<a id="d-004--d-009全量复制模式保留完整-nep-scratch"></a>
+## 全量复制模式保留全部 NEP 中间量（D-004、D-009）
 
-全量复制入口要求完整无 ghost 输入，每 rank 对全部 N 中心计算 ordinary NEP，只承认 owned
-积分/thermo/输出。仅设置 NEP N1/N2 为 owned 会缺邻居 Fp/反向 partial，不能据覆盖证明
-推导其数值完整。局部域分解用深位置 halo 重算依赖中心，独立提供 ghost-aware domain 入口。
+全量复制模式要求完整且没有 ghost 的输入。每个 rank 为全部 N 个中心计算普通 NEP。只有本 rank 的 owned 原子参与积分、热力学量统计和输出。
 
-## D-005：唯一物理贡献和兼容 I/O
+计算一个中心的力需要邻居的 `Fp` 和反向边的部分力。若只把 NEP 的 N1/N2 缩到 owned 范围，即使所有原子都有人负责积分，也会缺少求力所需的邻居数据。局部域分解模式有单独的 NEP 入口，交换足够深的邻域坐标，在本地重算这些中间量。
 
-积分、thermo、控温只用 owned。XYZ/restart gather 按 gid 恢复输入顺序，科学文件仅 root 写；
-ghost PE/virial 为 scratch。单位、virial 顺序、文件格式/触发步见[兼容矩阵](compatibility-matrix.md)。
-restart 只承诺保存字段及跨 rank 重建，不承诺未序列化 time/RNG/thermostat 的连续性。
+<a id="d-005唯一物理贡献和兼容-io"></a>
+## 每个原子只统计一次，输出恢复输入行序（D-005）
 
-## D-006：显式支持白名单
+每个原子只有一个进程负责积分、统计热力学量和控温。ghost 的势能和维里张量（virial）只作计算暂存。写 XYZ 和 restart 时，rank 0 收集 owned 原子，按全局 ID 恢复输入行序，然后写科学文件。[兼容矩阵](compatibility-matrix.md)列出单位、张量顺序、文件格式和输出步。
 
-当前验收支持普通 NEP4/5、NEP-ZBL、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`、各向同性正交全周期盒下的 `npt_ber`，以及有限统计范围内通过 G-B 的 `npt_scr`。NPT 仅走全量复制路径；SCR 统计限于 216 原子 NEP-C、300 K/0 GPa、单节点冻结矩阵，不外推到非 NEP、跨节点或普遍严格采样。其余白名单与输入/输出命令见[兼容矩阵](compatibility-matrix.md)；系综组合限制与状态语义见[系综标准](ensembles.md)及[NPT 验收矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)。未知与已知
-未支持项均明确 unsupported；多 potential 与 potential 方向参数拒绝，不能静默忽略。
+restart 可从保存的字段按新的 rank 数重建作业。时间、随机数生成器（RNG）和恒温器的内部状态没有写入文件。
 
-## D-007：单一数据与几何模型
+<a id="d-006显式支持白名单"></a>
+## 按已验收范围接受输入（D-006）
 
-旧 include/newmd、CPU CSR neighbor 和查询 GPU 的旧 executable 已删除，不保留第二套
-Atom/Box/neighbor。新增分布式编排围绕现有 compat kernel 做有证据的最小参数化。
+当前接受普通 NEP4/5 和 NEP-ZBL，运行 NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`，
+以及各向同性正交全周期盒下的 `npt_ber` 与 `npt_scr`。NPT 在 2026-11-04 的 G-B
+验收中使用全量复制，SCR 统计支持限于 216 原子 NEP-C 单节点冻结矩阵。
+2026-11-16 的独立局部实验又验收了 5760 原子 NEP4-C 冻结矩阵。当前仍默认全量复制。
+验收细则见[控压器标准](barostat.md)和[局部 NPT 标准](domain-npt.md)。
 
-## D-008：固定 Open MPI + UCX
+白名单和输入/输出见[兼容矩阵](compatibility-matrix.md)。多势与势的方向参数拒绝。
+已知未支持项及未知命令均报 `unsupported`，未知命令还标记 `unknown`。
 
-原生每个 shell source `../env/md-mpi.sh`；Docker entrypoint 加载内置脚本。CMake 与预检
-拒绝混栈，排除 HCOLL。HostStaged 默认；CudaAware 经 capability query、四类 device
-collective 和 p2p 数值自检才启用，数值自检不符回退。每 rank 一 GPU，以 UUID 去重；
-不能把 NEP_MULTIGPU 的单进程多设备编排当 MPI 层。
+<a id="d-007单一数据与几何模型"></a>
+## 只维护一套原子和几何数据模型（D-007）
+
+旧目录 `include/newmd`、CPU 的 CSR 邻居表和原先查询 GPU 的可执行文件都已删除。运行时共用同一套原子、盒和邻居数据结构。分布式实现只对兼容层核函数做有数值证据支持的参数化。
+
+<a id="d-008固定-open-mpi--ucx"></a>
+## 固定使用 Open MPI 和 UCX（D-008）
+
+原生环境的每个 shell 都需加载 `../env/md-mpi.sh`。Docker 入口加载镜像内的脚本。CMake 和运行前检查拒绝混用 MPI/UCX 软件栈，并排除 HCOLL。
+
+每个 rank 只控制一张 GPU，按设备 UUID 检查是否重复绑定。默认通信后端为 `HostStaged`。要用 `CudaAware`，先查询支持情况，再实测四类设备缓冲区集合通信和点对点传输。数值自检不匹配时回退。`NEP_MULTIGPU` 在单进程内操作多张设备，其设备管理方式不适用于 MPI。
 
 <a id="d-010-m1m2a-模式分派"></a>
 <a id="d-010-m1-m2a-模式分派"></a>
-## D-010：全量复制与局部域分解分派
+<a id="d-010全量复制与局部域分解分派"></a>
+## 当前程序如何选择并行模式（D-010）
 
-potential 参数仅加载一次、workspace 延迟分配。P1 恒走全量复制路径；P>1 的 NPT 输入优先强制走全量复制路径，不受几何 eligibility 影响。其他输入只有满足正交全周期、large-box 和 slab_width≥d_coord 条件才走局部域分解路径，否则在现有支持范围内回退到全量复制路径。P>1 triclinic/非周期仍拒绝。
-局部域分解采用保守两跳位置 halo，dependency 域重算 Fp/partial，最终 force 只写 owned；
-邻居行和反边按 gid，logical local_count 独立传入，空 rank 不访问 padding。
+每个 rank 只加载一次 NEP 参数，选定模式后才分配工作区。单 rank（P1）始终用全量复制模式。多 rank（P>1）要求正交盒且三个方向均周期。具备这些条件后，还须通过 NEP 大盒检查，且分片宽度满足 `slab_width≥d_coord`，才可进入局部域分解模式。
 
-两跳深度由实际 typewise 消费路径证明，不能用一个 nominal cutoff 猜测。初始 wrap 用共享
-device kernel，unwrapped 从 raw 输入播种；默认保留 kernel 算术和每中心顺序。
-实际协议见[MPI runtime](mpi-runtime.md)，分阶段中间场交换方案的剩余工作见[扩展计划](../plans/domain-decomposition.md)。
+在当前实现中，作业只要声明 NPT，默认就沿用 G-B 验收的全量复制模式。显式启用实验局部 NPT 时，程序才检查初始局部资格。启动时可以回退。一旦进入局部积分，候选盒失格时，所有 rank 都在提交前退出。[局部 NPT 标准](domain-npt.md)
 
-## D-011：通信按明确口径记账
+局部域分解模式交换两跳范围内的坐标。依赖中心在本地重算 `Fp` 和有向部分力，最终力只写 owned。程序按全局 ID 排序邻居行、查找反向边，单独传递逻辑长度 `local_count`。空 rank 跳过填充槽位。
 
-collective 的全局 input/output buffer 字节与每 rank halo/migration/control 类别分开。
-不将 MPI 实现 wire traffic、p2p staging 与既有 collective staging 混算。精确字段与
-call0/1000 记录以 MPI 标准和测试脚本为准，实测通过声明只放 status。
+两跳范围须按各类型对实际进入核函数的截断半径证明。初始坐标用共享的 GPU 核函数折回盒内，展开坐标从原始输入起算。默认沿用核函数的运算和每个中心的累加顺序。[MPI 标准](mpi-runtime.md)说明当前协议，尚未实现的分阶段中间场交换方案见[扩展计划](../plans/domain-decomposition.md)。
 
-## D-012：实验分区与生命周期不等于 overlap
+<a id="d-011通信按明确口径记账"></a>
+## 通信字节的统计范围（D-011）
 
-O2 分区默认 off，普通步按完整 Verlet 图闭包分配 producer/最终中心；O3 单槽位和显式
-request/event lease 保证物理完成。默认 begin 后立即 finish；O4 可显式在二者间提交独立 early，无 progress thread。
-合同见[分区](domain-partition.md)和[halo](halo-lifecycle.md)；O4 实现/验收见[报告](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)，O5 正式矩阵已于 2026-10-21 完成，见 [O5 报告](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)。
+集合通信统计全作业输入和输出缓冲区的字节数。各 rank 单独记录邻域、迁移和控制消息的字节数。MPI 在物理网络上传输了多少字节、点对点传输经过主机暂存的字节数，都不能加进集合通信的暂存计数。字段以及第 0/1000 次调用的记录以 MPI 标准和测试脚本为准。实测结果写入状态报告。
+
+<a id="d-012实验分区与生命周期不等于-overlap"></a>
+## 分区、通信缓冲区和重叠计算（D-012）
+
+普通步可按完整 Verlet 邻居图的依赖关系划分中间量计算和最终力中心（O2），默认关闭分区。邻域通信同一时刻只有一组请求在途。发送、接收和设备解包实际完成后，程序才能复用相应缓冲区（O3）。
+
+默认在开始交换后立即等待完成。显式启用重叠时，程序可以在开始与完成之间提交独立计算（O4）。该实现没有后台通信推进线程。[分区设计](domain-partition.md)、[邻域通信生命周期](halo-lifecycle.md)、[重叠验收](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)
+
+<a id="production-domain-routing"></a>
+<a id="d-013-单卡与生产多卡的分派"></a>
+## 待实现的生产多卡分派（D-013）
+
+2026-11-20 已决定生产版采用以下规则，代码仍按 D-010 运行。单卡可以运行全体系。用户请求多卡时，各进程必须在局部域为各自的原子求力。多卡复制整盒会重复全体系求力，只保留给内部对照。LJ/EAM 的首版通过单卡数值验收后，先开放单卡。
+
+生产版须在积分和写科学输出前检查整份输入、势和盒。多卡资格检查失败时，所有进程退出。诊断给出实际卡数、失败条件和可执行的单卡重跑命令。只有较少卡数也通过几何检查时才推荐该卡数。已进入局部运行后，候选盒失格也须在提交前一致终止。[试用任务与验收](../plans/dmg-md-v1.0-progress.md)

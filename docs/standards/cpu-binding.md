@@ -1,7 +1,8 @@
 # 单节点 MPI CPU/NUMA 启动与核验
 
-类别：启动工具合同。入口为 `scripts/launch_dmgmd.py` 与 benchmark 的一等 CPU 参数，
-共用 `scripts/cpu_binding.py`。不改变 MD 二进制、数学、通信或 `run.in`。
+单节点作业可以指定每个 MPI rank 使用的物理核心数，以及如何在 NUMA 节点之间分配。启动工具先根据可用资源生成分配方案，用 Open MPI 启动，再独立核对实际 CPU 和 GPU 绑定。
+
+直接启动用 `scripts/launch_dmgmd.py`。benchmark 提供同一套 CPU 参数。两处均调用 `scripts/cpu_binding.py`，沿用原 MD 二进制、计算、通信和 `run.in`。
 
 ## 策略
 
@@ -17,29 +18,23 @@
   只接受 localhost、本机 hostname 或 +n0；拒绝跨节点、socket:core 简写、缺/重复 rank、
   重复/不可用核心和共享核心。若同时指定 NUMA，必须一致。
 
-工具从 libhwloc XML 的 Core/PU 顺序取得逻辑 Core→OS CPU 集合，并从 sysfs 保存
-core/socket/NUMA。实际启动用 Open MPI rankfile；rank 内 wrapper 只检查，不重绑。
-本机系统 PMIx 的 `pmix_check_cli_option` 会把参数值内的连字符也当成分隔符，因此
-launcher 为保存的 rankfile 创建 `/tmp/dmgmd_binding_*/rankfile` 短路径别名，内容/哈希
-不变，并记录实际使用的路径。这不是降级映射；失败探测保留在 O5 产物。
+工具读取 libhwloc XML 的 Core/PU 顺序，把逻辑 Core 编号换成 OS CPU 集合，并从 sysfs 保存 core、socket 和 NUMA 的关系。Open MPI 按 rankfile 启动。每个 rank 内的 wrapper 检查实际绑定。
+
+本机 PMIx 的 `pmix_check_cli_option` 会把参数值内的连字符也当成分隔符。启动工具用 `/tmp/dmgmd_binding_*/rankfile` 作为短路径别名，保存实际路径、原内容和哈希。首次探测的失败留在 O5 产物里。
 
 启用固定策略时，拒绝另一个 map/bind/rankfile/CPU-list/oversubscribe/rank-order、host、
 rank 数、工作目录或相关 MCA 覆盖，包括继承的策略变量。普通 `--mpiexec-arg` 仍可传
 与绑定无关的参数；不设置 K 时保留旧入口。K 必须为正数。
 
-可用资源取当前 affinity、online CPU 与可见 cgroup cpuset 的交集；可见祖先 quota 的
-最小值必须 ≥P×K。controller 未委派、文件不存在时继承祖先限制；存在而不可读则拒绝。
-调度器须为单节点并有受限 CPU envelope，声明 CPU 预算不足或 allocation 模糊时拒绝。
-隐藏祖先与共享 quota 的独占性仍 UNKNOWN，不把容量上限当作保留资源。
+工具只在 CPU 亲和性（affinity）、在线 CPU 和可见 cgroup cpuset 的交集内分配核心。可见祖先中最小的 quota 必须 ≥P×K。controller 未委派且文件不存在时，沿用祖先限制。文件存在但不可读时，工具拒绝启动。
+
+调度器须给作业分配单个节点，并明确限制可用 CPU。声明的预算不足或分配范围不明时，工具拒绝启动。隐藏祖先的限制以及共享 quota 是否独占仍为 `UNKNOWN`。
 
 ## 核验与证据
 
-每 rank 在 exec 前注册 PID/start ticks、rank/local rank、namespace 和内存策略原始输出；
-exec 后独立观察器核对候选路径/SHA-256，并每 0.2 s 记录全部可观测 task 的 affinity。
-所有观测都必须等于 resolved plan；记录覆盖初始化至运行/退出期间的采样，不声称可排除
-两次观测间短暂变化。独立于 C1，CPU sampler=off 仍执行；短命进程少于两个 exec 后
-观测不作为绑定验收通过。实际 `DMGMD_MPI` 的 rank/size/host 和 GPU UUID 必须完整且唯一。
-O5 另核验 UUID 的逐 rank 顺序，不能只比较 GPU 集合。
+每个 rank 在 `exec` 前登记 PID、启动计数、rank/local rank、namespace 和内存策略原始输出。切换到候选程序后，独立观察器核对程序路径与 SHA-256，每 0.2 s 记录所有可见线程（task）的 affinity。每次记录都须与解析出的绑定方案完全一致。观测覆盖初始化、运行和退出期间，采样间隔内发生的短暂更改可能看不到。
+
+即使关闭 C1 CPU 采样，启动器仍执行上述核验。候选进程短到在 `exec` 后少于两次观测时，绑定不计为通过。工具检查实际 `DMGMD_MPI` 记录的 rank、size、host 和 GPU UUID 是否完整，rank 与 UUID 是否唯一。O5 进一步按 rank 核对 UUID 的顺序。
 
 另每 2 s 保存可见祖先的 quota/cpuset 与 cpu.stat 原文，资源限制变化使该 trial 无效。
 当前单机验收要求 rank 与解析计划处于同一 cgroup；不同的 scheduler step cgroup 尚未
@@ -51,11 +46,7 @@ O5 另核验 UUID 的逐 rank 顺序，不能只比较 GPU 集合。
 
 ## 当前边界
 
-原生 Linux、单机同 namespace、Open MPI 5；DMG-MD 启动与 benchmark 已接线。纯 CPU
-策略测试及实际 GPU 验收范围见 [O5 报告](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)。
-策略生成和观察器可以复用到其他 MPI 程序；LAMMPS 接线未在本轮验收，GPUMD 的合计
-P×K CPU 集合入口尚未实施，benchmark 对其固定绑定请求明确拒绝。不把这些未验收面
-或三引擎正式矩阵写成完成。跨节点、任意调度器和内存页放置另行验收。
+当前范围为原生 Linux、单节点、相同 namespace 和 Open MPI 5，支持 DMG-MD 直接启动及 benchmark。其他 MPI 程序可以复用绑定方案生成和观察工具。LAMMPS 接入尚未验收，GPUMD 的合计 P×K CPU 集合入口仍待实现，benchmark 会拒绝对 GPUMD 的固定绑定请求。三引擎正式矩阵、跨节点、其他调度器和内存页放置另行验收。[跨引擎绑定计划](../plans/mpi-cpu-binding.md)
 
 Open MPI 的逻辑 Core rankfile 语义以[5.0.10 官方手册](https://docs.open-mpi.org/en/v5.0.10/man-openmpi/man1/mpirun.1.html#rankfiles)为依据，
 实际映射以 `/proc` 与 sysfs 的证据为准。

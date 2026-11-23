@@ -65,10 +65,10 @@ def validate_outputs(stage, expected_steps, time_step_fs=0.25):
             raise ValueError(f'wrong trajectory time at frame {index}')
     final, last_restart = frames[-1], restart[0]
     # restart.xyz contains no time; verify that it represents the snapshot at
-    # the expected final simulation time via the file's %g serialization.
+    # the expected final simulation time via the file's %.17g serialization (compared at .6g).
     if abs(float(final['fields']['Time']) - time_step_fs * expected_steps) > 1e-7:
         raise ValueError('last trajectory time is not the end of the run')
-    if [format(float(x), '.6g') for x in final['fields']['Lattice'].split()] != last_restart['fields']['Lattice'].split():
+    if [format(float(x), '.6g') for x in final['fields']['Lattice'].split()] != [format(float(x), '.6g') for x in last_restart['fields']['Lattice'].split()]:
         raise ValueError('restart lattice differs from final snapshot')
     for prop in ('pos', 'vel'):
         def offset(frame):
@@ -78,7 +78,7 @@ def validate_outputs(stage, expected_steps, time_step_fs=0.25):
         right, restart_width = offset(last_restart)
         if width != restart_width: raise ValueError('restart property width mismatch')
         for a, b in zip(final['rows'], last_restart['rows']):
-            if a[0] != b[0] or [format(float(x), '.6g') for x in a[left:left+width]] != b[right:right+width]:
+            if a[0] != b[0] or [format(float(x), '.6g') for x in a[left:left+width]] != [format(float(x), '.6g') for x in b[right:right+width]]:
                 raise ValueError(f'restart {prop} differs from final snapshot')
     return {'thermo_rows': rows, 'trajectory_frames': len(frames),
             'last_time_fs': float(final['fields']['Time']), 'restart_matches_final': True}

@@ -1,8 +1,10 @@
 # NPT SCR 独立确认注册
 
+公开的[参数副本](independent-confirmation-manifest.json)以源码仓库为工作目录，将参考程序位置写成相对路径。物理参数、种子、算法、可执行文件身份及输出规则沿用原注册。公开副本 SHA-256 为 `327d2298117cc6816a6f1e90066e8f04e62bac09d9dfa66482a660d49db96f8c`；核验原批次的 freeze 时使用原始注册及协议。
+
 **状态：APPROVED_INDEPENDENT_CONFIRMATION。** 本独立确认方案已由 root 于 2026-11-03 约 07:33 UTC 批准，适用于原 B3 矩阵完成且保留原结论为 INCONCLUSIVE 后的确认。新采样须严格使用本文件与唯一 manifest；GPU 作业需在 b0 生成正式 plan/ledger、b1 生成正式 execution freeze，并由 root 核验该 freeze 后启动。该注册批准不替代 execution freeze 核验。
 
-机器参数在 [independent-confirmation-manifest.json](independent-confirmation-manifest.json)；SHA-256：`aa9d1f9ae2cabbb174fa8fb30b0798edb5f9035541763d2c7f7f6b44d3fc1580`。该 manifest 标记 `APPROVED_INDEPENDENT_CONFIRMATION` 且 `sampling_authorized=true`；具体 GPU 作业仍须等待正式 execution freeze 经 root 核验。
+原始冻结注册的 SHA-256 为 `aa9d1f9ae2cabbb174fa8fb30b0798edb5f9035541763d2c7f7f6b44d3fc1580`。该 manifest 标记 `APPROVED_INDEPENDENT_CONFIRMATION` 且 `sampling_authorized=true`；具体 GPU 作业仍须等待正式 execution freeze 经 root 核验。
 
 ## 研究设计
 

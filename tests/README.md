@@ -1,24 +1,30 @@
 # 测试目录总览
 
-本页说明测试源码、执行入口和验收范围。各子目录 README 记录各自的运行方法与证据要求；普通测试的 CMake target 与 CTest 注册集中在 [`tests/CMakeLists.txt`](CMakeLists.txt)。
+## 选择要验证的行为
 
-## 目录职责
+| 任务 | 入口 |
+| --- | --- |
+| 检查解析、系综控制、空间所有权与域布局 | [C++ 单元测试](unit/) |
+| 检查邻居关系和其他 CUDA 设备端计算 | [GPU 单元测试](gpu/) |
+| 核对单卡输入、物理量、输出和重启是否与普通 GPUMD 一致 | [短程 golden](baseline/README.md) |
+| 查多卡迁移、边界交换、通信后端和实际数据分区 | [MPI 验收](mpi/README.md) |
+| 验证 NHC 或 BDP 恒温器的计算、采样和重启 | [恒温器验收](thermostats/README.md) |
+| 验证 Berendsen/SCR 控压、压力、统计性质或局部变盒 | [NPT 验收](npt/README.md) |
+| 检查长期守恒、Berendsen NVT 与跨进程数重启 | [长程验收](long_nve/README.md) |
+| 对比 GPUMD、LAMMPS/MatPL 与 DMG-MD 同构型的能量、力和 virial | [跨引擎静态对照](lammps_reference/README.md) |
+| 测量 NVE 耗时或定位开销 | [性能与诊断工具](benchmark/README.md) |
 
-- [`unit/`](unit/)：小型 C++ 单元测试，验证解析、系综控制、空间所有权与域布局等基础逻辑。
-- [`gpu/`](gpu/)：需要 CUDA 设备的 GPU 测试，例如邻居关系与设备端计算路径。
-- [`mpi/`](mpi/README.md)：MPI 生命周期、halo、通信后端和集成验证脚本；需按具体测试要求提供 MPI ranks 与 GPU。
-- [`thermostats/`](thermostats/README.md)：NHC/BDP 等恒温器及系综的定向验收。
-- [`benchmark/`](benchmark/README.md)：基准测试、性能诊断、采样和优化实验工具。
-- [`baseline/`](baseline/README.md)：单 GPU golden 基线与差分验证。
-- [`long_nve/`](long_nve/README.md)：长程 NVE/NVT、restart 等长时间正确性验收。
-- [`npt/`](npt/README.md)：NPT预注册输入、统计器与Berendsen/SCR/GPU集成验收；2026-11-04独立确认及B0–B4/G-B在所列范围PASS，见[最终结果](../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
-- [`lammps_reference/`](lammps_reference/README.md)：与锁定 LAMMPS reference 的输入、静态物理量和 smoke 对照。
+<a id="目录职责"></a>
 
-Python 脚本负责准备 fixture、调度 MPI/GPU 作业、比较输出及整理证据。独立 C++/CUDA 单测编译后可由 CTest 调用，也可直接运行；共享 probe 编译为库供测试驱动使用，MPI 集成测试由 Python 驱动完成环境门槛检查后启动。普通测试的 target 仍由 `tests/CMakeLists.txt` 集中定义，产物位于 `build/tests/`。O65 replay 是例外：根 CMake 在显式设置 `-DDMGMD_ENABLE_O65_DIAGNOSTICS=ON` 时构建 `build/dmgmd-o65-replay`，它不属于普通 CTest。
+## 测试怎样组织
+
+[tests/CMakeLists.txt](CMakeLists.txt) 注册常规 CTest 项，产物在 `build/tests/`。你也可以直接执行独立 C++ 或 CUDA 测试程序。Python 驱动负责生成输入、启动 MPI 作业、比较结果和保存证据。部分驱动还会加载编译好的探针库。并行测试用词见[术语表](../GLOSSARY.md)。
+
+O65 回放需要在根 CMake 增加 `-DDMGMD_ENABLE_O65_DIAGNOSTICS=ON`，产物是 `build/dmgmd-o65-replay`。此程序由诊断流程单独调用。
 
 ## 常规构建与 CTest
 
-在仓库根目录使用项目 MPI/CUDA 环境入口：
+在仓库根目录执行。实验室维护环境由 `../env/md-mpi.sh` 加载。普通账号使用站点提供的等价环境，具体步骤见[部署手册](../docs/operations/deployment.md)。
 
 ```bash
 source ../env/md-mpi.sh
@@ -27,6 +33,6 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-配置和构建仍要求可用的 CUDA 编译器/Toolkit 与 MPI 安装，即使当前只运行 CPU-only 测试。含 GPU 的测试要求可见且可用的 GPU；MPI 集成测试还要求其指定的 rank 数、MPI 启动器及每 rank GPU 条件满足。可用四卡环境按 MPI README 执行 GPU 环境预检：`python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4`。具体门槛以各子目录说明和脚本预检为准。
+配置与构建都需要 CUDA Toolkit 和 MPI，即使只运行 CPU 测试。GPU 测试还需要当前作业可访问设备。专项 MPI 测试应先按脚本要求做[设备和通信预检](mpi/README.md)。单 rank 通过预检后，可以开始单卡对照。多 rank 验收按对应矩阵检查 GPU 绑定和通信，再运行数值比较。
 
-CTest 只覆盖已注册的测试集合，不等于完整 MPI 矩阵、golden differential、长程正确性或性能验收。任何因环境、设备或前置条件跳过的测试都应记录为 skip/未执行，不能计作通过；相关验收应使用对应子目录脚本并保留其要求的原始证据。
+CTest 覆盖已注册的测试。完整 MPI 矩阵、golden 差分、长程与性能检查分别使用上表的入口。提交验收结果时记录跳过项、实际运行的进程数和后端，并保留对应脚本要求的证据。NPT 的 2026-11-04 独立确认及 B0–B4/G-B 的通过范围见[数值验收记录](../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)。

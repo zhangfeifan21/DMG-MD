@@ -2,17 +2,13 @@
 
 类别：现行标准及充分条件证明。核对日期：2026-10-23。
 
-本页描述默认固定盒路径。默认关闭的局部 NPT 变盒事务、参考盒度量与独立 generation 合同见[局部 NPT](domain-npt.md)；实验路径的验证范围见[DN 验证记录](../status/validation/domain-npt-validation.md)。
+固定盒局部域分解在普通步保留原子槽位、边界成员和 Verlet 邻居表，仅刷新边界副本的位置。每个 rank 检查本地原子的累计位移，全体 rank 共同决定何时重建。变盒时有额外约束，适用于默认关闭的局部 NPT 实验路径。[变盒与参考盒度量](domain-npt.md) · [局部 NPT 验证](../status/validation/domain-npt-validation.md)
 
-实现入口：`src/domain_runtime.cu` 的 `DomainState`、`inspect_domain_cache` 与
-`run_domain_segment`。Neighbor 接受已决议的 reuse/rebuild action。每步协议/计时见
-[MPI runtime](mpi-runtime.md)，布局见[data-layout](data-layout.md)，实施实测见
-[第二阶段报告](../status/performance/stage2-cost-report.md)。
+`src/domain_runtime.cu` 的 `DomainState` 保存状态。`inspect_domain_cache` 检查位移，`run_domain_segment` 汇总判定。`Neighbor` 按已经确定的复用或重建动作执行。[每步顺序与计时](mpi-runtime.md) · [数据布局](data-layout.md)
 
 ## 身份与失效
 
-`manager_owner` 为 epoch 内唯一积分、thermo 与输出 owner；`geometric_owner` 由当前位置
-决定，只用于下一次 rebuild 路由。微小跨 slab/周期面不立即迁移。
+两次重建之间称为一个缓存周期（cache epoch）。每个原子的管理归属（manager owner，`manager_owner`）在整个周期内负责积分、归约热力学量和提供输出记录。当前位置所在的条带给出几何归属（geometric owner，`geometric_owner`）。原子稍微跨过条带或周期面时，原 rank 仍负责积分。到下一次重建才使用几何归属确定迁移目的地。
 
 | 对象 | 复用条件 | 失效条件 |
 | --- | --- | --- |
@@ -22,15 +18,13 @@
 | descriptor/Fp/partial/force | 仅本次 force call 有效 | 每步重算，不跨步复用 |
 | device views | pointer 与 logical stride 有效 | resize/扩容后重新取 view；capacity 不是版本 |
 
-local slot 不是持久身份。map/layout epoch 必须匹配；同 epoch 的不同时间步还需本步 halo
-完成证明。O3 物理 unpack、O4 owned-ready/halo-ready 与 force ticket 见[halo](halo-lifecycle.md)及[分区](domain-partition.md)。
+原子迁移后，本地槽位可以改变，原子全局 ID 保持稳定。通信映射和布局必须属于同一次重建。每一步还要确认本步收到的位置已写入 ghost 槽位。通信接口（O3）记录解包完成，重叠调度（O4）使用 `owned-ready`、`halo-ready` 和求力票据分别约束不同阶段能读的数据。[通信生命周期](halo-lifecycle.md) · [分区与重叠](domain-partition.md)
 
 ## 连续位移与两跳闭包
 
-令 q 为 epoch 参考位置，Δ 为沿真实积分/wrap 历史累计的位移，δ=max|Δ|，只检查唯一
-manager copy。VV1 在 wrap 前累计，rebuild 提交后清零；不得用两个 wrapped 坐标的一次 MIC
-差代替。普通步要求 δ≤skin/2，等号复用；非有限、连续性无法证明或超出现行单次 wrap
-能力的单步位移在 halo/force 前全 rank 报错。
+位移要沿真实运动路径累计，才能记录原子跨过周期边界的距离。令 q 为缓存周期的参考位置，Δ 为累计位移，`δ=max|Δ|`。每个原子只用管理归属上的副本参与计算。VV1 在折回坐标前累计位移，重建提交后清零。用两个折回盒内的坐标取一次最小镜像（MIC）会丢失部分历史。
+
+固定盒普通步要求 `δ≤skin/2`，恰好等于阈值时仍复用。若位移非有限、无法证明连续性，或单步越界超出一次折回的能力，全体 rank 在交换边界和求力前报错。
 
 对当前作用边 i–j：
 
@@ -51,30 +45,24 @@ d_dep   = max R_force + skin
 d_coord = max_(ti,tj,tk)(R_force(ti,tj) + R_dep(tj,tk)) + 2*skin
 ```
 
-这是保守逐边充分界。跨 MIC image 的更紧端点界尚无当前单-slot ghost 表示下的证明，不能
-据此缩 halo。半径须按 radial-first/angular/ZBL 实际消费路径及 float pair-average 舍入取上界，
-无法证明时 dispatcher 回退到全量复制模式。
+上述公式给两跳路径的每条边分别取保守上界。当前每个全局 ID 只有一个副本槽位。若要用更紧的端点界缩小边界范围，还需证明它能覆盖跨最小镜像的路径。半径上界按径向表先筛选、角向表和 ZBL 的实际读入路径确定，并计入 float 类型对平均的舍入。无法证明上界时，当前分派回退到全量复制模式。
 
-rebuild 用参考位置建立左右 send members，eligibility 要求 slab_width≥d_coord。
-普通步刷新固定成员，不重新 band-test；P2 同 peer 按现有 plan 去重。位移界、manager/key
-不变和每步刷新共同保证安全，单有半径公式不够。
+重建时，程序用参考位置为左右两面选出要发送的副本，局部域分解要求 `slab_width≥d_coord`。普通步只更新已有成员的坐标。P2 两面可能面对同一 rank，沿现有计划去重。安全复用还要求满足位移界、管理归属和缓存键保持一致，以及每步完成边界刷新。
 
 ## 全 rank 决议与提交
 
-VV1/wrap 后检查 owned 位移与 reason。各 rank 对有限非负的局部最大位移平方做
+速度 Verlet 的第一半步更新位置。位置折回盒内后，各 rank 检查负责原子的位移与本地失效原因。对有限非负的局部最大位移平方做
 `m_rank > 0.25*skin*skin` 的严格比较，将超限位与 routing/continuity-invalid 位合并，
 只经一次 uint32 reason OR 得到一致 action；不再对缓存位移做 double MAX。
 空 owned rank 贡献零，仍参加 OR；等号复用。非有限平方不进入局部最大值，只置
 invalid 位，OR 后优先 fatal，再判断 rebuild。未决议禁止 halo/NEP，Neighbor 不再做
-第二次位移检查。有限值的 `max(m_rank)>h ⇔ OR(m_rank>h)` 证明与错误/阈值/空 rank
-及实际调用次数验收见 [O7](../status/performance/cache-reduction-results.md#o7-results-20261023-report)。
+第二次位移检查。有限值的 `max(m_rank)>h ⇔ OR(m_rank>h)` 保证各进程得到同一决议。
 
-- reuse：manager/layout/membership/map/Verlet 固定，只刷新 ghost position。
-- rebuild：下载 dynamics，direct Alltoall count/Alltoallv 路由至最终 geometric owner；
-  无 owner 变化时仍重建 membership/layout/map/neighbor。校验后上传、重置位移并一致发布
-  epoch，失败不消费半提交缓存。
-- 迁移含 gid、type、mass、charge、group、wrapped position、half-step velocity 和可选 unwrapped，
-  不传旧 force/PE/virial。
+判定复用时，沿已保存的映射刷新 ghost 坐标。负责 rank、槽位、ghost 成员及 Verlet 邻居表保持原样。
+
+判定重建时，先下载动力学字段。如有原子迁移，用 `Alltoall` 交换计数，再用 `Alltoallv` 直接把原子记录发给最终的几何归属 rank。记录包含 gid、类型、质量、电荷、组、折回盒内的位置、半步速度和可选的展开坐标（unwrapped）。旧力、势能（PE）和 virial 不随迁移发送。
+
+即使没有原子迁移，也要重建边界成员、布局、通信映射和邻居表。新数据通过校验后才上传。各 rank 清零累计位移，统一发布重建版本（epoch）。校验失败时终止，避免后续使用只完成了一部分的缓存。
 
 连续 run 保留 epoch/rows，段首兼容 force 仍执行，不因段界强制重建。restart 不保存缓存，
 新进程按输入行号和新 rank 数 bootstrap。
@@ -86,7 +74,6 @@ CPU layout、CUDA neighbor 与 MPI domain runner 覆盖阈值、micro-crossings�
 O2 另用 Verlet/workspace generation 防同 epoch 新 rows、同 shape 新身份误复用。
 全表 debug 每步不变量断言未实现；剩余边界见[风险登记](../plans/risk-and-backlog.md)。
 
-O4 force 冻结期从 graph-only prepare 至 finalize：cache miss 的 mask 分配/分类/D2H 在
-begin 前完成；owned-ready 只授权 E/I。halo generation 与本次 step/key 绑定，finish
-物理 unpack 后才能授权 H/B；workspace resize 与重入被拒绝。普通步不按 stale ghost
-重新分类，skin 内完整旧 V 的闭包与连续位移判据仍是唯一 interior 证明。
+重叠求力从准备邻居图到结束本次求力期间冻结所用数据。缓存未命中时，掩码分配、分类和 D2H 都在发起交换前完成。本地原子就绪（`owned-ready`）只授权第一批 E/I 计算。边界交换版本与步号和缓存键匹配，且解包完成后，才可计算 H/B。此期间拒绝工作区 resize 或重新进入求力。
+
+普通步始终用含 skin 的完整旧 Verlet 邻接图和连续位移判据证明内部中心的依赖闭合。上一步的边界坐标不能用来重新分类。

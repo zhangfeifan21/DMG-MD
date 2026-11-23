@@ -1,7 +1,6 @@
 # 局部域分解 thermo 消费与执行合同
 
-类别：现行 runtime 合同。适用于 `src/domain_runtime.cu::run_domain_segment`。
-全量复制模式与P1 仍走 `src/runtime.cu::run_segment` 的每步 thermo 路径。
+局部域分解模式的 NVE 只在需要写热力学量或 XYZ 时计算本步温度、能量和应力。NVT 与 NPT 每步都需要反馈，因此每步计算。局部路径由 `src/domain_runtime.cu` 的 `run_domain_segment` 执行。全量复制模式（包括 P1）沿用 `src/runtime.cu` 的 `run_segment`，每步计算。
 
 ## 消费者与步号
 
@@ -20,22 +19,13 @@
 | 段首 force、段末同步/计时、neighbor 输出 | 各自的 force/cache、CUDA readiness 或 occupancy 数据 | 不消费 thermo |
 | 多 run/restart | 每段 measurement 列表在 run 后清空；ensemble 保留；restart 重新 bootstrap | 按新段的消费者重新判断；没有隐含的段末 thermo |
 
-当前只允许 **NVE** 跳过。每个 rank 从同一已解析 ensemble 和 measurement 列表独立得到
-相同布尔值，不读取本地 owned 数量或 root 身份来决定是否参加 collective。
-多个 thermo/XYZ 消费者取步号并集，同一步只计算一次；不足一个输出周期的尾段不增加输出。
-非 NVE 一律保留每步计算，不能通过弱耦合条件删除 NVT 的温度反馈。
+上述判断只对 NVE 生效。每个 rank 根据同一份已解析的系综与输出列表独立作出相同决定，空 rank 和根 rank 遵守同一规则。若一个步号同时要写热力学量和 XYZ，只计算一次。尾段不足一个输出周期时不追加输出。即使耦合很弱，NVT 仍按每步反馈。
 
 ## 数值、所有权与就绪
 
-有需求时，仍在本步 owned VV2 后、thermostat 和 formatter 前执行原
-`compute_domain_thermo`：owned sums、8-double SUM、相同归一化和 D2H。
-owned/ghost 权限、SoA stride、所有浮点表达式及累加顺序不变。
-XYZ 的 energy/stress 来自本步计算；restart 保留原来的 snapshot 与写出步号。
+需要热力学量时，程序先对负责原子完成速度 Verlet 第二半步（VV2），再执行 `compute_domain_thermo`，最后运行恒温器和输出。计算只累加负责原子的贡献，对 8 个 double 做 SUM 归约，按已有公式归一化并将结果拷回主机（D2H）。原子读写权限、SoA 跨度、浮点表达式和累加顺序沿用现有实现。XYZ 写本步算出的 energy/stress，restart 沿用原快照和写出步号。
 
-每步新建空的 `optional<ThermoState>`；仅有需求时赋值，所有 formatter 和 NVT
-消费者通过 `value()` 读取。因此没有跨步或跨段的旧值缓存，也不会把默认零当作有效 thermo。
-NVE 无需求时同时跳过 sums kernel、SUM、normalization kernel 及结果 D2H，保留所有
-积分、NEP、halo、cache、重建、迁移和原请求输出。
+每步创建一个空的 `optional<ThermoState>`，只在实际计算时赋值。输出和 NVT 控制器通过 `value()` 取得本步数据。局部 NVE 无需求时，跳过局部求和内核、全局 SUM、归一化内核和结果 D2H。积分、NEP 求力、边界交换、缓存操作、重建迁移和已请求的输出仍照常执行。
 
 删除辅助 D2H 不引入新的生产等待。VV2 后的下一步 GPU 工作仍在原 stream 排序；
 cache 检查、通信、snapshot 及原有段末 device synchronization 保留各自就绪职责。
@@ -43,10 +33,7 @@ cache 检查、通信、snapshot 及原有段末 device synchronization 保留�
 
 ## 通信与诊断
 
-除 adaptive timestep、neighbor 周期记录、输出及重建/迁移的额外通信外，普通步总是执行
-一次 4P-byte reason OR；有 thermo 需求才再执行一次 64P-byte SUM。MPI 逻辑 input/output
-各为 `4P + 64P * needs_thermo` bytes，collective 次数为 `1 + needs_thermo`。
-HostStaged 对 thermo 的额外 staging D2H/H2D 同样只在有需求时发生。
+普通步总要用一次原因按位或归约确认缓存决议（4P B，P 为 rank 数）。需要热力学量时，再做一次 SUM 归约（64P B）。MPI 逻辑输入和输出各为 `4P + 64P * needs_thermo` B，集合调用次数为 `1 + needs_thermo`。自适应时间步、邻居周期记录、输出、重建和迁移的额外通信另计。`HostStaged` 也只在计算热力学量时增加相应的 D2H/H2D 拷贝。
 
 `DMGMD_DOMAIN_SUMMARY` 的 `thermo_steps`/`thermo_skipped_steps` 是每 rank、每段的
 实际计算/跳过次数。它们不新增 collective，不代替独立 PMPI 调用计数验收。
@@ -68,4 +55,4 @@ trace 的 `thermo_end_ns` 表示需求判断/可选计算的 host 结束边界�
 以及 full/serial/wait/poll、详细计时、P1/全量复制回退路径。
 `tests/mpi/run_mpi_domain.py` 的逐步通信 oracle 按消费者步号精确记账；golden 和 long-NVE
 容差仍由原 manifest 管理。运行方式见 [MPI README](../../tests/mpi/README.md) 与
-[O8 benchmark](../../tests/benchmark/README.md#o8-按需-nve-thermo)。
+[O8 benchmark](../../tests/benchmark/README.md#诊断入口)。

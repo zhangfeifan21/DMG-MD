@@ -2,156 +2,45 @@
 
 ## 项目定位
 
-本仓库开发 **DMG-MD**（Distributed Multi-GPU Molecular Dynamics Runtime）。目标是一 MPI rank 对应一张 GPU 的多节点、多 GPU 经典分子动力学 runtime。
+本仓库开发 DMG-MD（Distributed Multi-GPU Molecular Dynamics Runtime），目标是支持多节点、多 GPU 的经典分子动力学。每个 MPI rank 只控制一张 GPU，默认用中文汇报。
 
-面向用户的兼容目标是：继续直接读取 GPUMD 的 `model.xyz`、potential 文件和 `run.in`，按阶段扩展已验证的势与系综。对已经声明支持的功能，输入语法、默认值、单位、校验、输出文件名、输出列及物理语义以锁定 GPUMD 参考版本和现行兼容矩阵为准；有意兼容偏离（如 BDP 固定默认 seed）必须在标准中明确记录并验证。对未支持命令必须识别并报出明确的 `unsupported` 错误，不得静默忽略。
+## 开始任务前
 
-项目已进入 **v1.0 正式版开发**，主线由
-[开发流程](docs/plans/dmg-md-v1.0-development-workflow.md)管理，逐 Step 状态与证据见
-[开发进度](docs/plans/dmg-md-v1.0-progress.md)。必须区分发布目标与当前实现，不能将
-旧 NEP/NVE/基础 NVT 原型范围当作后续开发上限，也不能将计划功能写成已经支持。
+先读[当前状态](docs/status/current.md)和[开发进度](docs/plans/dmg-md-v1.0-progress.md)，核对当前实现、已有证据和待办。正式版范围见[开发与发布验收](docs/plans/dmg-md-v1.0-development-workflow.md)。当前工作仍包括 V1.0 开发，旧 NEP/NVE/基础 NVT 原型不限制后续目标；计划能力也不能写成已支持。
 
-v1.0 的 P0 发布目标：
+兼容目标是直接读取 GPUMD 的 `model.xyz`、势文件和 `run.in`。已声明支持的功能，其语法、默认值、单位、校验、输出文件名、列和物理语义，以锁定参考版本及[兼容矩阵](docs/standards/compatibility-matrix.md)为准。有意偏离须在标准中记录并验证，例如 BDP 的固定默认 seed。未支持的命令必须报明确的 `unsupported` 错误，不能静默忽略。
 
-- 普通经典 MD，单 bead；NEP4/5/NEP-ZBL、LJ、EAM/alloy；
-- `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp`、`npt_ber`、`npt_scr`；
-- 全量复制模式覆盖上述势与六种系综；NPT 限各向同性、正交全周期盒；局部域分解模式限 NEP 的 NVE 与三种 NVT；
-- 版本/CLI、错误与 restart 合同、用户文档、许可证与第三方声明、性能回归、打包和发布验收。
+## V1.0 开发顺序
 
-Tersoff 1989、Langevin/BAOAB、NPT 三个对角分量与可选 restart sidecar 属于 P1（v1.1 候选）。
-局部域分解模式 NPT/非 NEP、NPH、MTTK、Parrinello–Rahman、三斜 NPT、多势混合、变盒命令与
-minimize、PLUMED/长程静电等暂缓；PIMD、MC、phonon、deposition 和完整 measurement
-系统不在本轮 v1.0 范围。详细优先级与边界以开发流程 §1 为准。
+G-A、G-B 和实验局部 NPT 的 DN0–DN4 已在各自冻结范围通过。近期依次解决生产分派、碳水金属的科学检查，以及与 GPUMD-WPE 的同工况计时。三种材料的单节点 SCR 全部通过后开放试用，Berendsen 单独用于预平衡对照。C0–C3/C5 和 D1–D5 仍待完成。
 
-默认使用中文报告结论，即使任务说明使用英文。
+V1.0 的势范围为 NEP4/5、NEP-ZBL、LJ 和 EAM/alloy，目前只有 NEP 已实现。已确定的生产规则要求：单卡可使用全系统实现，多卡必须局部求力；缺少局部实现的组合只开放单卡，全量复制保留显式测试入口。当前程序仍可能启动回退，这项生产规则尚待实现。[分派决策](docs/standards/architecture-decisions.md#production-domain-routing)
 
-## v1.0 当前阶段与实施顺序
+## 局部 NPT 实验开发（2026-11-16 完成 DN4）
 
-截至 2026-11-04，Gate 0 默认决策已确认，A0–A6 与 G-A 在所列 NEP/单节点范围通过；
-B0–B4 与 G-B 已通过。B3 原注册18个 formal looks 的总体 INCONCLUSIVE 结论保持不变；独立确认在新冻结的160条完整链上通过，B4 的测试维护与文档收口也已通过。C/D 尚未启动，v1.0 尚未发布。
-后续按流程推进 C0–C3/C5 与 D 阶段；A7/C4 为独立 P1 可选项，不阻塞 P0。
-执行开发任务时一次只推进获派的 Step，按任务卡完成依赖、停止条件、回归和证据记录；
-文档维护不自动授权启动后续开发 Step。
+`DMGMD_DOMAIN_NPT=off|rebuild|affine` 默认 `off`。满足几何和组合限制的 NEP 作业，可显式选择强制重建或形变缓存复用。段首求力、旧力使用次序、根进程随机状态和边界数据准备见[局部 NPT 标准](docs/standards/domain-npt.md)。实验验收不扩大原 V1.0 P0 或 216 原子 SCR 的证据范围。
 
-当前已实现能力与边界：
+大盒 SCR 统计只支持单节点、5,760 原子 NEP4-C、300 K、0 GPa 和各向同性正交全周期盒。基准步长覆盖 P1/HostStaged/off，以及 P2/P4 两后端各自的 off、rebuild、affine。半步长仅覆盖 P1/HostStaged/off、P2/HostStaged/affine 和 P4/CudaAware/affine。[DN 最终验证](docs/status/validation/domain-npt-validation.md#dn4-final-20261116)
 
-- 势仍为 NEP4/5 与 NEP-ZBL；已验收系综为 `nve`、`nvt_ber`、`nvt_nhc`、`nvt_bdp` 和 全量复制模式的 `npt_ber`。`npt_scr` 的 G-B 已通过，但统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点 全量复制模式各向同性正交全周期盒：base 为 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅为 P1/HostStaged。NEP5/ZBL 仅有另行记录的短程合同证据，不能外推到 NPT 统计支持；LJ/EAM 尚未实现。
-- 全量复制模式/局部域分解模式共用 `EnsembleController`；NHC 链与 BDP RNG 只由 rank 0 持有，速度缩放只作用于 owned。
-  三种 NVT 沿用 `3N` 温度自由度和步数型 Tdamp；NHC 质量使用 `dt_internal * Tdamp`。
-- NHC/BDP 要求固定正步长，拒绝 `correct_velocity`、自适应步长及非默认实验分区/重叠选项。
-  BDP 默认 seed 为 `12345678`，`DMGMD_ENSEMBLE_SEED` 的设置状态和原始字符串须在各 rank 一致。
-- 每段 `run` 重建链/RNG/cache；`restart.xyz` 不保存这些隐藏状态，跨 rank 恢复是新作业，
-  不承诺 NHC/BDP 轨迹连续。详细合同见[系综标准](docs/standards/ensembles.md)与
-  [兼容矩阵](docs/standards/compatibility-matrix.md)。
-- 默认 NPT 限各向同性、正交全周期盒与全量复制模式；P>1 默认回退。显式实验局部 NPT 的已验证有限范围另见下节与局部 NPT 标准。`npt_scr` 的最终统计支持只覆盖上述冻结 NEP-C 单节点矩阵，不代表跨节点、RDMA、普遍严格 NPT 或遍历性。
-  结论与证据见[最终确认](docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)、[机器索引](docs/status/validation/npt-scr-n3-confirmation-index.json)、[控压器标准](docs/standards/barostat.md)与
-  [NPT 矩阵报告](docs/status/validation/npt-validation.md#npt-matrix-20261104)。原18-look INCONCLUSIVE 结论不变。
-- 统计结论限于验收体系；额外 harmonic 诊断总 K 通过、轴向均值 INCONCLUSIVE，
-  不作普遍遍历性承诺。性能门仍为 PENDING-D4，跨节点与 release 长程未完成。
+DN5 的性能和默认采用仍待验收，跨节点仍待实测。
 
-## 2026-11-06 局部 NPT 实验开发
-
-已按用户授权完成 DN0–DN4 实验代码及有限范围验收。`DMGMD_DOMAIN_NPT=off|rebuild|affine`
-默认 off，既有 v1.0 P0 支持和 SCR 216 原子统计范围不自动扩大。显式实验模式允许
-满足几何与组合约束的 NEP 局部 NPT；强制重建与保守形变缓存可分别运行，段首、旧力、
-root RNG 和 halo readiness 合同见 [局部 NPT 标准](docs/standards/domain-npt.md)。
-大盒 SCR 统计支持仅限 单节点 NEP4-C、5760 原子、300 K/0 GPa、各向同性正交全周期体系；base 为 P1/HostStaged/off 与 P2/P4 两后端各自的 off、rebuild、affine，half 仅 P1/HostStaged/off、P2/HostStaged/affine、P4/CudaAware/affine；最终审核见 [DN 验证记录](docs/status/validation/domain-npt-validation.md#dn4-final-20261116)。DN5 性能与默认采用未通过，跨节点未验收。
-
+<a id="当前并行基线全量复制模式局部域分解模式"></a>
 ## 当前并行基线：全量复制模式/局部域分解模式
 
-当前已实施的代码基线采用局部域分解模式：一 MPI rank 对应一张 GPU，`run_replicated` 是模式
-调度器——potential 只解析一次（deferred-workspace NEP），按 typewise 半径判定
-eligibility 后在两条数据面之间分派：
+`run_replicated` 是模式调度器。NEP 参数只解析一次，选择路径后才分配工作区。正式术语见[术语表](GLOSSARY.md)，机器字段保持原文。
 
-- **全量复制模式（replicated-full）**（P=1 恒定，及不满足局部域分解模式判据的 P>1 输入）：每 rank 持有
-  全部 N 个槽位，积分/thermo/输出权威按空间 slab 所有权（global_id 逻辑归属 +
-  indexed collectives）迁移；P=1 与单 MPI rank 基线逐字节一致；小盒（如 24 Å fixture）因
-  `slab_width < d_coord` 自动走此路径，行为不变；
-- **局部域分解模式（local-domain）**（P>1、正交全周期、NEP large-box 判据、
-  `slab_width >= d_coord`）：rank-local owned/ghost 布局（owned | dependency
-  ghosts | coordinate-only ghosts，local_count 唯一 stride）、保守两跳位置 halo
-  （`d_dep = max R_force + skin`、`d_coord = max(R_force+R_dep) + 2*skin`，按
-  kernel 实际消费路径枚举，无法证明上界 fail closed）、p2p halo/迁移
-  （HostStaged/CudaAware 双后端、独立方向 tag、CudaAware 需通过 device-buffer
-  p2p 自检）、NEP 力中心 `[0, owned)` / 依赖中心 `[0, owned+dep)` / 候选
-  `[0, local_count)` 分片（global-ID 行排序，legacy P1/全量复制模式路径不变）；
-- rank 0 输出 `DMGMD_DOMAIN mode=m2a|m1-fallback ...` 机器可读记录；triclinic/
-  非周期在 P>1 下保持 全量复制模式的 unsupported 错误。P1/全量复制模式保留单次 wrap 调整；
-  局部域分解模式在 halo/force 前拒绝不受支持的 multi-box 单步位移，不靠 MIC 消去位移；
-- 所有用户可见文件只由 rank 0 写；不得使原 GPUMD 和 DMG-MD 单 rank 行为回归；
-- 无法从代码和测试证明的行为仍标记为 `UNKNOWN`，不得推测为兼容。
+| 模式 | 当前选择条件与数据职责 |
+| --- | --- |
+| 全量复制模式（replicated-full） | P=1 固定使用；满足基础盒约束、但不满足局部资格的 P>1 输入也会回退。每 rank 持有全部 N 个槽位，积分、热力学贡献和输出仍按空间所有权分工。迁移是稳定全局 ID 的逻辑交接，P1 与单 rank 基线逐字节一致 |
+| 局部域分解模式（local-domain） | P>1、正交全周期、满足 NEP 大盒条件及 `slab_width >= d_coord`。设备槽位依次为负责原子、依赖副本、仅坐标副本，`local_count` 是统一数组跨度。负责原子按 gid 排序，边界副本按 `(source face, source rank, global_id)` 排序，保留单 rank 和全量复制路径 |
 
-双路径的布局、半径、每步顺序、通信量与验证契约位于
-`docs/standards/mpi-runtime.md` 与 `docs/standards/data-layout.md`。所有文档从
-`docs/README.md` 进入：
+两跳位置边界按内核实际使用路径证明：`d_dep = max R_force + skin`，`d_coord = max(R_force+R_dep) + 2*skin`。无法证明上界时拒绝局部路径。HostStaged 和 CudaAware 使用独立方向 tag，CudaAware 先通过设备缓冲点对点自检。力中心为 `[0, owned)`，依赖中心为 `[0, owned+dep)`，候选为 `[0, local_count)`。NEP 邻居行按全局 ID 排序。
 
-- `docs/standards/`：当前产品、架构和测试合同；
-- `docs/reference/`：锁定 GPUMD 调用链与 kernel 证据；
-- `docs/operations/`：操作手册；
-- `docs/status/current.md`：当前状态；`status/validation/` 和 `status/performance/` 按测试目标维护稳定主题报告，每次执行追加带日期的结果节；
-- `docs/plans/`：剩余方案、风险和待办。
+普通分派或实验局部资格检查后，rank 0 输出 `DMGMD_DOMAIN mode=m2a|m1-fallback ...`。默认 NPT 则输出 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only ...`。小盒可能因 `slab_width < d_coord` 回退；P>1 的三斜或非周期输入仍报 `unsupported`。P1 和全量复制保留单次周期折回语义，局部域分解在边界交换或求力前拒绝不支持的单步多盒位移，不能用最小镜像距离抹去真实位移。
 
-局部域分解模式已实施并通过专属验收矩阵（`tests/mpi/run_mpi_domain.py`）；2026-09-18 手动执行的
-nightly/长程矩阵也已通过。100000-step release 矩阵仍未执行；2026-09-26 单节点
-多 GPU benchmark 已另行记录，不代表跨节点或固定 CPU 绑定下的结果。分阶段中间场交换方案（Fp/partial 分阶段交换）、3D 分解、
-triclinic/非周期局部域分解模式仍待后续审批。
+所有用户可见输出由 rank 0 写入。不能使 GPUMD 兼容行为或 DMG-MD 单 rank 基线回归。无法从源码和测试证明的行为标记为 `UNKNOWN`。
 
-## 独立性能主线：O1–O9 + O11 限定复验；O10 暂缓
-
-O 系列由 `docs/plans/communication-computation-overlap.md` 分步管理，与 v1.0 产品化主线
-无阶段门依赖，共享既有代码与回归合同；不替代 B/C/D 阶段或发布验收。
-O6 已完成稳态拆分诊断，carbon 主损失位于 radial，硬件计数器权限
-受限使微架构原因仍为 INCONCLUSIVE，首轮 O9 以 NO_ADOPTION 结束，报告见
-`docs/status/performance/nep-execution-cost.md#o6-results-20261021-report`。O7 于 2026-10-23 已采用一次 reason OR
-缓存判定；golden/MPI/nightly NVE、实际调用计数与 60 个配对 trial 完成，整步收益
-INCONCLUSIVE，见 `docs/status/performance/cache-reduction-results.md#o7-results-20261023-report`。O8 于 2026-10-26
-完成并采用按需 NVE thermo：NVE 只在 thermo/XYZ 输出步计算，NVT 保留每步反馈；
-292 个调用计数作业、MPI/nightly、105 个正式 trial 和 8 个 CPU 诊断完成。
-相对 O7 三组增量确认、一组 INCONCLUSIVE，见 `docs/status/performance/thermo-demand-results.md#o8-results-20261026-report`。
-O9 于 2026-10-26 完成证据门槛复核；真实 NCU 稳态重试仍受权限拒绝，
-无可信执行候选，按原完成条件以 NO_ADOPTION 结束，未改 NEP 执行；见
-`docs/status/performance/nep-candidate-validation.md#o9-results-20261026-report`。O6.5 于 2026-10-27 完成真实
-图/mask 与同快照 A–D 对照：30 个正式 trial、18 份 trace、50 个独立重放进程及完整
-nightly 42 配置通过。carbon radial / water angular partial 紧凑映射相对 C 的目标耗时
-分别下降约 29.71%/12.32%，支持独立整步试验；D 仍慢于 A，微架构原因仍 INCONCLUSIVE，
-未采用、未测候选整步净收益，见 `docs/status/performance/nep-execution-cost.md#o65-results-20261027-report`。
-O8.5 于 2026-10-28 完成只拆 filter/descriptor、力计算完整执行的显式 producer 候选：
-GPU CTest 18、producer MPI 313 次执行、受控调度 27、完整 nightly 42 + restart 12、
-120 个六组合正式 trial、24 份 trace 与 8 个 CPU 诊断通过。基础 launch 从 10 降为 7，
-四组拆分成本下降；相对同后端候选 full，water/HostStaged、carbon/CudaAware、
-water/CudaAware 的探索区间确认收益，carbon/HostStaged 仍慢。相对 HostStaged/full
-只有本轮 water/P8/HostStaged 确认约 1.0193×，须交 O9 用新样本独立确认；见
-`docs/status/performance/producer-schedule-results.md#o85-results-20261027-report`。未采用，生产默认仍
-HostStaged/full、overlap=off、schedule=split。
-O8.6 于 2026-10-28 完成同 E/H 紧凑索引 B 和几何内缩 C；两路线分别通过完整 MPI、
-调度 27、nightly 42 + restart 12，240 个正式 trial、48 份 trace、24 个 CPU 诊断及离线复算通过。
-B/A 的四组 serial/wait 增量获探索区间支持，C/B wait 增量均未确认；相对候选 HostStaged/full，
-carbon 双后端及 water/HostStaged 的 B/C 有本轮净收益，water/CudaAware 仍慢。未采用，见
-`docs/status/performance/producer-schedule-results.md#o86-results-20261028-report`。
-O9 于 2026-10-29 完成独立确认：300 个正式 trial、12 个 CPU 诊断及新科学/MPI/调度门槛通过，
-相同二进制的完整 nightly/GPU 验收经原始清单校验后复用。B 在 carbon_200k/P2 双后端及
-water_400k/P8/HostStaged 的校正净收益区间通过，water/P8/CudaAware 仍慢于默认路径；
-water/P4 有探索支持，carbon_1m/高重建/空 early 限制外推。见
-`docs/status/performance/nep-candidate-validation.md#o9-results-20261029-report`。结论为 CONFIRMED_SCOPED_CANDIDATE，
-后续 O11 于 2026-10-30 完成限定范围复验：800 个正式 trial（一次预定追加）、
-80 个短程科学对照、48 个 CPU 诊断及 31,293 项封存文件离线复算通过。
-基于公共共享服务器历史测量，当时仅建议 carbon_200k/P2 两后端手动 B-wait，相对 HostStaged/full 为 1.0210×/1.0199×；这是历史探索，不作为专用性能服务器参考。后续性能参考与采用判断以专用服务器 benchmark 为准；
-water/P8/HostStaged 区间仍跨 1，本轮不建议采用；water/P8/CudaAware 也未胜默认路径。
-water/P4 仍为探索支持，未覆盖的完整矩阵不作外推。见
-`docs/status/performance/nep-candidate-validation.md#o11-results-20261030-report`。O10 为条件性 PROPOSED、暂缓；
-默认不变，首轮 O9 及后续独立确认历史保留。
-跨引擎绑定与 LAMMPS 对照仍由
-`docs/plans/mpi-cpu-binding.md`、`docs/plans/lammps-multigpu-benchmark.md` 独立管理。
-LAMMPS 输入、静态物理量对照与三引擎 benchmark smoke 已实施；正式效率矩阵仍待
-跨引擎 CPU/NUMA 绑定验收和更多正确性验收。
-C1 与 O1 expected-cores/expected-numa 参数只观测；O5 已补充 DMG-MD 共用
-core/numa/rankfile 启动及独立 affinity audit，合同见 `docs/standards/cpu-binding.md`。
-跨引擎绑定、任意调度器与内存页放置仍待验收；
-O1 时间线、O2 默认关闭的串行分区、O3 halo 生命周期已实施并验收。默认路径仍 begin 后立即
-finish，再计算 NEP；O4 已接入默认关闭的普通步实际 overlap，已验收、仍默认关闭；
-O5 本机正式矩阵、四阶段归因和独立采用验证于 2026-10-21 完成；仍默认 off，
-限定收益与默认后端比较的范围见 docs/status/current.md，
-分阶段中间场交换方案不是当前下一实施切口。
+修改并行执行或数据布局前，读取 [MPI 运行时](docs/standards/mpi-runtime.md)和[数据布局](docs/standards/data-layout.md)。了解优化和实际默认值时，读[多卡实现导读](docs/reference/multi-gpu-implementation.md)。测量迁移收益时，按[性能方法](docs/status/performance/npt-benchmarks.md)区分普通 GPUMD 数值基线与 GPUMD-WPE 单卡性能基线。
 
 ## GPUMD 复现边界（强制）
 
@@ -161,12 +50,12 @@ Potential、NEP kernels）。该模式已于 2026-09-09 废除。当前规则：
 - **禁止直接调用 GPUMD 代码**。DMG-MD 的任何源文件不得 `#include` 指向
   `../gpumd-reference` 的路径，CMake 不得编译或链接该目录中的任何文件；
   运行时也不得以 dlopen、子进程等方式调用 GPUMD 可执行文件或库。
-- 所需的 GPUMD 最小子集**只能在 newmd 仓库内复现**：位于
+- 所需的 GPUMD 最小子集**只能在本仓库内复现**：位于
   `src/gpumd_compat/`（命名空间 `gpumd_compat`），复制自锁定 commit
   `9d23496e41319b9e2af5221a7df6285387401d1e`，文件头注明 Origin file 与裁剪说明。
 - `src/gpumd_compat/` 的数值（浮点表达式、内存布局、kernel launch 参数、累加顺序）
   与参考实现保持一致；对其任何修改都必须连同 golden 基线（`tests/baseline`、
-  `tests/long_nve`）一起重新验证，不得"顺手清理"。
+  `tests/long_nve`）一起重新验证，不得“顺手清理”。
 - 新增需要 GPUMD 已验证实现的代码时，先在 `src/gpumd_compat/` 中复现并加注释
   （用途 + GPUMD 对应文件/符号），再接入 DMG-MD runtime；不得回到直接引用
   `../gpumd-reference` 的做法。
@@ -178,20 +67,18 @@ Potential、NEP kernels）。该模式已于 2026-09-09 废除。当前规则：
 
 `../gpumd-reference`、`../lammps-reference` 和 `../lammps-matpl-reference` 均为锁定的
 **严格只读 reference**。不得在其中应用补丁、复制源码、运行原位构建、生成日志或输出、
-清理文件，也不得为了测试修改势文件。执行参考程序时把工作目录和输出目录放在 `newmd`
+清理文件，也不得为了测试修改势文件。执行参考程序时把工作目录和输出目录放在本仓库允许的工作目录
 或临时目录；每次相关工作前后核对三个 checkout 的 Git 状态，并检查是否新增被忽略的构建产物。
 
 LAMMPS 锁定 `stable_22Jul2025_update4`（commit
 `611ca3b7f8525ba802373b04f9e3d632d515f7e3`），MatPL 锁定 commit
 `21fabf34eadc57a717f4c7fbce9bb80aad5fd991`。2026-10-09 从原位安装迁出的
 MatPL 补丁源码、CMake 修改和逐文件 SHA-256 保存在
-`third_party/lammps-matpl-overlay/`；当前仅在忽略版本控制的
-`build-lammps-nep-kk-preserved/lmp` 保留已验证的可执行文件，CMake cache 和对象文件已清理；
-该目录不是可迁移的重建目录。第三方 overlay 仍保留。
+`third_party/lammps-matpl-overlay/`。短程 golden 使用 GPUMD 5.9.1（`11ba6fb`），兼容层源码仍来自 `9d23496e`。长程和三引擎工具尚有独立的参考身份限制，详见[部署手册](docs/operations/deployment.md)和[当前状态](docs/status/current.md#l20-v1-audit-20261120)。
 
-如需修改或重建 LAMMPS，先从只读 `../lammps-reference` 在 `newmd` 内生成独立工作源码
+如需修改或重建 LAMMPS，先从只读 `../lammps-reference` 在本仓库内生成独立工作源码
 （例如 `build-lammps-matpl-src/`），再应用上述 overlay 或新的本地补丁；构建目录也必须在
-`newmd` 内。不能把 `../lammps-matpl-reference` 当作可编辑插件工作树。任何用于
+本仓库内。不能把 `../lammps-matpl-reference` 当作可编辑插件工作树。任何用于
 GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256，并明确标注等价范围。
 维护者已批准以物理量等价而非文件哈希一致作为三引擎横向判定：所有元素的径向 cutoff
 相同且角向 cutoff 相同时，可把 typewise 行折叠为统一行；若任一值不同必须拒绝该转换。
@@ -206,7 +93,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 - owned atoms 与 ghost atoms 必须有不同的生命周期和写权限；ghost 不得被积分、重复计入 thermo 或直接输出。
 - 必须有跨迁移保持稳定的全局原子 ID；本地数组下标不能承担持久身份。
 - 不假设 NEP halo 等于某一个 cutoff。位置、descriptor/导数、directed partial force 和最终 force 的每一层依赖都必须有 kernel 证据。
-- 任何使用 Newton scatter 并写 ghost partial force 的路径都必须定义 reverse force exchange；采用中心原子 gather 的路径必须定义中间 descriptor/partial-force 的 forward exchange。
+- 使用 Newton scatter 写边界副本的部分力时，必须定义反向力交换（reverse force exchange）。采用中心原子 gather 时，必须定义描述符或部分力中间量的前向交换（forward exchange）。
 - 每原子能量和 virial 的所有权必须唯一，温度、总能量和 stress 只从 owned atoms 归约。
 - PBC、triclinic box、单位、精度、力号和 virial 分量顺序在更改前必须建立 GPUMD golden test。
 - rank 0 I/O 必须恢复 GPUMD 的稳定原子顺序、文件名、列顺序和格式；restart 必须支持跨不同 rank 数恢复。
@@ -233,6 +120,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
   `MPIX_*`，不再维护 MPICH、MVAPICH 或其他 MPI 实现兼容性；
 - Python 只用于测试、验证和分析脚本，核心 runtime 不依赖 Python；
 - GPU 常驻数据只在初始化、通信、输出或验证需要时传回主机。
+
 - Node.js、npm、npx 由当前用户通过用户级 fnm 安装和管理，不属于项目本地依赖；fnm 根目录为
   `~/.local/share/fnm`。检查 Node.js 环境时，必须先确认 fnm 及其 shell 初始化；在未加载用户
   `.bashrc` 的非交互 shell 中 `command -v node` 为空，不得据此判断 Node.js 未安装。应优先检查
@@ -271,9 +159,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 
 ## 构建与测试
 
-原生部署从本仓库根目录加载 `../env/md-mpi.sh`；Docker 使用仓库
-`docker/md-mpi.sh` 安装到 `/opt/dmgmd/env/md-mpi.sh`，entrypoint 自动加载。
-两种方式均须通过相同的 MPI/CUDA 门槛；容器内置 PMIx 使用编译时组件目录，无需宿主机路径。
+实验室原生构建与环境选择见[部署指南](docs/operations/deployment.md)。构建和运行均须通过相同的 MPI/CUDA 门槛；容器内置 PMIx 使用编译时组件目录，无需宿主机路径。
 原生构建示例：
 
     source ../env/md-mpi.sh
@@ -305,7 +191,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 
 GPUMD 是数值和兼容性参考。验证至少分四层：
 
-1. 锁定 GPUMD 单 GPU基线；
+1. 锁定 GPUMD 单 GPU 基线；
 2. DMG-MD 单 rank；
 3. MPI 复制数据原型；
 4. MPI domain decomposition。
@@ -325,27 +211,47 @@ GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，
 
 ## 文档治理
 
-- 测试行为以测试脚本为第一事实源；case、profile、输入哈希、容差和统计门槛以对应
-  `manifest.json` 为第一事实源。测试目录 README 说明操作方法，
-  `docs/standards/golden-test-standard.md` 说明验收原则，不得复制维护另一套参数。
-- `docs/standards/` 只描述当前已经生效的合同。代码、支持范围、数据布局或测试门槛变化时，
-  必须在同一修改中更新对应标准。
-- `docs/status/` 只记录实际状态或验证结果。通过声明必须包含执行日期、代码 revision、环境、
-  精确命令和结果；“测试已定义”不得写成“当前已通过”。同一测试目标的重复执行应追加到稳定主题文件的
-  独立日期节，保留每次执行的实际日期与时间；仅在测试目标不同或证据结构确实独立时新建报告。
-  汇总和索引须链接到对应日期节，不能把不同执行合并成一个无日期结论。记录应说明原始证据保留范围；
-  用户明确授权的结果保留型清理属于例外。2026-11-05 公共共享服务器历史 overlap 原始目录已清理，
-  对应报告只保留历史结果、方法摘要和限制；旧路径/命令仅作历史记录，不得称原始文件仍在或可离线复算。
-  NPT/G-B 迁移归档按用户 2026-11-05 授权仅保留最终 paired-analysis、注册文件和原18-look索引；
-  文档保留迁移验证、160链执行、一次分析、最终审计与 CPU 测试的结论摘要，不保留逐作业日志、locator、
-  源/输入快照或中间审计收据。不得将这些过程记录描述为额外科学结果或声称仍可从已删除快照完整复现。
-  后续性能参考与采用判断以专用服务器 benchmark 为准，生产默认不因历史结果改变。
-  英文报告文件名使用稳定主题 slug，不含执行日期；重复执行与历史版本写入同一报告的日期节并使用稳定锚点区分。Git 历史保留旧快照，不在工作树另建 archive 副本。当前状态入口、标准和计划须随事实同步。机器索引与数据文件遵循各自合同，不受报告文件名规则限制。
-  运行模式的正文、标题和注释使用全量复制模式、局部域分解模式、分阶段中间场交换方案；真实机器字段、代码符号及按 SHA 冻结的历史注册证据保留原文，术语解释见 MPI 标准。
-- `docs/plans/` 必须标明 `PROPOSED`、`APPROVED` 或 `IN PROGRESS`，不得被 README 或标准描述为
-  已实现。计划完成后，将最终合同迁入 standards、实测结果写入 status，并删除已完成的重复步骤。
-- 新文档必须从 `docs/README.md` 按主题归类和链接。文档移动或报告整合后，使用 `rg` 检查全部旧路径引用、
-  Markdown 文件与片段链接、源码注释和测试 docstring；Git 历史保存旧快照，不在工作树中新建重复 archive 文档。
+### 事实来源
+
+测试行为以脚本为准；case、profile、输入哈希、容差和统计门槛以对应 `manifest.json` 为准。测试 README 说明操作，[golden 标准](docs/standards/golden-test-standard.md)说明验收原则。文档引用这些来源，避免维护另一套参数。
+
+### 标准和计划
+
+`docs/standards/` 维护当前生效的规则。代码、支持范围、数据布局或测试门槛变化时，同一修改须更新对应标准。已确定但待实现的架构决策须明确标记，并说明现行行为。
+
+`docs/plans/` 标明 `PROPOSED`、`APPROVED` 或 `IN PROGRESS`。README 和标准按实际状态引用计划。计划完成后，将最终规则写入标准、实测结果写入状态记录，并删除已完成的重复步骤。
+
+### 验证记录
+
+`docs/status/` 记录实际状态和执行结果。通过声明包含执行日期、代码 revision、环境、精确命令和结果；测试已定义与测试已通过分别表述。
+
+同一测试目标追加到稳定主题文件的独立日期节，保留每次实际日期和时间。目标不同或证据结构独立时才新建报告。汇总链接到对应日期节，并说明原始证据的留存范围。历史摘要缺少身份或命令时，明确缺项，不能推测补齐。
+
+公开性能记录注明实际输入、引擎、独占资源、采样方法和适用范围。旧计时只保留在本地汇总。站点账户、绝对路径、部署日志及带站点信息的冻结注册留在协调目录；公开科学结果保留原判定和范围。公开的参考程序安装位置使用可移植路径，保留实际版本与可执行文件身份。
+
+报告文件名使用稳定的英文主题 slug，不含执行日期；重复执行和历史版本用日期节与稳定锚点区分。Git 历史保留旧快照，工作树不另建 archive 副本。机器索引和数据文件遵循各自规则。当前状态、标准和计划随事实同步。
+
+### 写作和引用
+
+正文先说明对象、行为和条件，再给源码符号、公式或实现编号。使用平实中文，拆开长句，删除套话、重复总结和无事实支持的形容词。列表用于真正并列的内容，复杂机制可按需要展开解释。完成后逐篇检查中英文空格、标点、标题层级和术语。
+
+正文、标题和注释中的运行模式，使用全量复制模式、局部域分解模式和分阶段中间场交换方案。共用定义维护在 [GLOSSARY.md](GLOSSARY.md)，正文首次出现仍作必要解释。真实机器字段、代码符号和按 SHA 冻结的历史注册保留原文。
+
+新文档从[文档索引](docs/README.md)按主题链接。移动或整合文档后，检查全部旧路径、Markdown 文件及片段链接、源码注释和测试 docstring。修改标题时保留已有引用所需的锚点。
+
+## Agent skills
+
+### Issue tracker
+
+规格与工单保存在 `.scratch/<feature>/`。[工单约定](docs/agents/issue-tracker.md)
+
+### Triage labels
+
+工单通过 `Status:` 行记录分流状态。[状态对照表](docs/agents/triage-labels.md)
+
+### Domain docs
+
+DMG-MD 使用一套术语和架构决策。[领域文档读取约定](docs/agents/domain.md)
 
 ## Agent 工作方式
 
@@ -355,7 +261,7 @@ GPUMD、LAMMPS、DMG-MD 的横向 benchmark 使用同一物理体系和模型，
 主代理负责规划、架构决策、最终代码审查和结果整合。
 避免多个代理重复探索同一问题，返回简洁结论和必要证据。
 
-非平凡任务按以下顺序进行：
+非平凡任务依次执行以下步骤：
 
 1. 检查本仓库与三个只读 reference checkout 的状态和已有用户修改；
 2. 阅读相关说明、构建脚本和测试；

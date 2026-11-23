@@ -1,195 +1,156 @@
 # NHC / BDP 验收
 
-本目录是 A3–A6 的标量、物理统计与 MPI 验收入口。当前实现合同见
-[系综标准](../../docs/standards/ensembles.md)，实际执行结果与精确命令见
-[NHC](../../docs/status/validation/thermostat-validation.md#nhc-20261102)、
-[BDP](../../docs/status/validation/thermostat-validation.md#bdp-20261102)和
-[双路径矩阵](../../docs/status/validation/thermostat-validation.md#thermostat-matrix-20261102)。
-下列命令为复现示例；`CANDIDATE`、设备列表和新的证据目录应按本机替换。
-每个新 shell 都先从仓库根目录加载 `../env/md-mpi.sh`。
+这里检查 Nosé–Hoover 链（NHC）和 Bussi–Donadio–Parrinello（BDP）恒温器。改控制器公式时先跑标量检查。改路由、归约或重启时，选择短程和协议检查。统计验证需要独立初态与预注册预算。A3–A6 已验收的范围和结果见 [NHC](../../docs/status/validation/thermostat-validation.md#nhc-20261102)、[BDP](../../docs/status/validation/thermostat-validation.md#bdp-20261102)和[双路径矩阵](../../docs/status/validation/thermostat-validation.md#thermostat-matrix-20261102)。
 
 ## 构建与标量检查
+
+从仓库根目录加载实验室环境。`WORK_ROOT` 指向可写位置。下文的各证据目录须不存在。`GPU_IDS` 填 4 张已分配的设备，供 P1/P2/P4 运行。只执行标量检查仍需要本项目构建要求的 CUDA Toolkit 和 MPI。
 
 ```bash
 source ../env/md-mpi.sh
 export PYTHONDONTWRITEBYTECODE=1
-cmake -S . -B /tmp/dmgmd-thermostats-build -DCMAKE_BUILD_TYPE=Release
-cmake --build /tmp/dmgmd-thermostats-build -j8
-ctest --test-dir /tmp/dmgmd-thermostats-build --output-on-failure
+WORK_ROOT="$PWD/../scratch/thermostats-new"
+BUILD_DIR="$WORK_ROOT/build"
+CANDIDATE="$BUILD_DIR/dmg-md"
+GPU_IDS=0,1,2,3  # 示例，换成分配的设备
+cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$BUILD_DIR" -j 8
+ctest --test-dir "$BUILD_DIR" --output-on-failure
 python3 tests/thermostats/test_reference_options.py
 ```
 
-CTest 注册 NHC fixture、SVR fixture、统计分析器及原有测试。NHC fixture 是三个独立 case，
-各连续四次 half-step，比较因子与完整链状态的 double 位模式；SVR fixture 为 16 case，
-覆盖 seed、奇偶 ndeg、Gaussian cache 和 `taut<=0.1` 分支。控制器测试同时检查
-non-root 无链/RNG 分配、每段重置及 Berendsen 旧表达式。
+CTest 注册 NHC、随机速度重标定（SVR）的标量测试、统计分析器检查和其他项目测试。NHC 的 3 个独立用例各执行连续 4 次半步，比较缩放因子和完整链状态的双精度位模式。SVR 的 16 个用例覆盖种子、自由度奇偶、Gaussian 缓存及 `taut<=0.1`。控制器测试还核对非根进程不分配链及随机数状态、每段重置和 Berendsen 原表达式。
 
-`fixtures/generate_nhc.py` 与 `fixtures/generate_svr.py` 只读提取锁定上游函数，
-在临时目录独立编译并生成 oracle；它们不把上游源码链接进 DMG-MD。
-上游 NHC 对 m=0 有一次结果被覆盖的负索引读取，oracle 用 padding 消除该读的未定义行为；
-本地实现直接在读取前分支，保留有效表达式和求值顺序。
+重新生成标量参考时，脚本从锁定的 GPUMD checkout 读取函数，在独立目录编译。上游 NHC 在 `m=0` 时有一次会被覆盖结果的负索引读取。参考程序加 padding 避免未定义行为。DMG-MD 在读取前分支，保留有效表达式和求值顺序。参考 checkout 只读，既有 golden 与容差继续用作比较依据。
 
 ```bash
 python3 tests/thermostats/fixtures/generate_nhc.py \
-  --reference-root ../gpumd-reference --output /tmp/nhc-oracle-new.json
+  --reference-root ../gpumd-reference --output "$WORK_ROOT/nhc-oracle.json"
 python3 tests/thermostats/fixtures/generate_svr.py \
-  --reference-root ../gpumd-reference --output /tmp/svr-oracle-new.json
+  --reference-root ../gpumd-reference --output "$WORK_ROOT/svr-oracle.json"
 ```
 
-参考目录必须只读；所有输入/输出和构建在仓库外的新临时目录。不得更新既有 golden 或容差。
+<a id="环境短程和失败关闭"></a>
 
-## 环境、短程和失败关闭
+## 短程、通信与重启
+
+### 查短程输出与错误处理
+
+先检查 4 张设备的绑定和 CUDA 缓冲通信。短程驱动使用 2,016 和 5,184 原子的 NEP4 金刚石。较小体系在 P2/P4 走全量复制回退，较大体系走局部域分解。同 rank 和后端的重复运行须产生逐字节一致的科学文件。跨 rank 差分及 GPUMD NHC 比较用现有 baseline 容差。GPUMD BDP 的参考随机数取自墙钟，使用分布而非逐步轨迹作对照。
 
 ```bash
-python3 tests/mpi/check_environment.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7
+python3 tests/mpi/check_environment.py --candidate "$CANDIDATE" --devices "$GPU_IDS" --ranks 4
 python3 tests/thermostats/run_thermostats.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7 \
+  --candidate "$CANDIDATE" --devices "$GPU_IDS" \
   --ensembles nvt_nhc nvt_bdp --sections short negative \
-  --work-root /tmp/thermostats-short-new
+  --work-root "$WORK_ROOT/short"
 python3 tests/thermostats/check_bdp_contract.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7 \
-  --work-root /tmp/thermostats-bdp-contract-new
+  --candidate "$CANDIDATE" --devices "$GPU_IDS" --work-root "$WORK_ROOT/bdp-contract"
 ```
 
-`run_thermostats.py` 和 `check_variants.py` 可用 `--reference` 指定隔离构建的参考程序，
-并成对提供 `--reference-provenance` 与 `--reference-provenance-sha256`。入口复用
-long-NVE 的归档、源码 Git blob、构建和二进制身份校验，记录验证结果，并在每次参考
-运行前复核二进制哈希。未提供 provenance 时仍要求原锁定参考身份；单缺一个参数时，
-在创建证据目录或执行 GPU 自检前拒绝。上述 CPU 测试覆盖这些入口约束。
+负例须在时限内非零退出，显示指定错误，且不写最终 XYZ 与重启文件。零动能用例使用两个不相互作用的静止原子，第二次速度 Verlet 半步后动能仍为零。BDP 另检查默认种子、非法字符串、rank 间种子数值或原始字符串不一致，以及多段和新作业的重启。
 
-短程 case 是 2016/5184 原子的 NEP4 diamond；前者自然触发 P2/P4 全量复制回退路径，后者进入局部域分解模式。
-每个同 rank/backend 的重复要求科学输出文件逐字节一致；跨 rank 与 GPUMD NHC 比较使用
-既有 baseline 容差。BDP 不与 wall-clock seed 的 GPUMD 比较轨迹。
-负例设置超时并核验非零退出、错误文字、没有最终 XYZ/restart；零 KE 用两个互不作用的静止原子，
-以确保 VV2 后仍为零。seed 合同另测默认值、非法字符串、rank 间数字或原始字符串不一致，
-以及多段/新作业 restart。
+`run_thermostats.py` 和 `check_variants.py` 可用 `--reference` 选择隔离构建的参考程序。用 `--reference-provenance` 和 `--reference-provenance-sha256` 一起提供出处和哈希。脚本沿用长程验收对归档、源码 Git blob、构建和二进制身份的核验，并在每次参考运行前复核程序哈希。无出处参数时沿用原锁定身份。只给其中一个参数会在创建结果和预检 GPU 之前失败。上节的 CPU 测试覆盖这些分支。
+
+### 核对缩放因子和其他势
 
 ```bash
-python3 tests/thermostats/check_protocol.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md \
-  --probe /tmp/dmgmd-thermostats-build/tests/libdmgmd_ensemble_factor_probe.so \
-  --ensemble nvt_bdp --devices 2,4,5,7 --work-root /tmp/thermostats-protocol-new
-python3 tests/thermostats/check_variants.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7 \
-  --work-root /tmp/thermostats-variants-new
+python3 tests/thermostats/check_protocol.py --candidate "$CANDIDATE" \
+  --probe "$BUILD_DIR/tests/libdmgmd_ensemble_factor_probe.so" \
+  --ensemble nvt_bdp --devices "$GPU_IDS" --work-root "$WORK_ROOT/protocol"
+python3 tests/thermostats/check_variants.py --candidate "$CANDIDATE" \
+  --devices "$GPU_IDS" --work-root "$WORK_ROOT/variants"
 ```
 
-协议检查也接受 `--ensemble nvt_nhc`（默认）。LD_PRELOAD 探针仅包装 host 2-double Bcast，
-不插入 collective 或 CUDA 操作；检查每 rank 的因子位模式，以及相对 Berendsen 的逐步通信增量。
-NEP5/ZBL 脚本复用 long-NVE 锁定输入/转换，记录实际路由；BaTiO3 在 P2 为局部域分解模式、P4 为 fallback，
-不能按 rank 数猜测 data plane。
+`check_protocol.py` 默认测 `nvt_nhc`，示例指定 BDP。`LD_PRELOAD` 探针只包装主机的 2-double `Bcast`，检查各 rank 收到的因子位模式及相对 Berendsen 增加的逐步通信。探针不增加集合通信或 CUDA 操作。
 
-对上面的成功源记录，可补做每个组合的 5-step 新作业 restart 与两种系综的 P1→P4 恢复：
+NEP5 与 ZBL 检查沿用长程锁定输入和转换。用运行记录确认实际路由。BaTiO₃ 在 P2 走局部域分解，在 P4 回退全量复制。
+
+### 从已通过的结果重启
+
+先完成短程与势变体检查。脚本从成功源记录核对输入输出哈希，再读快照。各组合用新作业运行 5 步，并单独检查两种系综的 P1→P4 恢复。链与随机数状态按新作业初始化，验收比较的是可恢复的物理字段。细节见[系综标准](../../docs/standards/ensembles.md)。
 
 ```bash
-python3 tests/thermostats/check_restarts.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7 \
-  --sources /tmp/thermostats-short-new /tmp/thermostats-variants-new \
-  --work-root /tmp/thermostats-restarts-new
+python3 tests/thermostats/check_restarts.py --candidate "$CANDIDATE" \
+  --devices "$GPU_IDS" --sources "$WORK_ROOT/short" "$WORK_ROOT/variants" \
+  --work-root "$WORK_ROOT/restarts"
 ```
-
-它先核验源输入/输出哈希，再读取快照；不比较链/RNG 轨迹连续性。
 
 ## 统计合同
 
-`manifest.json` 是输入哈希与 KE 分布参数的第一事实源，`velocity-manifest.json` 规定
-实际相互作用 NEP 体系的三个速度方向矩；禁止从结果反选 seed、burn-in、误差带或预算。
-NHC 的 seed 指独立初速；BDP 同时用作 thermostat seed。主统计组是 432 原子的相互作用 cluster，
-显式 Gaussian 初速、不去质心；输出温度始终按 3N。
+### 动能和速度分布
 
-`sample_statistics.py` 估计 K 及平方离差的自相关和 ESS，报告完整固定长度块及 seed 间的
-Student-t CI，取两者较大的 half-width。只有 CI 完全位于已冻结误差带且满足 ESS/块数才 PASS；
-不能把 CI 与误差带相交当通过。三次预定预算用 Bonferroni 校正后的单次约 98.33% CI，
-不声称整个多矩阵联合覆盖率为 95%。`--minimum-statistics-steps` / `--minimum-steps`
-仅用于保留前一轮证据后的预定延长，不能替换 seed 或缩短 burn。
+[manifest.json](manifest.json) 锁定输入哈希和动能分布参数。[velocity-manifest.json](velocity-manifest.json) 定义相互作用 NEP 体系的三个速度方向矩。主统计用 432 原子的相互作用体系，显式设置 Gaussian 初速并保留质心运动，输出温度按 `3N` 个自由度。NHC 的种子区分初速，BDP 同时用该种子初始化恒温器。
+
+`sample_statistics.py` 计算动能和平方离差的自相关、有效样本量（ESS）。按完整定长块和种子间分别计算 Student-t 置信区间，取较宽的半宽。区间完全落在冻结误差带内，且 ESS 和块数达标，才判 `PASS`。三个预定预算做 Bonferroni 校正，每次约 98.33% 覆盖。该口径适用于各项区间，整个矩阵的联合覆盖率未定为 95%。
+
+动能检查覆盖 P1、P2/P4 全量复制和 P2/P4 局部域分解，后两类都走两种后端。半步长保留物理耦合时间与采样时长。BDP 另有 8 组 GPUMD 分布对照，NHC 用同一入口的 `--ensembles nvt_nhc`。`--minimum-statistics-steps` 和 `--minimum-steps` 只用于保留前一轮证据后的预定延长。种子、预热舍弃区间、误差带及预算均按注册值执行。
 
 ```bash
-export DMGMD_ACF_HELPER=/tmp/dmgmd-thermostats-build/tests/dmgmd_autocorrelation
+export DMGMD_ACF_HELPER="$BUILD_DIR/tests/dmgmd_autocorrelation"
 python3 tests/thermostats/run_thermostats.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --devices 2,4,5,7 \
+  --candidate "$CANDIDATE" --devices "$GPU_IDS" \
   --ensembles nvt_bdp --sections statistics --parallel-seeds 4 --timeout 1800 \
-  --work-root /tmp/thermostats-statistics-new
+  --work-root "$WORK_ROOT/statistics"
 python3 tests/thermostats/check_velocity_statistics.py \
-  --candidate /tmp/dmgmd-thermostats-build/dmg-md --ensemble nvt_bdp \
-  --devices 2,4,5,7 --work-root /tmp/thermostats-velocity-new
+  --candidate "$CANDIDATE" --ensemble nvt_bdp \
+  --devices "$GPU_IDS" --work-root "$WORK_ROOT/velocity"
 ```
 
-KE runner 覆盖 P1、全量复制P2/P4、局部域分解路径 P2/P4 的双后端；减半步长保持物理耦合时间和采样时长；
-BDP 另执行八组 GPUMD 分布对照。NHC 用同样入口的 `--ensembles nvt_nhc`。
-并行 seed 只分配不重叠 GPU 组，不是性能 benchmark；MPI 默认 CPU 绑定可能使多个独立作业竞争
-同一核心，需在操作记录中说明实际 affinity。
+并行种子使用互不重叠的 GPU 组。同一节点上独立作业的默认 MPI 核绑定可能相互竞争，需记录实际 CPU 亲和性。此结果用于统计验收。分析可选用原生自相关函数（ACF）程序，设置了路径但程序无效时直接失败。未设置时使用同一估计器的 Python 版本。`check_velocity_statistics.py --analyze-existing --work-root ROOT` 复核旧数据并写新分析文件，保留原报告。
 
-分析器的 native ACF helper 只加速测试分析，不参与生产。若设置该环境变量但 helper 无效则失败，
-不静默改算法；不设置则用 Python 相同估计器。`check_velocity_statistics.py --analyze-existing --work-root ROOT`
-只读核验已有数据并创建新 reanalysis 文件，原报告保留。
+### 独立谐振模型
 
-`run_harmonic.py` 与 `harmonic_sampler.cpp` 提供独立可解模型的 K oracle 和额外轴向诊断，
-默认 NHC，可选 `--ensemble nvt_bdp`；模型积分仍使用同一独立 harmonic VV。
-`harmonic-confirmation.json` 保留 NHC 独立固定预算确认轮。总 K PASS 不能掩盖轴向
-INCONCLUSIVE，完整结果见各恒温器记录。该模型不构成当前生产 NEP 势支持范围或普遍遍历性保证。
-`--parallel-seeds N` 可并行运行独立 seed 子进程，要求 N 为正整数，默认 `1`（串行）。
-记录和统计仍按 manifest 中的 seed 顺序生成；该选项不改 seed、参数或统计口径。
+`run_harmonic.py` 和 `harmonic_sampler.cpp` 使用独立可解模型检查总动能和各方向矩。积分沿用这套独立模型的速度 Verlet。默认测 NHC，也可指定 BDP。[harmonic-confirmation.json](harmonic-confirmation.json) 保留 NHC 的独立固定预算确认。总动能 `PASS` 时继续按原判据报告各轴的 `INCONCLUSIVE`。结果适用于该模型。
 
 ```bash
 python3 tests/thermostats/run_harmonic.py \
-  --candidate /tmp/dmgmd-thermostats-build/tests/dmgmd_harmonic_sampler \
-  --ensemble nvt_bdp --parallel-seeds 4 --work-root /tmp/thermostats-harmonic-new
+  --candidate "$BUILD_DIR/tests/dmgmd_harmonic_sampler" \
+  --ensemble nvt_bdp --parallel-seeds 4 --work-root "$WORK_ROOT/harmonic"
 ```
 
-## 相同 harmonic 模型的跨引擎对照
+`--parallel-seeds N` 取正整数，默认串行。无论并行度如何，记录和统计均按 manifest 的种子顺序生成，初态、参数与统计规则保持一致。
 
-对照继续读取 `manifest.json` / `harmonic-confirmation.json`，保留全部初态、采样预算、
-burn、CI、ESS 和误差带。共享初态按 C++ `mt19937_64` / `normal_distribution` 逐 mode
-先取位置、再取速度；不使用各引擎自己的 velocity 初始化替代。LAMMPS 的 `units lj`
-使用 `T=k_B*300`、mass=1、24 个自由度；恒温器和 thermo 均不扣除质心自由度。
-NHC 链长为 4，LAMMPS 的链积分和初始热浴状态仍采用其自身实现，不要求跨引擎随机轨迹相同。
+<a id="相同-harmonic-模型的跨引擎对照"></a>
 
-`reference_gpumd_harmonic.py` 从锁定 GPUMD 源码抽取未改动的 NHC/SVR 函数，
-在独立 CPU driver 中供给谐振力；它不是原生 GPUMD 运行。NHC 的前后半步均保留
-GPUMD 的温度到动能往返计算。BDP 每个 seed 使用新进程，隔离上游函数静态 Gaussian cache。
+## 同一谐振模型的跨引擎对照
+
+三个实现共用 manifest 规定的初态、采样预算、预热区间、置信区间、有效样本量和误差带。C++ `mt19937_64` 与 `normal_distribution` 对各模态先抽位置再抽速度，所有引擎共用生成结果。LAMMPS 用 `units lj`，设置 `T=k_B*300`、`mass=1`，保留 24 个自由度，温控与 thermo 均不扣除质心。NHC 链长为 4。LAMMPS 使用自己的链积分和热浴初态，统计比较允许不同随机轨迹。
+
+### CPU 参考
+
+`reference_gpumd_harmonic.py` 只读抽取未改动的 GPUMD NHC/SVR 函数，在独立 CPU 驱动中施加谐振力。NHC 前后半步保留 GPUMD 的温度到动能往返计算。每个 BDP 种子启动新进程，隔离上游静态 Gaussian 缓存。
+
+LAMMPS 需要 `EXTRA-FIX` 的 `temp/csvr`，应先核对现有 NEP/Kokkos 二进制的包。若需要构建，从锁定参考导出独立源码，并启用 `PKG_EXTRA-FIX=on`。CPU 对照可关闭 MPI、OpenMP 和 Kokkos。`split-validation` 比较输出设置所需的 `run 1` / `run N-1` 与单段结果，验证 LAMMPS 的输出安排。`LAMMPS_CPU` 填符合条件的可执行文件。
 
 ```bash
-export DMGMD_ACF_HELPER=/tmp/dmgmd-thermostats-build/tests/dmgmd_autocorrelation
+export DMGMD_ACF_HELPER="$BUILD_DIR/tests/dmgmd_autocorrelation"
 python3 tests/thermostats/reference_gpumd_harmonic.py \
-  --stage pilot --work-root /tmp/gpumd-harmonic-source-pilot-new
+  --stage pilot --work-root "$WORK_ROOT/gpumd-source-pilot"
 python3 tests/thermostats/reference_gpumd_harmonic.py \
-  --stage confirm --ensemble nvt_nhc --work-root /tmp/gpumd-harmonic-source-confirm-new
+  --stage confirm --ensemble nvt_nhc --work-root "$WORK_ROOT/gpumd-source-confirm"
 python3 tests/thermostats/reference_lammps_harmonic.py \
-  --lmp /absolute/path/to/cpu-extra-fix-build/lmp \
-  --campaign pilot --work-root /tmp/lammps-harmonic-pilot-new
+  --lmp "$LAMMPS_CPU" --campaign pilot --work-root "$WORK_ROOT/lammps-pilot"
 python3 tests/thermostats/reference_lammps_harmonic.py \
-  --lmp /absolute/path/to/cpu-extra-fix-build/lmp \
-  --campaign confirmation --work-root /tmp/lammps-harmonic-confirm-new
+  --lmp "$LAMMPS_CPU" --campaign confirmation --work-root "$WORK_ROOT/lammps-confirm"
 ```
 
-LAMMPS 必须包含 `EXTRA-FIX` 的 `temp/csvr`；预留的 NEP/Kokkos 二进制未必包含此包。
-需要构建时，从锁定 reference 导出独立源码，在新目录启用 `PKG_EXTRA-FIX=on`；
-不得修改或原位构建 reference。CPU-only 对照可关闭 MPI、OpenMP 和 Kokkos。
-LAMMPS driver 的 `split-validation` 比较输出设置所需的 `run 1` / `run N-1` 与单段运行；
-这不是对 DMG-MD 分段隐藏状态的测试。
+### GPUMD GPU 测试适配器
 
-GPUMD 的 stock FCP 会减去全体系平均力，不能直接代表该独立外场。
-`build_gpumd_harmonic_native.py` 在独立源码/构建目录先构建原版，再生成测试适配器：
-只为此外场绕过 FCP 净力修正，提供 BDP seed 和 `compute2` 后的只读速度统计。
-NHC/SVR 公式和 GPU 积分器不改；FCP 位移、系数、力计算仍使用原生 float 路径。
-适配器不接入 DMG-MD 生产构建，不把修改后的测试接口声明为 stock GPUMD 输入能力。
+原版 GPUMD 的力常数势（FCP）减去全体系平均力。为表示这个独立外场，`build_gpumd_harmonic_native.py` 先在独立源码和构建目录编译原版，再构建测试适配器。适配器只在此测试中绕过 FCP 净力修正，提供 BDP 种子和 `compute2` 后的只读速度统计。NHC/SVR 公式、GPU 积分器和 FCP 的单精度位移、系数与力计算保持原样。测试接口只由适配器提供。
+
+`GPU_IDS_2` 填 2 张已分配设备。按上文方法预检设备和通信后再跑 GPU 作业，使用新目录并保留原始样本和未通过的报告。统计状态非 `PASS` 时驱动返回非零。
 
 ```bash
 python3 tests/thermostats/build_gpumd_harmonic_native.py \
-  --work-root /tmp/gpumd-native-harmonic-new --cuda-arch 89 --jobs 16
-python3 tests/thermostats/run_gpumd_native_harmonic.py \
-  --candidate /tmp/gpumd-native-harmonic-new/gpumd-harmonic-native-build/gpumd-harmonic-test-adapter \
-  --devices 4,5 --campaign smoke --work-root /tmp/gpumd-native-harmonic-smoke-new
-python3 tests/thermostats/run_gpumd_native_harmonic.py \
-  --candidate /tmp/gpumd-native-harmonic-new/gpumd-harmonic-native-build/gpumd-harmonic-test-adapter \
-  --devices 4,5 --campaign pilot --work-root /tmp/gpumd-native-harmonic-pilot-new
-python3 tests/thermostats/run_gpumd_native_harmonic.py \
-  --candidate /tmp/gpumd-native-harmonic-new/gpumd-harmonic-native-build/gpumd-harmonic-test-adapter \
-  --devices 4,5 --campaign confirmation --work-root /tmp/gpumd-native-harmonic-confirm-new
+  --work-root "$WORK_ROOT/gpumd-native" --cuda-arch 89 --jobs 16
+GPUMD_ADAPTER="$WORK_ROOT/gpumd-native/gpumd-harmonic-native-build/gpumd-harmonic-test-adapter"
+python3 tests/thermostats/run_gpumd_native_harmonic.py --candidate "$GPUMD_ADAPTER" \
+  --devices "$GPU_IDS_2" --campaign smoke --work-root "$WORK_ROOT/gpumd-gpu-smoke"
+python3 tests/thermostats/run_gpumd_native_harmonic.py --candidate "$GPUMD_ADAPTER" \
+  --devices "$GPU_IDS_2" --campaign pilot --work-root "$WORK_ROOT/gpumd-gpu-pilot"
+python3 tests/thermostats/run_gpumd_native_harmonic.py --candidate "$GPUMD_ADAPTER" \
+  --devices "$GPU_IDS_2" --campaign confirmation --work-root "$WORK_ROOT/gpumd-gpu-confirm"
 ```
 
-GPU 作业需在可访问驱动的环境运行，并先通过项目环境门。所有输出目录必须为新目录，
-统计非 PASS 返回非零；原始样本和非通过报告均保留。
-固定预算的实际结果和测试接口有效性见
-[2026-11-03 跨引擎对照](../../docs/status/validation/thermostat-validation.md#thermostat-reference-controls-20261103)。
+例中的 CUDA 架构 `89` 对应计算能力 8.9。已执行的固定预算、结果和测试接口证据见 [2026-11-03 跨引擎对照](../../docs/status/validation/thermostat-validation.md#thermostat-reference-controls-20261103)。

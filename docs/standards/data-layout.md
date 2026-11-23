@@ -4,23 +4,23 @@
 
 ## 计数、身份与权限
 
-`include/dmgmd/model.hpp` 的 AtomCounts 保存 global_count、owned_count、ghost_count，
-`local_count()=owned_count+ghost_count`。global_count 是元数据，不作为 局部域分解device stride。
+原子的全局 ID 在运行期间保持不变。它在某张 GPU 数组中的位置可以随迁移和重建而改变。负责积分、归约热力学量和提供输出记录的 rank 同一时刻只有一个。
+
+`include/dmgmd/model.hpp` 的 `AtomCounts` 保存 `global_count`、`owned_count` 和 `ghost_count`，其中 `local_count()=owned_count+ghost_count`。在局部域分解模式下，`global_count` 只记录体系大小，设备数组按 `local_count` 寻址。
 
 | 域 | 全量复制模式（replicated-full） | 局部域分解路径 |
 | --- | --- | --- |
-| reader HostAtoms | 每 rank 完整 N；owned=N、ghost=0 | bootstrap 从完整输入挑 owned；完整 host identity 仍保留 |
-| device local_count | N | owned + dependency ghosts + coordinate-only ghosts |
-| 权威 owned | SpatialOwnership 的任意槽位集合，按 gid 升序 | LocalLayout 的 `[0,owned)` 前缀，按 gid 升序 |
-| ghost | 无；non-owned 仍为 replicated scratch | 两个后缀按 `(source face, source rank, gid)` 排序，携带 image shift 元数据 |
-| NEP producer / final | 全 N scratch / owned 槽位权威 | `[0,owned+dep)` descriptor/partial，`[0,owned)` final force；owned=0 时 producer 为空 |
+| 主机读取结果 `HostAtoms` | 每 rank 读取全部 N 个原子，`owned=N`、`ghost=0` | 初始化从完整输入选取负责原子，仍保留完整的主机身份数据 |
+| 设备槽位数 `local_count` | N | 负责原子数 + 依赖副本数 + 仅坐标副本数 |
+| 负责原子的槽位 | `SpatialOwnership` 选取槽位，按 gid 升序 | `LocalLayout` 的 `[0,owned)` 前缀，按 gid 升序 |
+| 边界副本 | 无。非负责槽位仍参与全量复制的临时计算 | 两个后缀各按 `(source face, source rank, gid)` 排序，携带周期镜像偏移 |
+| NEP 中间量和最终力 | 所有 N 个槽位参与计算，只有负责槽位提供最终结果 | `[0,owned+dep)` 计算描述符和部分力，`[0,owned)` 计算最终力。`owned=0` 时中间量的中心集合也为空 |
 
-global_id 为 64-bit 输入行号，跨迁移稳定；local slot 不是身份。全量复制模式的 reader owned=N
-不能误当每 rank 都拥有 N 份物理贡献。局部域分解manager owner 在 cache epoch 内固定，可能
-暂时不同于当前位置的 geometric owner；只在统一 rebuild 提交迁移。
+`global_id` 为 64 位输入行号。全量复制模式中，读取器在每个 rank 上记录 `owned=N`，运行时根据 `SpatialOwnership` 另选负责贡献物理量的槽位。
 
-HostAtoms 当前为 O(N)/rank，整个作业为 O(NP)；root 输出还需 N-sized snapshot，不能据
-local device 布局宣称端到端内存 scaling。
+局部域分解模式将负责原子（owned atom）放在前段，边界副本（ghost atom）放在后段。依赖副本（dependency ghost）向本地原子提供描述符导数等中间量，仅坐标副本（coordinate-only ghost）只作为邻居候选。两类副本都不积分、不进入热力学归约，也不直接输出。一个缓存周期内，管理归属（manager owner，`manager_owner`）继续负责积分，即使按当前位置计算的几何归属（geometric owner，`geometric_owner`）已经改变。[缓存与迁移](cache-validity.md)
+
+`HostAtoms` 在主机上仍为每 rank O(N)，整个作业为 O(NP)。根 rank 输出还要收集 N 个原子的快照。局部设备数组的大小只说明 GPU 上这部分存储的用量。
 
 ## Host 模型与 Box
 
@@ -35,8 +35,7 @@ Model 包含 BoxData 与 HostAtoms。reader 数组在两路径初始化时都为
 | group_labels | int / methods×local | 原子持久 labels，contents 可重建 |
 | has_input_velocity | bool | model 有 vel 时 velocity 命令不重新初始化 |
 
-HostAtoms::validate 检查计数溢出、owned≤global、各标量长度=local、向量长度=3local 和
-每组 label 长度；它不证明 MPI owned 覆盖，后者由 runtime 校验。
+`HostAtoms::validate` 检查计数是否溢出，以及 `owned≤global`、标量长度为 local、向量长度为 3local 和每组标签长度是否成立。运行时另检查每个原子是否恰由一个 rank 负责。
 
 BoxData 保存 periodic[3] 与 h[9]：
 
@@ -46,8 +45,7 @@ h = [ ax bx cx
       az bz cz ]
 ```
 
-XYZ Lattice 按 a/b/c 向量排列，parser 转置进 h；runtime 使用 compat Box 求逆、体积和 MIC。
-P1 支持范围与 P>1 正交全周期约束见[MPI](mpi-runtime.md)，不由矩阵布局推导分布式支持。
+XYZ 的 `Lattice` 依次写 a、b 和 c 向量。解析时转置到 `h`。运行时用兼容层 `Box` 求逆矩阵、体积和最小镜像（MIC）。多 rank 支持正交全周期盒，单 rank 的支持条件另见 MPI 标准。[盒资格](mpi-runtime.md)
 
 ## SoA / ELL 寻址
 
@@ -67,18 +65,18 @@ f12{x,y,z}[angular_ordinal*L + center]
 
 ## Device 所有者与 buffer
 
-全量复制模式的 DeviceAtoms 位于 `src/runtime.cu`，局部域分解模式的 DomainDeviceAtoms/DomainState 位于
-`src/domain_runtime.cu`；MPI staging 由 `src/mpi_runtime.cu` 管理。
+全量复制模式用 `src/runtime.cu` 中的 `DeviceAtoms` 保存设备原子。局部域分解模式用 `src/domain_runtime.cu` 中的 `DomainDeviceAtoms` 和 `DomainState`。MPI 的传输缓冲区由 `src/mpi_runtime.cu` 管理。
 
 | buffer | 逻辑尺寸 | 局部域分解有效域 |
 | --- | --- | --- |
 | gid/type | L | 全 local 身份/typewise filter |
 | mass/charge | L | owned 权威；ghost 不积分/thermo/输出 |
-| position | 3L | owned 更新；ghost 每步按固定 face plan 刷新 |
+| position | 3L | owned 更新；ghost 在普通步按缓存 face plan 刷新，重建时更新映射 |
 | velocity | 3L | owned 权威，修速经 root gather/scatter |
 | force/PE/virial | 3L / L / 9L | force 前全 L 清零；owned 权威，ghost 仅 scratch |
 | unwrapped/previous_position | 按需 3L | owned；启用时 unwrapped 随迁移载荷传递 |
-| epoch_displacement | 3L | owned wrap 前累计，rebuild 清零；与用户 unwrapped 输出无关 |
+| epoch_displacement | 3L | 在 owned wrap 前累计，rebuild 清零。与用户 unwrapped 输出独立 |
+| affine_reference_position / affine_images | 每项 3L | 仅实验 `affine` 路径使用。参考 wrapped 坐标和周期 image 计数用于计算连续位移 |
 | decision_max_squared/reasons | 各一标量 | 从 owned manager copy 得出统一决议 |
 | NEP Fp/sums/partial/count/list | L stride | producer 域 `[0,owned+dep)`，candidate `[0,L)` |
 | face send/recv index | face plan 长度 | send 指 owned、recv 指 ghost；与 mapping epoch 绑定 |
@@ -86,20 +84,17 @@ f12{x,y,z}[angular_ordinal*L + center]
 全量复制模式的 mass/type/position 为完整副本，VV/thermo 按 owned index list。普通步不再复制 velocity；
 迁移/修速前先恢复必要复制态。NEP 写全 N scratch，只有 owned 部分用于物理输出。
 
-表中为逻辑 size。L=0 时部分 GPU_Vector capacity 至少为 1，domain API 仍显式接收 L=0，
-空中心 launch 前短路，不访问 padding。Atom/NEP/Neighbor 使用 resize_reuse，容量足够只改
-逻辑尺寸，扩容留 25% 余量；capacity 不作 stride。默认长度 copy/fill 以逻辑 size 为准。
+表中是逻辑长度。L=0 时，部分 `GPU_Vector` 仍分配至少一个元素。局部接口显式接收 L=0，在启动内核之前跳过空中心，填充空间不参与计算。Atom、NEP 和 Neighbor 使用 `resize_reuse`。容量充足时只更新逻辑长度，扩容时留出 25% 余量。寻址跨度和默认拷贝、填充范围都按逻辑长度计算。
 
 ## 布局提交与输出
 
-LocalLayout、membership、face map、neighbor reference 的 epoch/身份必须一致。普通步不改
-槽位/分类/map；rebuild 才统一迁移、重建并上传。workspace 逻辑 size 随 L 更新，超 capacity
-才分配；布局变化强制 neighbor 失效、重新取得 view，清零全部逻辑输出。
-缓存证明见[cache-validity](cache-validity.md)。
+`LocalLayout`、边界成员、通信映射和邻居参考数据必须对应同一次重建及同一组原子。普通步只刷新副本坐标，统一重建时才迁移原子、更新成员、建立新映射并上传。工作区逻辑大小随 L 更新，超出容量时才分配。布局变动后，邻居表失效。程序重新获取数组视图，并清零全部逻辑输出。[固定盒缓存证明](cache-validity.md)
 
-局部域分解bootstrap 的首次 wrap 使用共享 device kernel，unwrapped 从 raw 输入播种；host 重算
-wrap 可能因 FMA 差 1 ULP。XYZ/restart 只 gather owned prefix + gid，root 恢复输入顺序；
-ghost 不参与 thermo、控温或直接输出。restart 新进程重新 bootstrap，不复用 epoch。
+局部 NPT 实验还单独跟踪盒的版本。边界就绪状态同时绑定步号、布局版本（layout epoch）和盒版本（box generation）。[变盒后的刷新和重建](domain-npt.md)
+
+局部域分解初始化时，使用共享设备内核首次折回坐标。展开坐标（unwrapped）从原始输入初始化。若改用主机代码计算折回，FMA 可能导致 1 ULP 的差异。
+
+XYZ 和 restart 只汇集负责原子前缀及其 gid，根 rank 恢复输入顺序。边界副本不参与热力学量计算、控温或直接输出。restart 启动的新进程重新初始化布局和缓存周期。
 
 ## O2/O3 附加状态
 

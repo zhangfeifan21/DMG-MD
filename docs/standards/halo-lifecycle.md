@@ -1,16 +1,14 @@
 # 局部域分解 halo 请求与缓冲区生命周期
 
-类别：现行通信接口合同。默认保持 O3 的 begin 后立即 finish；O4 显式启用时在二者间提交 early，
-无进度线程，默认 HostStaged、分区默认 off、粒子布局与通信半径均不变。
-实现入口是 `MpiRuntime::begin_p2p_indexed_device_soa`、`progress_halo`、`finish_halo`；
-旧 `exchange_p2p_indexed_device_soa` 是 begin/finish 包装。`refresh_ghost_positions`
-默认立即 finish；O4 回调在 prepare 后 begin，early 提交后 finish。两条路径均在物理 unpack 完成后
-才发布 refreshed epoch/本步 halo-ready token。
+普通步沿已有计划发送本地坐标，把收到的坐标解包到 ghost 槽位。通信接口（O3）把一次交换拆成发起和完成两部分。默认发起后立即等待完成。显式开启重叠调度（O4）后，程序先完成求力准备，再发起交换，并在等待前提交只读本地坐标的计算。
+
+默认后端为 `HostStaged`，分区默认 `off`。通信在 MPI 初始化线程推进，两种调度沿用同一粒子布局和通信半径。
+
+接口为 `MpiRuntime::begin_p2p_indexed_device_soa`、`progress_halo` 和 `finish_halo`。`exchange_p2p_indexed_device_soa` 封装了立即发起、完成的顺序。`refresh_ghost_positions` 默认也立即调用完成接口。两条路径都在解包实际写完后，才发布 `refreshed_epoch` 和本步的 halo 就绪凭证。
 
 ## 状态、所有权与复用
 
-runtime 持有唯一 HaloSlot、四个 MPI_Request 和四个禁用计时的 CUDA event；token 只有
-递增 generation，不持有资源。以下状态是独立事实，不用单个“通信完成”替代：
+运行时用一个 `HaloSlot` 保存这次交换的缓冲区状态、四个 `MPI_Request` 和四个不计时的 CUDA 事件。调用者持有的 token 只有递增的交换版本（generation）。发送结束、接收结束、GPU 可以读取接收缓冲区和 ghost 写完分别记录。
 
 | 状态字段 | 发布依据 | 后续允许动作 |
 | --- | --- | --- |
@@ -22,25 +20,17 @@ runtime 持有唯一 HaloSlot、四个 MPI_Request 和四个禁用计时的 CUDA
 | `unpack_complete` | 默认 stream 的 unpack-complete event 完成（零接收也记录事件） | ghost SoA 的写入物理完成 |
 | `reusable` | 两组 MPI 完成、四个 request 均为 NULL、unpack event 完成 | 解锁整个槽位，可 reserve/下一次 begin/销毁 |
 
-begin 在初始化线程完成 pack/发送源就绪等待，然后按原顺序发出两次 Isend、两次 Irecv，
-返回未完成 token；因此 begin 本身包含发送准备的阻塞。progress 在同一线程分别 Testall
-两组，接收完成即可排 H2D/unpack，不等发送完成；查询事件，全部完成时恰一次记账/解锁。
-progress 不保证整次调用无阻塞：CudaAware 保留 output device sync，MPI 自身也可能阻塞。
-finish 对尚未确认的请求做一次四请求 Waitall，再等待 unpack event，保证物理完成。
-同 generation 的重复 finish/progress 幂等；下一 begin 使旧 token 失效。`halo_state`
-只读已观察状态，不隐式推进。
+`begin` 在初始化线程打包发送坐标，等发送缓冲区就绪，再按原顺序发出两次 `Isend` 和两次 `Irecv`。调用会等待发送准备，返回的 token 表示交换尚未结束。
 
-缓冲区 capacity 只能在 begin 的任何 CUDA/MPI 使用之前增长。四个专用 p2p device/pinned
-buffer 带 lease；即使 reserve 未超过 capacity，在 lease 内也拒绝调用。lease 直到全部
-可复用条件满足才解除；重建期 host face exchange 同时使用方向 tag，因此在槽位活动时也
-拒绝。其他 collective 使用独立 staging；O4 只在 post 后插入独立 early，不插入新的 collective。
+`progress` 在同一线程分别用 `Testall` 检查发送组和接收组。接收组先结束时，可以先提交 H2D 和解包。它同时查询 CUDA 事件，所有操作完成后只记账、解锁一次。`CudaAware` 保留接收后的设备同步，MPI 自身也可能阻塞。
 
-调用者必须保持 position、send-index/recv-slot device 数组、CommunicationVolume 和可选
-P2pTimingEvents 的地址/内容有效直到 finish；不得 resize/free/覆盖。begin 已完成 pack，
-但此合同仍保守锁定输入/映射直到 finish。runtime 的私有 staging 不向调用者暴露。
-O4 还冻结 force 的 mask/Verlet/type/gid/workspace/box，owned position 只读；
-pack 不写 position，unpack 仅写 ghost，early 不读 ghost。当前调度一次 refresh 完成后才有下一次 refresh/rebuild/run，单槽位足够；没有跨步在途
-复用要求，因此没有双缓冲和第二份 payload 内存。
+`finish` 对尚未确认的请求执行一次四请求 `Waitall`，再等解包事件完成。对同一个 generation 重复调用 `finish` 或 `progress` 保持幂等。开始下一次交换后，旧 token 失效。`halo_state` 只读取已经观察到的状态。
+
+四个专用点对点缓冲区分别用于设备和固定页主机内存的收发。程序在 `begin` 首次使用 CUDA 或 MPI 前扩容，并持有使用锁（lease）直至槽位可复用。锁定期间拒绝调用 `reserve`，包括已经有足够容量的情况。重建期的主机边界交换共用方向 tag，在普通步交换尚未结束时也须拒绝。其他集合通信有各自的传输缓冲区。O4 只在发出请求后提交独立计算，集合通信次数保持不变。
+
+调用者须保持位置、设备发送索引及接收槽位数组、`CommunicationVolume` 和可选 `P2pTimingEvents` 的地址与内容有效，直到 `finish` 返回。即使打包已经完成，也要保留输入和映射，期间不能 resize、释放或覆盖。运行时私有缓冲区由运行时自行管理。
+
+O4 同时冻结求力掩码、Verlet 表、类型、gid、工作区和盒。本地位置保持只读。打包只读位置，解包只写边界副本，第一批计算只读负责原子。当前每次刷新完成后才开始下一次刷新、重建或运行段，因此只用一个槽位和一份收发载荷。
 
 ## 后端依赖依据与同步变化
 
@@ -69,14 +59,11 @@ GPU pointer 支持范围见 [Open MPI 5 CUDA](https://docs.open-mpi.org/en/v5.0.
 
 ## 边界、退出与失败
 
-P=1 返回完成的空 token，不增加通信计数、不创建生命周期事件。P>1 零 count 仍发出四个
-合法零字节请求，内部 buffer 至少分配一个 double；不会启动零维 kernel 或对空指针做偏移。
-左右方向 tag 分别 1101/1102，接收匹配对侧方向，P=2 两面同 peer 也不混淆。
-多 run 使用同一 runtime，前次物理完成后才复用/增长容量，generation 不在段界重置。
+P=1 时返回已完成的空 token，通信计数不增加，也不创建生命周期事件。P>1 且 count 为零时，仍发出四个合法的零字节请求。内部缓冲区最少分配一个 double，跳过零维内核启动和空指针偏移。
 
-所有 MPI 调用仍在初始化线程，申请 MPI_THREAD_FUNNELED；halo API 检查线程身份。
-外部已初始化 MPI 时检查 main-thread 与线程等级；未引入线程。正常退出先 finish，
-然后销毁事件、通信器和 MPI；runtime 析构看到未完成槽位直接诊断并 MPI_Abort。
+左右方向的 tag 分别为 1101 和 1102，接收使用对应的对侧方向。P=2 的两个面可以发给同一 rank。多个运行段共享运行时，只有前次操作实际完成才能复用或扩容，generation 跨段连续。
+
+程序申请 `MPI_THREAD_FUNNELED`，在初始化线程执行全部 MPI 调用。MPI 由外部初始化时，先检查调用者是否为 main thread，并检查线程等级。正常退出先调用 `finish`，再销毁事件和通信器，最后结束 MPI。运行时析构时如果槽位仍未完成，会输出诊断并调用 `MPI_Abort`。
 
 非法 token、重入 begin、在途 host face 交换、分配/CUDA/MPI 异常均输出本地
 `DMGMD_ERROR category=halo` 并 MPI_Abort，不发诊断 collective、不等待仅本地成功发出的
@@ -93,7 +80,7 @@ P=1 返回完成的空 token，不增加通信计数、不创建生命周期事�
 staging 字段不计入 p2p staging，不能把字段未增加解释为无拷贝。完成记账恰一次。
 无额外 payload 内存；仍为 device send+recv 高水位，HostStaged 另有 pinned send+recv。
 新增固定状态、四 request 持久存储和四个 event handle（CUDA 内部 event 分配大小未知），
-与原子数无关。本次 x86-64 ABI 的 Impl 对象从 472 B 增至 736 B（+264 B）；
+与原子数无关。原验收的 x86-64 ABI 中，Impl 对象从 472 B 增至 736 B（+264 B）；
 该数字不含 CUDA opaque event 内部存储，重建到其他 ABI 不承诺相同 padding。
 生命周期事件是必要依赖；详细 profiler 关闭仍创建，不属于计时 event。
 

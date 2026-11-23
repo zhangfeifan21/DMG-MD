@@ -80,7 +80,7 @@ def register(args: argparse.Namespace) -> None:
         "steps": {"long40": 40, "split20x2": 40, "checkpoint20": 20, "resume20": 20},
         "dt_fs": 0.25, "temperature_K": 300, "target_pressure_GPa": 0.0,
         "trajectory_interval_steps": 10, "restart_interval_steps": 20,
-        "restart_precision": "C %g, six significant digits",
+        "restart_precision": "C %.17g (double precision)",
     }
     write_json(args.freeze.resolve(), payload)
     print(json.dumps({"freeze": str(args.freeze.resolve()), "candidate_sha256": payload["candidate_sha256"],

@@ -1,394 +1,187 @@
-# NPT acceptance suite
+<a id="npt-acceptance-suite"></a>
 
-`manifest.json` is the approved B2/B3 preregistration. B2 formal results must not
-be opened until `freeze_b2.py` records the built candidate SHA, pinned GPUMD SHA,
-all generated input hashes, baseline tolerance manifest SHA, test-code hashes, and
-the three reference checkout states. The freeze file is separate from the run
-evidence and is never regenerated to accommodate a result. SCR sampling remains
-gated on a B3 freeze plus successful short repeat/seed, route, and negative
-controls. The approved B3 matrix is P1 HostStaged and P2/P4 with both
-communication backends at base dt; half dt is P1 HostStaged only. Reference jobs
-are single-process, full-budget, one-segment GPUMD runs. Distinct UTC launch
-seconds are conservative isolation only; GPUMD's internal seed is not observed.
-The release source and pinned executable branch are verified as `system_clock`
-epoch-count initialization in the B3 freeze.
+# NPT 验收
 
-The two protocol files are historical preregistration records frozen by SHA-256; keep their bytes unchanged. For current human-readable mode names, see the [MPI runtime standard](../../docs/standards/mpi-runtime.md).
+按测试目标选择入口。需要复现历史结果时，从对应记录取得该批次的程序、参考身份和输入冻结文件。
 
-The B2 Ber golden uses the same explicit-velocity `model.xyz`, `run.in`, and NEP
-potential bytes for GPUMD and DMG-MD. It checks 200 thermo rows, six stress
-columns, the nine box columns, sparse XYZ frames, and restart snapshots against
-the existing `tests/baseline/manifest.json` tolerances. Those tolerances and the
-existing golden files are immutable. The short matrix covers P1/P2/P4 with
-HostStaged and CudaAware after the CUDA/MPI environment gate; 5184 atoms exercises
-local-domain eligibility but must still report the replicated-full NPT-only route. Negative cases run
-with timeouts and require nonzero exit, diagnostics, and no trajectory/restart
-artifact.
+| 要验证的行为 | 执行入口 |
+| --- | --- |
+| Berendsen NPT 与普通 GPUMD 的短程数值一致性 | [短程基线（B2）](#比较-berendsen-短程输出b2) |
+| 输出字段、SCR 重复性、错误输入与更换 rank 数重启 | [短程专项（B4）](#检查输出错误处理和重启b4) |
+| 全量复制模式的 SCR 采样 | [原注册与独立确认](#scr-统计原注册b3) |
+| 局部域分解下的变盒、缓存、迁移与统计 | [局部 NPT](#检查局部-npt) |
 
-SCR statistics collect only per-step thermo (`T`, pressure, and volume). They do
-not emit per-step XYZ. Sparse output and restart semantics are covered by the
-separate Ber smoke tests. The 8-seed and half-dt statistics thresholds are frozen
-in the manifest; B3 is not run as part of B2.
+运行 GPU 作业前，从仓库根目录加载 `../env/md-mpi.sh`，按[设备预检](../mpi/README.md)验证环境。
 
-Run offline fixture checks from the repository root in a fresh supported
-environment:
+`CANDIDATE` 和 `GPUMD_REF` 分别指向待测程序与冻结要求的 GPUMD 程序。`BUILD_LOG` 指向候选构建日志，`ACF_HELPER` 指向原生自相关函数（ACF）辅助程序。
+
+`WORK_ROOT` 选可写位置，例如工作树旁的 `../scratch/npt-checks-new`。各输出和冻结文件应使用新路径。`GPU_IDS` 填现场分配的 4 张不同设备，`GPU_IDS_2` 取其中 2 张。
+
+## 预检输入和统计工具
+
+可以先检查输入清单和生成器。`--write` 将生成结果写入空目录，检查 `manifest.json` 定义的用例和输入身份。
 
 ```bash
 source ../env/md-mpi.sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/npt/test_manifest.py
-python3 tests/npt/generate_inputs.py --output /tmp/npt-fixture-check --write
+python3 tests/npt/generate_inputs.py --output "$WORK_ROOT/fixture-check" --write
 ```
 
-After the B2 build owner provides the candidate binary and build log, freeze the
-formal inputs before running either engine. Use a new empty input directory and
-freeze file for this one B2 candidate:
+本目录的 [manifest](manifest.json) 是 B2/B3 原预注册的参数来源。历史独立确认按[原协议与参数](independent-confirmation-protocol.md)核对，公开副本与原冻结的区别写在协议内。回放需要保留对应冻结证据和参数原文。模式名称见 [MPI 标准](../../docs/standards/mpi-runtime.md)。
+
+## 比较 Berendsen 短程输出（B2）
+
+两端使用完全相同的显式速度 `model.xyz`、`run.in` 和 NEP 势。按短程 [golden 容差](../baseline/manifest.json) 检查 200 行 thermo、6 列应力、9 列盒数据、稀疏 XYZ 和重启快照。保留已有 golden 和容差。短程矩阵用 P1/P2/P4 及 HostStaged、CudaAware。5,184 原子用例达到局部资格的尺度，原 B2 的 NPT 作业仍须报告全量复制模式。
+
+正式比较前，冻结候选和参考程序身份、生成输入、基线容差 manifest、脚本哈希和三个只读参考 checkout 的状态。冻结文件独立于运行结果。先复核其身份并记录 SHA-256，再开启正式结果。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/freeze_b2.py \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b2/dmg-md \
-  --build-log /tmp/dmgmd-b0-b4-20261103/build-b2.log \
-  --input-root /tmp/dmgmd-b0-b4-20261103/npt-b2/registered-inputs \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b2/freeze-b2.json
+python3 tests/npt/freeze_b2.py --candidate "$CANDIDATE" --reference "$GPUMD_REF" \
+  --build-log "$BUILD_LOG" --input-root "$WORK_ROOT/b2-inputs" \
+  --freeze "$WORK_ROOT/b2-freeze.json"
+python3 tests/npt/run_npt_ber.py --candidate "$CANDIDATE" --reference "$GPUMD_REF" \
+  --freeze "$WORK_ROOT/b2-freeze.json" --devices "$GPU_IDS" \
+  --work-root "$WORK_ROOT/b2-results"
 ```
 
-Only after checking the emitted identity and recording the freeze SHA may the
-formal matrix run. Select four free physical GPUs after the environment gate and
-use a fresh, nonexistent evidence directory:
+驱动串行启动用例，保留命令、环境、输入输出哈希、日志、路由、容差、首个数值差异、重启与输出检查、参考 checkout 前后状态。三个参考目录只读。负例应在时限内非零退出，打印指定诊断，且不生成轨迹或重启文件。比较失败时保留原结果，按原判据排查。
+
+## SCR 统计原注册（B3）
+
+原 B3 的 8 种子矩阵在基准步长下覆盖 P1 HostStaged 及 P2/P4 的两种后端。半步长只做 P1 HostStaged。每步记录温度、压力和体积，稀疏 XYZ 与重启由另外的 Ber 测试覆盖。
+
+B3 另冻一份输入和执行身份。冻结包含原生 ACF 辅助程序（Geyer 估计器）、GPUMD 随机数初始化的源码及 `nm`、`objdump` 证据、输入哈希和只读 checkout 状态。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_npt_ber.py \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b2/dmg-md \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b2/freeze-b2.json \
-  --devices 0,1,2,3 \
-  --work-root /tmp/dmgmd-b0-b4-20261103/npt-b2/results
-```
-
-The runner is sequential to keep GPU demand bounded. It stores exact commands,
-environment, input/output hashes, stdout/stderr, route messages, tolerances,
-first numerical mismatch, restart/output checks, and before/after reference
-state in the evidence directory. It does not write to the GPUMD, LAMMPS, or
-MatPL reference checkouts. A failed comparison is preserved as a failure; neither
-the manifest threshold nor the old golden is adjusted.
-
-After build-b3 is available, create the immutable SCR input tree and execution
-freeze. The freeze records the native ACF helper used by the existing Geyer
-estimator, GPUMD RNG source plus `nm`/`objdump` evidence, input hashes, and
-reference checkout states. Use only the allocated GPUs 4–7 after the CUDA/MPI
-environment gate:
-
-```bash
-source ../env/md-mpi.sh
 PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/freeze_b3.py \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md \
-  --build-log /tmp/dmgmd-b0-b4-20261103/b3-build-final.log \
-  --input-root /tmp/dmgmd-b0-b4-20261103/npt-b3/registered-inputs \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b3/freeze-b3.json \
-  --acf-helper /tmp/dmgmd-b0-b4-20261103/build-b2/tests/dmgmd_autocorrelation
+  --candidate "$CANDIDATE" --reference "$GPUMD_REF" --build-log "$BUILD_LOG" \
+  --input-root "$WORK_ROOT/b3-inputs" --freeze "$WORK_ROOT/b3-freeze.json" \
+  --acf-helper "$ACF_HELPER"
+python3 tests/npt/run_npt_scr.py --candidate "$CANDIDATE" --reference "$GPUMD_REF" \
+  --freeze "$WORK_ROOT/b3-freeze.json" --acf-helper "$ACF_HELPER" \
+  --mode short --devices "$GPU_IDS" --work-root "$WORK_ROOT/b3-short"
 ```
 
-Run B3 short controls first and retain their result directory. Formal sampling
-may be sharded across GPUs and conditions after the environment gate. Each
-candidate `(profile, condition, seed)` and each reference `(profile, seed)` must
-occur exactly once in the selected evidence set; separate shards for the same
-condition are merged only with duplicate-key rejection. Record each
-GPUMD seed's actual UTC launch time/PID and serialize its launches so distinct
-reference jobs cannot start in the same UTC second. A reusable environment proof
-may replace a repeated four-rank gate only when candidate SHA, MPI/UCX/CUDA
-fingerprint, physical GPU order/UUID/driver, and CudaAware probe status all
-match. Preserve the proof path and hash in each runner result.
+短程重复性、种子、路由和负例先通过，保留结果目录。正式运行用 `--mode condition` 选择注册条件。分批调度时，合并前须拒绝重复键。候选记录按 `(profile, condition, seed)` 唯一，参考按 `(profile, seed)` 唯一。同一候选 SHA-256、MPI/UCX/CUDA 指纹、物理 GPU 顺序和 UUID、驱动及 CudaAware 探测状态全部相符时，才复用四 rank 预检结果。各作业保留证明路径和哈希。
 
-The candidate `DMGMD_ENSEMBLE_SEED` equals its registered initial-model seed.
-GPUMD jobs run once per seed at the full profile budget; those reference files
-are reused across condition records. Candidate longer looks are complete reruns
-from the same initial state and fixed seed, with earlier prefixes verified
-byte-for-byte before reuse. Never resume from restart or stitch segments.
-`build_records.py` makes the analyzer input from hashed execution evidence. Set
-`DMGMD_ACF_HELPER` to the frozen native helper when running the analyzer; do not
-use the Python O(N×lag) fallback for formal budgets. No thresholds, seeds,
-budgets, or bootstrap replicates are changed after observing results.
+GPUMD 用单进程、单段和完整预算。同一初态种子在一个步长配置下只启动一次参考，对应产物供多个候选条件使用。参考按冻结的启动登记串行分配不同 UTC 秒，并记录实际启动时间和 PID。这是隔离措施。已锁定参考的初始化取自 `system_clock` 的纪元计数，内部种子未直接观测。带启动登记的运行使用 `freeze_b3_execution.py` 生成的批次执行冻结以及 `--reference-launch-registry` 指定的登记表。
 
-## B4 output and restart contracts
+候选的 `DMGMD_ENSEMBLE_SEED` 等于该份初始模型的注册种子。延长采样按原初态、原种子完整重跑，并逐字节核对已有前缀。续跑快照或拼接的数据不能用于正式分析。`build_records.py` 根据带哈希的执行证据生成分析输入。分析时用 `DMGMD_ACF_HELPER` 指向冻结的原生程序。Python 的 `O(N×lag)` 实现供小规模检查使用。种子、预算、阈值和 bootstrap 次数在看结果前固定。
 
-These short B4 runners are separate from the B2/B3 statistics suites. Use the
-frozen candidate and input trees shown below, an unused `--work-root`, and the
-allocated GPUs only. Every new shell starts with `source ../env/md-mpi.sh`.
+<a id="b4-output-and-restart-contracts"></a>
 
-P2/P4 output, SCR repeatability, and P2↔P4 restart checks for dense water and
-BaTiO₃-ZBL:
+## 检查输出、错误处理和重启（B4）
+
+本节复核特定输入的短程合同。为每个专项指定与候选和输入匹配的冻结文件。下列变量分别对应输出冻结 `OUTPUT_FREEZE`、负例冻结 `NEGATIVE_FREEZE`、NEP5 冻结 `NEP5_FREEZE` 和跨 rank 重启冻结 `RESTART_FREEZE`。2026-11-03 批次的冻结目录依次为 `freeze-v7`、`negative-freeze-v6`、`nep5-freeze-v2` 和 `crossrank-p1-p2-freeze-v1`。历史批次的身份与结果见 [B4 记录](../../docs/status/validation/npt-validation.md#npt-output-20261103)。
+
+**输出与跨 rank 重启。** 检查稠密水和 BaTiO₃-ZBL 的 P2/P4 输出、SCR 重复性与 P2↔P4 重启。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_npt_contracts.py --run \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md \
-  --reference ../gpumd-reference/src/gpumd \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b4/freeze-v7/freeze.json \
-  --work-root /tmp/dmgmd-b0-b4-20261103/npt-b4/p2-p4-replay-new \
-  --devices 0,1,2,3 --ranks 2,4 --backends HostStaged,CudaAware --timeout 900
+python3 tests/npt/run_npt_contracts.py --run --candidate "$CANDIDATE" \
+  --reference "$GPUMD_REF" --freeze "$OUTPUT_FREEZE" \
+  --work-root "$WORK_ROOT/b4-output" --devices "$GPU_IDS" \
+  --ranks 2,4 --backends HostStaged,CudaAware --timeout 900
 ```
 
-P1 input/environment negative cases use `negative-freeze-v6`. To run the P4
-all-rank seed and partition mismatch cases, add
-`--devices 0,1,2,3 --collective-ranks 4 --seed-mismatch --env-mismatch
---seed-mismatch-only`; this freeze includes a hashed per-rank wrapper for
-ordinary `mpirun -n 4`, not an MPMD launcher command.
+**失败关闭。** P1 输入和环境负例使用匹配的负例冻结。下例只跑 P4 的种子和分区设置不一致。冻结须含按 rank 设置变量的包装器哈希，作业用普通 `mpirun -n 4` 启动。检查 P1 负例时去掉 `--seed-mismatch-only`，按测试目标选设备和其余开关。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_npt_contract_negatives.py --run \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md \
-  --reference ../gpumd-reference/src/gpumd \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b4/negative-freeze-v6/freeze.json \
-  --work-root /tmp/dmgmd-b0-b4-20261103/npt-b4/negative-replay-new \
-  --devices 0,1,2,3 --collective-ranks 4 --seed-mismatch --env-mismatch \
-  --seed-mismatch-only --timeout 120
+python3 tests/npt/run_npt_contract_negatives.py --run --candidate "$CANDIDATE" \
+  --reference "$GPUMD_REF" --freeze "$NEGATIVE_FREEZE" \
+  --work-root "$WORK_ROOT/b4-negatives" --devices "$GPU_IDS" \
+  --collective-ranks 4 --seed-mismatch --env-mismatch --seed-mismatch-only --timeout 120
 ```
 
-The NEP5 short matrix uses the registered `nep5_equivalent` potential
-transformation, records both NEP4/NEP5 potential hashes, and compares P1
-HostStaged Berendsen against GPUMD:
+**NEP5。** 采用注册的 `nep5_equivalent` 转换，记录 NEP4 和 NEP5 势的哈希。在短程矩阵中另以 P1 HostStaged 比较 Berendsen 与 GPUMD。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_npt_nep5_contract.py --run \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md \
-  --reference ../gpumd-reference/src/gpumd \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b4/nep5-freeze-v2/freeze.json \
-  --work-root /tmp/dmgmd-b0-b4-20261103/npt-b4/nep5-replay-new \
-  --devices 0,1,2,3 --ranks 1,2,4 --backends HostStaged,CudaAware --timeout 900
+python3 tests/npt/run_npt_nep5_contract.py --run --candidate "$CANDIDATE" \
+  --reference "$GPUMD_REF" --freeze "$NEP5_FREEZE" \
+  --work-root "$WORK_ROOT/b4-nep5" --devices "$GPU_IDS" \
+  --ranks 1,2,4 --backends HostStaged,CudaAware --timeout 900
 ```
 
-The focused dense-water restart check launches four 5-step new jobs: P1
-checkpoint→P2 and P2 checkpoint→P1 for both NPT ensembles. It checks snapshot
-shape, finite thermo, replicated-full routing, and `%g` restart serialization; it does not
-assert trajectory continuity.
+**两种系综的跨进程数续跑。** 稠密水专项分别检查 P1→P2 和 P2→P1。共启动 4 个新作业，每个运行 5 步。核对快照形状、有限 thermo 和全量复制路由。`%.17g` restart 数值应与最终轨迹帧在 6 位有效数字上一致。本项检查文件能否恢复物理状态，跨作业轨迹连续性有独立语义。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_npt_crossrank_restart.py --run \
-  --candidate /tmp/dmgmd-b0-b4-20261103/build-b3/dmg-md \
-  --freeze /tmp/dmgmd-b0-b4-20261103/npt-b4/crossrank-p1-p2-freeze-v1/freeze.json \
-  --work-root /tmp/dmgmd-b0-b4-20261103/npt-b4/crossrank-replay-new \
-  --devices 0,1 --timeout 600
+python3 tests/npt/run_npt_crossrank_restart.py --run --candidate "$CANDIDATE" \
+  --freeze "$RESTART_FREEZE" --work-root "$WORK_ROOT/b4-restart" \
+  --devices "$GPU_IDS_2" --timeout 600
 ```
 
-The exact input/result identities and reference checkout snapshots for the
-accepted B4 subset are recorded in
-[`docs/status/validation/npt-validation.md#npt-output-20261103`](../../docs/status/validation/npt-validation.md#npt-output-20261103).
+## SCR 独立确认
 
-## Independent SCR confirmation analyzer (CPU only)
+原 18 个分析节点的总体结论是 `INCONCLUSIVE`。2026-11-04 对另起的 160 条完整链执行一次最终分析。在注册范围内通过。记录包含[科学结论](../../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)、[配对分析](../../docs/status/validation/evidence/npt-scr-gb/paired-analysis.json)与[原 18 次分析](../../docs/status/validation/npt-scr-formal-results.json)。
 
-The original independent paired confirmation was approved in
-[`independent-confirmation-manifest.json`](independent-confirmation-manifest.json)
-and [`independent-confirmation-protocol.md`](independent-confirmation-protocol.md).
-Its interrupted 63-completed/6-partial/91-planned execution remains archived.
-The n3 migration uses the separately approved
-[`independent-confirmation-n3-manifest.json`](independent-confirmation-n3-manifest.json)
-and [successor protocol](independent-confirmation-n3-protocol.md): all 160 chains
-start fresh with the isolated CUDA 12.8 reference build, preserving the original
-scientific parameters and analysis. Root approved the execution freeze before
-sampling. All 160 full chains completed on 2026-11-04; the reviewed guard then
-claimed `analysis.start` exclusively and launched the sole frozen analysis.
-It completed at 11:39 UTC with scientific status **PASS**. Primary base/half
-and all four MPI bridge conditions passed; final scope and review evidence
-are in the [dated result](../../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)
-and [successor index](../../docs/status/validation/npt-scr-n3-confirmation-index.json).
-The
-paired analyzer consumes a derived immutable records bundle and verifies its
-manifest/protocol, executable, source, input, output, route, RNG-source-audit,
-and reference launch identities before reading the registered thermo series.
-It does not modify the original B3 result records or old analyzer.
-
-Run the synthetic math and full 160-chain metadata-loader tests from the
-repository root:
+[独立确认协议](independent-confirmation-protocol.md)记录配对与统计方法、原批次批准和冻结流程。新采样仍须使用本轮批准的冻结文件。以下命令只检查配对分析代码。
 
 ```bash
-source ../env/md-mpi.sh
-PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/test_paired_confirmation_math.py
-PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/test_paired_confirmation_integration.py
+python3 tests/npt/test_paired_confirmation_math.py
+python3 tests/npt/test_paired_confirmation_integration.py
 ```
 
-The following CTest command is a historical invocation from the B3 scratch
-tree. Its old `/tmp` path is no longer available; the legacy archive remains
-under `artifacts/validation/npt-scr-gb/pre-reboot-archive/`, while the detailed
-migration locator was removed. The final NPT/G-B outcome is summarized in the
-[n3 result report](../../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)
-and [confirmation index](../../docs/status/validation/npt-scr-n3-confirmation-index.json).
+<a id="experimental-local-domain-npt"></a>
 
-```bash
-source ../env/md-mpi.sh
-cmake -S . -B /tmp/dmgmd-b0-b4-20261103/build-b3
-ctest --test-dir /tmp/dmgmd-b0-b4-20261103/build-b3 \
-  --output-on-failure \
-  -R '^dmgmd\.npt_paired_confirmation_(math|integration)$'
-```
+## 检查局部 NPT
 
-The registered n3 one-shot analysis used the frozen analyzer, build-specific
-native ACF helper, and four CPU workers. Per-job records, execution bundle,
-and migration locator are not retained as review artifacts; original raw
-trajectories remain in the artifact archive. The n3 guard already ran the
-analyzer exactly once, so that historical invocation is not a rerun procedure.
-The paired analysis result and final identity summary remain available from the
-[n3 result report](../../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104)
-and [confirmation index](../../docs/status/validation/npt-scr-n3-confirmation-index.json).
+[局部 NPT 标准](../../docs/standards/domain-npt.md)与 [domain manifest](domain-manifest.json) 定义变盒合同。DN0–DN4 已在[最终验收记录所列条件](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116)内通过。
 
-The analysis uses the frozen 20,000 bootstrap replicates and seed for every
-variance component. Fork workers share the loaded read-only series and return
-only summaries. The synthetic suite checks that the `--workers 1` serial path
-matches the parallel path. Run the formal
-analysis once, after the complete queue and environment audit pass root review;
-do not inspect interim scientific results or add looks.
+### 几何与短程差分
 
-## n3 execution and migration checks
-
-[`dispatch_scr_confirmation.py`](dispatch_scr_confirmation.py) runs each job
-through the unchanged frozen runner. It validates the successor's restricted
-registration differences, environment entry point, library identities, and two
-four-GPU proofs. GPU 0 is excluded; ranks within a job use distinct GPUs, and
-concurrent jobs lease disjoint devices. A stop file drains active full chains
-before exiting. Failed or stale-running jobs require review; the dispatcher
-does not retry or splice trajectories. After all 160 jobs complete it audits
-the records and writes the analyzer bundle, without starting statistical analysis.
-
-[`check_migration_numerics.py`](check_migration_numerics.py) provides separate
-`prepare`, `run`, and `analyze` commands for legacy pilot seeds 101/102. Its
-200-step P1 base/half repeats and P2/P4 base backend checks use the original
-baseline tolerances. These diagnostic trajectories never enter confirmation
-records. Pure CPU checks are:
-
-```bash
-source ../env/md-mpi.sh
-python3 tests/npt/test_migration_numerics.py
-python3 tests/npt/test_dispatch_scr_confirmation.py
-```
-
-Execution identities, the original PTX/driver failure, isolated reference build,
-qualification results, and current confirmation state are recorded in the
-[2026-11-04 NPT report](../../docs/status/validation/npt-validation.md#npt-scr-confirmation-20261104).
-
-The two draft-refusal runner tests now create explicit temporary DRAFT fixtures;
-the real approved registration remains unchanged. This deferred test-only edit
-was applied after the sole analysis completed, and all six runner CPU tests
-passed. The temporary source snapshot and maintenance receipt were removed under
-the final-results-only retention request. The concise result is recorded in the
-[NPT regression report](../../docs/status/validation/npt-validation.md#npt-regression-20261104).
-
-## Experimental local-domain NPT
-
-The [DN0 contract](../../docs/standards/domain-npt.md) and
-[domain manifest](domain-manifest.json) specify the contract. DN0–DN4 were accepted within the finite scope in the
-[final validation record](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116). CPU-only independent ideal-geometry and route checks:
+先做 CPU 独立几何与路由检查。如果需要 GPU 冒烟测试，准备大盒输入。Berendsen 和 SCR 分别用新目录，后者把示例的 `npt_ber` 换成 `npt_scr`。
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/test_domain_geometry_oracle.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/test_domain_npt_runner.py
+python3 tests/npt/prepare_domain_npt_fixture.py --output "$WORK_ROOT/domain-ber-fixture" \
+  --ensemble npt_ber --steps 20
+python3 tests/npt/run_domain_npt.py --candidate "$CANDIDATE" \
+  --fixture "$WORK_ROOT/domain-ber-fixture" --work-root "$WORK_ROOT/domain-ber-smoke" \
+  --devices "$GPU_IDS" --ranks 2,4 --backends HostStaged,CudaAware
 ```
 
-`run_domain_npt.py` is a short differential smoke, not the full matrix. Give it
-an immutable large-box fixture directory containing `model.xyz`, `nep.txt`, and
-`run.in`; the latter must produce `thermo.out` and `trajectory.xyz`, including
-force, potential and virial columns. It runs off/rebuild/affine at each requested
-P/backend, enforces actual route records and the existing baseline tolerances,
-and retains input/output hashes and logs. Example after environment and GPU gate:
+`--fixture` 需要固定的 `model.xyz`、`nep.txt` 和 `run.in`。`run.in` 要求输出 thermo 及含力、势能和 virial 的轨迹。脚本逐一执行 `off`、`rebuild` 和 `affine`，按既有容差并核查实际路由。结果保留日志及输入输出哈希。短程诊断数据与正式统计分别保存。
+
+### 迁移、压力和变盒提交
+
+[迁移用例](domain-npt-migration-cases.json)定义 72 个短作业。对 Berendsen/SCR、P2/P4、两种后端和三种域模式，按每帧当前盒重放迁移记录。检查小幅越界时的缓存复用、重复迁移、跨条带与周期边界迁移，以及无迁移的重建。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_domain_npt.py --candidate /absolute/path/dmg-md \
-  --fixture /absolute/path/fixture --work-root /tmp/domain-npt-smoke-new \
-  --devices 0,1,2,3 --ranks 2,4 --backends HostStaged,CudaAware
+python3 tests/npt/run_domain_npt_migration.py --candidate "$CANDIDATE" \
+  --work-root "$WORK_ROOT/domain-migration" --devices "$GPU_IDS"
 ```
 
-The [migration cases](domain-npt-migration-cases.json) define a separate 72-job
-matrix for manager ownership under actual box changes. It compares BER/SCR at
-P2/P4 with both backends and all three modes, replays full migration records
-against each frame's current box, and requires micro-crossing reuse, repeated
-and multi-slab/PBC migration, and rebuilds without migration. These artificial
-short trajectories test the runtime contract. Run after the environment gate:
+`dmgmd_domain_owned_thermo_poison_tests` 直接调用生产局部代码。它检查边界副本中的污染值、非全局 stride、空 rank 和多次归约修补。P1/P2/P4 均覆盖两种后端。`dmgmd_owned_box_preflight_tests` 在 P2/P4 验证生产 uint32 OR 一致拒绝候选盒，且无部分提交。压力及独立能量导数走[压力检查](domain-pressure-oracle.md)，保留原始理想晶格参考失败。
+
+### 采样试跑与正式统计
+
+试跑先生成输入，再检查成本。`pilot.json` 记录最慢 rank 的运行循环时间和端到端墙钟，标记为诊断。分析器拒绝把 pilot 轨迹纳入正式数据。
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/npt/run_domain_npt_migration.py --candidate /absolute/path/dmg-md \
-  --work-root /tmp/domain-npt-migration-new --devices 0,1,2,3
+python3 tests/npt/domain_statistics.py prepare --output "$WORK_ROOT/domain-stat-inputs"
+python3 tests/npt/domain_statistics.py pilot --inputs "$WORK_ROOT/domain-stat-inputs" \
+  --candidate "$CANDIDATE" --output "$WORK_ROOT/domain-pilot" \
+  --devices "$GPU_IDS_2" --ranks 2 --backend HostStaged --mode rebuild --steps 1000
 ```
 
-`dmgmd_domain_owned_thermo_poison_tests` is a separate MPI test target that
-calls the actual local-domain thermo implementation with poisoned ghosts,
-non-global strides, an empty rank, and multiple reduction patches. Execute
-P1/P2/P4 on both backends. `dmgmd_owned_box_preflight_tests` uses the production
-uint32 OR to check collective rejection without partial commit at P2/P4.
-
-The [large-box statistical registration](domain-statistics-registration.json) was frozen and the 152 registered chains and one final analysis completed. The final audit reports integrity PASS and scientific PASS for its explicitly registered NEP4-C, 5760-atom single-node matrix; see the [validation record](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116) for exact base and half-step conditions and limitations. Its separate finite-temperature NVT response is a
-scientific reference; neither the controller's input bulk modulus nor the static
-zero-temperature EOS substitutes for that measurement.
-
-The frozen family contains 151 simultaneous intervals: the previous 116 plus
-absolute temperature and pressure mean intervals for all 16 SCR conditions and
-temperature intervals for the three NVT volumes. They use the same precision and
-complete-block gates, and the registered 300 K ± 6 K and 0 GPa ± 0.1 GPa bounds.
-The simultaneous coverage is approximate and depends on sufficiently independent
-blocks, truncated autocorrelation estimates, and the percentile bootstrap; it is
-not an unconditional finite-sample guarantee. Constant chains or constant squared
-deviations do not establish ESS and are INCONCLUSIVE.
-With adequate precision an interval wholly outside its allowed range is FAIL;
-one crossing a boundary is INCONCLUSIVE. A direct empirical ECDF excess is FAIL.
-An insufficient-precision interval or a one-sided curvature upper bound above
-its limit is INCONCLUSIVE. Any FAIL makes the overall result FAIL; otherwise any
-INCONCLUSIVE makes it INCONCLUSIVE.
-
-For the diagnostic fixture used in the example, create a new directory with
-`python3 tests/npt/prepare_domain_npt_fixture.py --output /tmp/domain-npt-fixture --ensemble npt_ber --steps 20`;
-choose `npt_scr` in a separate directory for SCR. These short diagnostics do
-not enter the registered sampling data.
-
-The exploratory cost interface is separate from formal records:
-
-```bash
-python3 tests/npt/domain_statistics.py prepare --output /tmp/domain-stat-inputs-new
-python3 tests/npt/domain_statistics.py pilot --inputs /tmp/domain-stat-inputs-new \
-  --candidate /absolute/path/dmg-md --output /tmp/domain-pilot-new \
-  --devices 0,1 --ranks 2 --backend HostStaged --mode rebuild --steps 1000
-```
-
-`pilot.json` reports both the maximum rank run-loop time and end-to-end wall
-time; it is marked pilot and cannot be loaded as formal data. The frozen registration
-has 128 SCR chains and 24 independent NVT response chains. `freeze` refuses the
-unapproved draft and binds the candidate, input inventory, software, job list,
-four-GPU environment proof, RNG and deterministic gates, native ACF helper, and linked library identities. `run` executes one registered job into a new
-folder and requires the proof's device identities and environment. The one-shot
-`analyze_domain_statistics.py` rejects incomplete or changed evidence and atomically
-claims a marker in the evidence directory before analysis. The registration,
-source and analyzer must be frozen together, and
-no pilot trajectory may enter this evidence set.
-
-Once the complete deterministic reports are available, the proof generator
-validates their original artifacts and the independently prepared jittered
-pressure reference before publishing either proof:
+确定性报告齐全后，使用 `proof` 核验原始产物和独立准备的压力扰动参考。`DETERMINISTIC_EVIDENCE` 指向完整报告目录，`PRESSURE_FIXTURE` 指向该压力试验的输入。生成的证明供正式冻结使用。
 
 ```bash
 python3 tests/npt/domain_statistics.py proof \
-  --evidence /absolute/path/final-v1 --candidate /absolute/path/dmg-md \
-  --pressure-fixture /absolute/path/ber-fixture --output /absolute/path/new-proofs
+  --evidence "$DETERMINISTIC_EVIDENCE" --candidate "$CANDIDATE" \
+  --pressure-fixture "$PRESSURE_FIXTURE" --output "$WORK_ROOT/domain-proofs"
 ```
 
-The fixed pressure method and its preserved original reference failure are
-recorded in [domain-manifest.json](domain-manifest.json); proof generation does
-not itself approve the draft registration or start sampling.
+`freeze` 拒绝未批准的注册，把候选、输入清单、软件、作业列表、四卡预检、随机数和确定性证明、原生 ACF 程序和链接库身份一并锁定。注册、源码和分析器一起冻结。`run` 按证明中的设备身份和环境执行一个注册作业，写入新目录。具体参数见 `domain_statistics.py --help` 与子命令帮助。
 
-Formal freezes claim a registration-SHA directory under
-`artifacts/domain-npt/statistics-claims/`. Each registered job claims one output
-path before execution; the sole final analysis checks those claims and claims its
-own look. Failed or interrupted claims remain and cannot be retried by changing
-the output directory or copying the freeze/evidence. This is an operational guard,
-not protection against an operator manually altering the ledger.
+正式冻结在 `artifacts/domain-npt/statistics-claims/` 按注册文件 SHA-256 登记。每个作业先登记输出路径，单次最终分析也须登记。失败或中断后保留原记录，改目录或复制冻结文件仍不得重跑同一作业。记录依靠操作权限约束，手动改写登记文件会破坏证据。
 
-After the registration and all deterministic proofs are approved and frozen,
-`domain_statistics.py batch` can execute the frozen jobs serially with the same
-arguments as `run`, except that `--output` names a new batch directory and
-`--job` is omitted. It records commands and per-job state in `progress.json`,
-validates each completed record and its input/output hashes before advancing,
-and invokes the final analyzer once only after the complete matrix. A failed
-job or analysis stops the batch; the existing output directory cannot be reused,
-and this entry point does not resume or retry jobs. `COMPLETE` means execution
-and analysis finished; inspect the recorded analysis status for the scientific
-PASS, FAIL, or INCONCLUSIVE result.
+`batch` 串行执行同一冻结的作业，参数沿用 `run`，省略 `--job` 并以新目录作为 `--output`。`progress.json` 记录各作业命令与状态。脚本逐个核验完成记录和输入输出哈希，完整矩阵结束后只启动一次分析。作业或分析出错即停，原目录保留，批处理无续跑入口。`COMPLETE` 表示执行与分析结束，科学结论见 `PASS`、`FAIL` 或 `INCONCLUSIVE`。
+
+### DN4 结果的适用范围
+
+[大盒统计注册](domain-statistics-registration.json)冻结了 128 条 SCR 链和 24 条独立 NVT 响应链。152 条链和一次最终分析已完成，冻结的完整性与科学判据均通过。适用范围为 5,760 原子 NEP4-C 单节点矩阵。基准和半步长的配置详见 [DN4 验收](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116)。热力学体积响应由独立的有限温 NVT 作业测得。控压器的输入体模量与零温静态状态方程另有用途。
+
+151 个同时区间包括原先的 116 个、16 种 SCR 条件各自的绝对温度和压力均值，以及 3 个 NVT 体积的温度均值。精度与完整块条件沿用原注册，界限为 `300 K ± 6 K` 和 `0 GPa ± 0.1 GPa`。同时覆盖为近似值，依赖块的独立程度、截断自相关估计和百分位 bootstrap。恒定采样或恒定的平方偏差无法估计有效样本量，判 `INCONCLUSIVE`。
+
+精度达标且区间完全越界判 `FAIL`，区间跨界判 `INCONCLUSIVE`。经验累积分布直接越限判 `FAIL`。区间精度不足或单侧曲率上界越限判 `INCONCLUSIVE`。任一项 `FAIL` 则整体 `FAIL`。其余情形若有 `INCONCLUSIVE`，整体仍为 `INCONCLUSIVE`。

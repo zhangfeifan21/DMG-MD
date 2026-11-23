@@ -1,105 +1,83 @@
 # MPI 验收入口
 
-从包含 AGENTS.md 的仓库根目录运行，每个新 shell 先加载环境：
+## 检查设备绑定与 CUDA 缓冲通信
+
+从仓库根目录执行。`GPU_IDS` 填 4 张已分配的 GPU，按测试使用的顺序排列。`GPU_ID` 填其中一张，供单卡 golden 使用。`WORK_ROOT` 指向可写位置，下面各个 `--work-root` 都应是尚不存在的目录。
 
 ```bash
 source ../env/md-mpi.sh
+GPU_IDS=0,1,2,3  # 示例，换成分配的设备
+GPU_ID=0
+WORK_ROOT=../scratch/mpi-checks-new
 cmake --build build -j 8
-python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0,1,2,3 --ranks 4
-python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0
+python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices "$GPU_IDS" --ranks 4
+python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device "$GPU_ID"
 ```
 
-GPU 门槛通过后才启动数值矩阵；沙箱隔离按 AGENTS.md 处理，不回退 system MPI/UCX。
-已有 replicated/migration/domain runner 各自的 `--help` 是选项事实源。
+启动数值矩阵前，确认预检通过，并核对每个 rank 的 GPU 身份和实际后端。权限问题按 [AGENTS.md](../../AGENTS.md) 诊断。环境仍须使用同一套 Open MPI 与 UCX。全量复制、迁移和局部域分解驱动分别提供 `--help`。
 
-v1.0 的 NHC/BDP 双路径、双后端、root 链/RNG 协议与新作业 restart 矩阵另由
-[`tests/thermostats/`](../thermostats/README.md)执行。下文 O 系列矩阵仍用于原有路径回归；
-NHC/BDP 当前只接受默认分区/重叠选项，不能直接套用 O 系列实验开关。
-支持组合见[系综标准](../../docs/standards/ensembles.md)。
+NHC 和 BDP 的双路径、双后端、根进程链与随机数状态，以及新作业重启，使用[恒温器测试](../thermostats/README.md)。目前这两个系综只支持默认分区和重叠选项。下文 O 系列用于原路径与实验开关回归。支持组合见[系综标准](../../docs/standards/ensembles.md)。
 
-## O3 halo 生命周期
+<a id="o3-halo-生命周期"></a>
+
+## 检查 halo 生命周期（O3）
 
 ```bash
-source ../env/md-mpi.sh
-python3 tests/mpi/run_halo_lifecycle.py --help
 python3 -u tests/mpi/run_halo_lifecycle.py --candidate ./build/dmg-md \
-  --devices 0,1,2,3 --work-root dmgmd-halo-lifecycle-new
+  --devices "$GPU_IDS" --work-root "$WORK_ROOT/halo-lifecycle"
 python3 -u tests/mpi/run_mpi_domain.py --candidate ./build/dmg-md --ranks 2,4 \
-  --backends HostStaged,CudaAware --devices 0,1,2,3 --partition-modes off,serial,verify \
-  --work-root dmgmd-halo-domain-new
+  --backends HostStaged,CudaAware --devices "$GPU_IDS" --partition-modes off,serial,verify \
+  --work-root "$WORK_ROOT/halo-domain"
 ```
 
-`--work-root` 必须是不存在的新目录，所有精确命令/环境、stdout/stderr 与 results.json
-会保留。生命周期 runner 自行重复四 GPU 门槛，使用默认构建的独立
-`build/tests/dmgmd_mpi_halo_lifecycle_tests`（可由 `--test-executable` 指定）。
-CTest 不自动启动此 MPI/GPU runner。
+生命周期驱动重做四卡预检，调用独立测试程序 `build/tests/dmgmd_mpi_halo_lifecycle_tests`。用 `--test-executable` 可指定其他构建的路径。此驱动需单独启动。保存精确命令、环境、标准输出、标准错误与 `results.json`。
 
-正常矩阵覆盖 HostStaged/CudaAware、P=1/2/4、count 1/0/17/2/1 的增长与复用，两个
-component、不同方向数据、立即 finish/progress-only、重复 finish 和精确字节记账。
-`receive-first`/`send-first` 由测试 wrapper 暂缓一组 Testall 完成观察，检查接收 GPU/unpack
-完成与发送源复用的不同条件；不把它解释成真实网络完成顺序或 overlap 证据。
+正常矩阵覆盖 HostStaged 和 CudaAware，分别用 P1/P2/P4 测试。检查计数 `1/0/17/2/1` 变化时的容量增长和复用、两个分量、各方向数据、立即完成和只推进模式、重复完成及精确字节记账。
 
-故障矩阵仅 rank0 注入：非法 count、第二个 send post 失败、Waitall/Testall 失败、
-unpack event 失败、重复 begin、在途 host face 操作、非法 token、未 finish 的析构、
-启动自检第二个 post 失败，以及 HostStaged D2H/H2D 失败。每例要求整个作业非零退出且
-输出指定 halo 原因；超时直接失败，不把被杀死的挂起作业计作通过。
-GNU 链接 wrapper 只存在于独立测试程序，生产没有测试开关。
+`receive-first` 和 `send-first` 让测试包装器暂缓观察一组 `Testall` 完成。接收侧验证 GPU 与 unpack 完成，发送侧验证源缓冲区何时可复用。该测试验证状态条件。实际网络完成顺序和计算通信重叠另用实测判断。
 
-数值 runner 继续比较 P1 oracle、full/serial/verify 的逐原子 energy/force/virial、
-轨迹/输出/restart，验证实际 split、回退、空 rank、多段 run、skin/rebuild/迁移与精确字节。
-O3 验收另将结果与锁定 O2 产物逐字节核对；本轮具体命令、哈希、结果见
-[O3 状态](../../docs/status/validation/communication-computation-overlap.md#halo-lifecycle-20261015)，接口见
-[halo 生命周期标准](../../docs/standards/halo-lifecycle.md)。
+故障矩阵只让 rank 0 注入错误。覆盖非法 count、第二次 send post、`Waitall`、`Testall`、unpack event、重复 begin、在途 host face 操作、非法 token、未 finish 的析构、启动自检时第二次 post，以及 HostStaged 的 D2H/H2D。每个负例须使整个作业非零退出并打印指定的 halo 原因。超时判失败。GNU 链接包装器仅编入独立测试程序。
 
-## O4 默认关闭的实际重叠
+数值驱动用 P1 参考比较 `full`、`serial`、`verify` 的逐原子能量、力、virial、轨迹与重启。还核对实际分片、回退、空 rank、多段运行、skin、重建、迁移和字节计数。原 O3 验收另与冻结的 O2 产物逐字节比较。证据见 [O3 验收](../../docs/status/validation/communication-computation-overlap.md#halo-lifecycle-20261015)，接口见 [halo 生命周期标准](../../docs/standards/halo-lifecycle.md)。
 
-先按上面的环境、golden、CTest 和 O3 生命周期顺序验收，再执行：
+<a id="o4-默认关闭的实际重叠"></a>
+
+## 检查实验重叠路径（O4）
+
+先完成环境预检、单卡 golden、CTest 和 O3 测试，再显式启用各重叠组合。
 
 ```bash
-source ../env/md-mpi.sh
 python3 -u tests/mpi/run_overlap_schedule.py --candidate ./build/dmg-md \
-  --devices 0,1,2,3 --work-root dmgmd-o4-schedule-new
+  --devices "$GPU_IDS" --work-root "$WORK_ROOT/o4-schedule"
 python3 -u tests/mpi/run_mpi_domain.py --candidate ./build/dmg-md --ranks 2,4 \
-  --backends HostStaged,CudaAware --devices 0,1,2,3 \
+  --backends HostStaged,CudaAware --devices "$GPU_IDS" \
   --partition-modes off,serial,verify,overlap-wait,overlap-poll,verify-wait,verify-poll \
-  --work-root dmgmd-o4-domain-new
+  --work-root "$WORK_ROOT/o4-domain"
 ```
 
-runner 清除父 shell 的 DMGMD 变量，显式白名单写入 partition/overlap/trace，保存
-launch_environment 并检查程序 CONFIG 与真实 split/progress 次数。`overlap-wait/poll`
-分别映射 partition=serial + overlap=wait/poll；`verify-wait/poll` 用于有效 R/A、中间量、
-逐原子全量及 ghost poison 对比。每个 rank/backend 的七模式科学文件须逐字节相同。
-保留原 manifest 差分容差、通信字节与请求/tag 门槛，不修改 golden。
+驱动清除父 shell 的 DMGMD 变量，按白名单设置分区、重叠和追踪开关。核对 `launch_environment`、程序的 CONFIG、实际分片及进度次数。`overlap-wait` 和 `overlap-poll` 使用 `partition=serial`。`verify-wait` 和 `verify-poll` 检查有效 R/A、中间量、逐原子全量及 边界副本的污染值。每种 rank 和后端的 7 种模式须产生逐字节相同的科学文件。沿用 manifest 容差、通信字节和请求/tag 判据。
 
-独立 `build/tests/dmgmd_overlap_schedule_tests` 链接生产 runtime/main，只在测试链接时
-包裹 MPI/CUDA API。它暂缓 receive transport post，直到 early event 完成，记录未完成
-请求；poll 必须实际触发 8 次上限。另检查 rank0 单边 Waitall 错误、非法/不兼容开关和
-rank 配置不一致。所有错误必须整作业非零退出，超时失败。受控延迟只证明状态合同。
-正常路径的 GPU kernel 与请求在途交叠由另跑 profiler 判断，不能把 host enqueue 当 GPU。
+`build/tests/dmgmd_overlap_schedule_tests` 链接生产 runtime 和主程序，只在测试链接时包装 MPI/CUDA API。它暂缓发布接收请求，直至 early event 完成，并记录未完请求。`poll` 路径须实际触发 8 次上限。负例检查 rank 0 单边 `Waitall` 错误、非法或不兼容开关、rank 间配置不一致。负例必须整作业非零退出，超时判失败。
 
-`DMGMD_OVERLAP_TRACE=1` 默认关闭，记录 host 单调时钟观察和 CUDA event elapsed，
-没有校准时不合并两个时间源。完整证据及重算方法见
-[O4 报告](../../docs/status/validation/communication-computation-overlap.md#overlap-o4-20261016)。
-# O8 thermo 消费与实际调用次数
+在正常作业中判断 GPU kernel 与请求在途是否重叠时，另用 profiler 观察设备执行。`DMGMD_OVERLAP_TRACE=1` 默认关闭，分别记录主机单调时钟与 CUDA event 耗时。两种时间源经过校准才可合并。证据及重算方法见 [O4 验收](../../docs/status/validation/communication-computation-overlap.md#overlap-o4-20261016)。
 
-在统一环境预检通过后运行独立 differential；`--work-root` 必须是新目录。
-probe 只用于诊断，正式墙钟不得 preload。
+<a id="o8-thermo-消费与实际调用次数"></a>
+
+## 核对热力学量的实际调用（O8）
+
+预检通过后，用相同输入比较 O7 的可执行文件与候选。`BEFORE` 指向 O7 二进制的绝对路径。探针通过预加载注入，只用于检查消费者、调用步号和原子所有权。正式墙钟测试使用无探针运行。
 
 ```bash
-source ../env/md-mpi.sh
 python3 tests/mpi/run_thermo_demand.py \
-  --before /path/to/dmg-md-o7 --after ./build/dmg-md \
+  --before "$BEFORE" --after ./build/dmg-md \
   --probe ./build/tests/libdmgmd_thermo_demand_probe.so \
-  --devices 0,1,2,3,4,5,6,7 --work-root /path/to/new-work-directory
+  --devices "$GPU_IDS" --work-root "$WORK_ROOT/thermo-demand"
 ```
 
-消费者、步号、所有权与诊断合同见[thermo 标准](../../docs/standards/thermo-demand.md)。
+脚本覆盖 P2/P4 两种后端，保存 `results.json`。具体判断见[热力学量按需计算标准](../../docs/standards/thermo-demand.md)。
 
+## 核对生产者调度（O8.6）
 
-O8.6 的两条显式调度使用 `--schedule producer-compact`（原 E/H 紧凑）或
-`--schedule producer-geometry`（实际 Verlet 参考 q 几何内缩）。两者继续支持
-`off,serial,verify,verify-wait,verify-poll`；compact 的空 late 正确跳过两次 producer launch。
-几何规则不要求原 I 非空，窄 slab 可完全走 `empty-early` full fallback，不能作 overlap 证据。
-受控 `run_overlap_schedule.py` 对几何路线另用 128 Å/16 原子 fixture，验证 P2/P4 的实际 early；
-原窄 slab 仍由 domain matrix 验证数值与回退。实际 compact grid、列表覆盖和 poison/oracle
-要求见[分区合同](../../docs/standards/domain-partition.md#o86-producer-紧凑与几何调度)。
+显式传 `--schedule producer-compact` 选择原 E/H 紧凑布局，传 `--schedule producer-geometry` 选择按 Verlet 参考坐标 q 做几何内缩。两者支持 `off,serial,verify,verify-wait,verify-poll`。紧凑布局的 late 列表为空时跳过两次生产者调用。几何条件允许原 I 为空，窄条带可记录 `empty-early` 并回退到完整计算。
+
+受控测试 `run_overlap_schedule.py` 用 128 Å、16 原子的测试体系验证几何路线在 P2/P4 实际执行 early。原窄条带由域分解矩阵验证数值与回退。紧凑网格、列表覆盖、污染值和参考判据见[分区标准](../../docs/standards/domain-partition.md#o86-producer-紧凑与几何调度)。

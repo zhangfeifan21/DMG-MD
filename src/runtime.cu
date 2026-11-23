@@ -1290,7 +1290,7 @@ void write_restart(
   std::fprintf(file, "%zu\n", identity.counts.global_count);
   std::fprintf(file, "pbc=\"%c %c %c\" ", box.pbc_x ? 'T' : 'F', box.pbc_y ? 'T' : 'F',
                box.pbc_z ? 'T' : 'F');
-  std::fprintf(file, "Lattice=\"%g %g %g %g %g %g %g %g %g\" ", box.cpu_h[0],
+  std::fprintf(file, "Lattice=\"%.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g\" ", box.cpu_h[0],
                box.cpu_h[3], box.cpu_h[6], box.cpu_h[1], box.cpu_h[4], box.cpu_h[7],
                box.cpu_h[2], box.cpu_h[5], box.cpu_h[8]);
   if (identity.group_labels.empty()) {
@@ -1300,7 +1300,7 @@ void write_restart(
                  identity.group_labels.size());
   }
   for (const std::size_t atom : order) {
-    std::fprintf(file, "%s %g %g %g %g %g %g %g ", identity.species[atom].c_str(),
+    std::fprintf(file, "%s %.17g %.17g %.17g %.17g %.17g %.17g %.17g ", identity.species[atom].c_str(),
                  snapshot.position[atom], snapshot.position[stride + atom],
                  snapshot.position[2 * stride + atom], identity.mass[atom],
                  snapshot.velocity[atom] / TIME_UNIT_CONVERSION,

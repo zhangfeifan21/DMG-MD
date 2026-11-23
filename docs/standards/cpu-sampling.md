@@ -1,28 +1,23 @@
 # Benchmark CPU 采样合同（schema v1）
 
-类别：当前测试工具合同。实现入口：`tests/benchmark/cpu_sampling.py`、
-`analyze_cpu.py`、`run_benchmark.py`；CLI/运行示例见
-[benchmark README](../../tests/benchmark/README.md#cpu-采样c1)。不改变 runtime 默认行为。
-本工具记录 affinity/cpuset/quota，不设置它们。O1 的 expected-cores/expected-numa
-参数核验手工映射；统一设置策略与独立于采样器的核验见[绑定合同](cpu-binding.md)，
-未验收的跨引擎面仍在[计划](../plans/mpi-cpu-binding.md)。
+CPU 采样器记录每个 DMG-MD rank 的进程和线程 CPU 时间，并读取实际 affinity、cpuset 和 quota。采样默认关闭，启动器独立设置和核对 CPU 绑定。`expected-cores`、`expected-numa` 核验手工映射，属于 O1 诊断。[CPU 绑定](cpu-binding.md) · [跨引擎计划](../plans/mpi-cpu-binding.md)
+
+`tests/benchmark/cpu_sampling.py` 负责采集，`analyze_cpu.py` 解析，`run_benchmark.py` 启动并记录采样。[命令和示例](../../tests/benchmark/README.md#诊断入口)
 
 ## 支持范围与身份
 
-Python 3.10+、Linux、本机 Open MPI、`--engines dmgmd`。默认关闭，开启后每 trial 一个
-独立 collector；在 mpiexec 的 rank executable 位置插入 wrapper，读取
-`OMPI_COMM_WORLD_{RANK,LOCAL_RANK,SIZE,LOCAL_SIZE}`，注册后等待 collector ACK 再 `execv`。
-不在 rank 内创建采样线程、不初始化 CUDA/MPI；launcher 只出现在 observer scope。
+支持 Python 3.10+、Linux 和本机 Open MPI，benchmark 使用 `--engines dmgmd`。每次启用采样的 trial 启动一个独立采集进程（collector）。`mpiexec` 先启动 wrapper，wrapper 读取 `OMPI_COMM_WORLD_{RANK,LOCAL_RANK,SIZE,LOCAL_SIZE}` 注册身份，等 collector 确认后用 `execv` 启动 DMG-MD。
+
+采样线程和采集逻辑都在 rank 之外，wrapper 不初始化 CUDA 或 MPI。启动器的 CPU 用量只计入观察进程（observer）。
 
 wrapper 必须与 collector 的 hostname、boot ID、PID/mount/time/cgroup namespace 全部相同，
 且 world size=local size、world rank=local rank。多节点、宿主跨 namespace 采容器均拒绝；
 无共享注册目录的远端启动会失败，不用本机同号 PID 代替远端 rank。
 容器内运行 runner/collector/ranks 支持相同 namespace；不得把 `NSpid` 当成已完成的跨 namespace 映射。
 
-身份是 trial + host/namespace + PID + `/proc/PID/stat` starttime(field 22)；线程另加 TID 和
-自己的 starttime。collector 验证 exe 路径、argv、`/proc/PID/exe` 内容 SHA-256 与候选一致后才
-采 rank，故不把 wrapper/launcher CPU 算入 rank。极短进程可能来不及验证：保留注册、标 partial。
-每次读 stat/status/affinity 后复核 starttime，避免读取中重用。进程退出或 zombie 不作为有效端点。
+同一次运行中的主机、namespace、PID 和进程启动时间共同标识一个 rank。启动时间来自 `/proc/PID/stat` 第 22 字段（`starttime`）。采集某个线程时再加 TID 和线程自身的启动时间。每次读取 stat、status 和 affinity 后重新核对启动时间，防止读取过程中系统已重用同一 PID 或 TID。
+
+collector 确认 exe 路径、argv 和 `/proc/PID/exe` 内容的 SHA-256 与候选程序一致，才开始计算 rank 的 CPU 用量。极短进程可能在核验前结束，工具保留注册并标为 `partial`。退出或成为僵尸的进程不能用作有效窗口端点。
 
 实际 GPU 只从该 trial 的 `DMGMD_MPI` stdout 关联：world/local rank、size、hostname 一致，
 CUDA UUID 去前缀/横杠后 32 hex 与请求可见卡匹配且 rank 间唯一。原始 binding 和注册均保留。
@@ -57,24 +52,25 @@ GPU telemetry 在原 UTC 时间之外附同 CLOCK_MONOTONIC 读取区间；只�
 
 ## 指标与缺失语义
 
-`interval(a,b)` 只接受同身份/clock/CLK_TCK、相邻 sample_id、两端 status=ok、正时间差、
-非负计数差。`U=Δutime/CLK_TCK`、`S=Δstime/CLK_TCK`、`W=Δmidpoint_ns/1e9`，
+CPU 用量来自两次采样之间的用户态和内核态计数差。一个窗口必须满足以下条件，`interval(a,b)` 才接受：
+
+- 两个样本来自同一进程或线程，时钟和 `CLK_TCK` 相同。
+- `sample_id` 相邻，且两端均为 `status=ok`。
+- 时间差为正，CPU 计数差非负。
+`U=Δutime/CLK_TCK`、`S=Δstime/CLK_TCK`、`W=Δmidpoint_ns/1e9`，
 core equivalent=`(U+S)/W`、one-core CPU%=100×core equivalent；不加 child/guest time。
 均值是 `ΣCPU/Σ有效W`，峰值是有效单窗口最大值并附窗口宽度。覆盖率为有效 W 总和/首末有效
 样本跨度，另记 unavailable 样本数与跳过的 sample_id 数；不是对整个进程寿命的覆盖保证。
 
-进程 stat 是 rank 聚合视图，线程行只用于分解，二者**不相加**。PID/TID 重用不跨生命周期
-算差；首样本只建基线，线程退出无末端样本右删失。两次轮询间出生又退出的线程不可见，
-`max_sampled_threads` 不是创建线程总数。进程与线程读时刻不等，差额不能直接命名为短命线程 CPU。
-`/proc/PID/status` context switches 仅主 task；last_cpu 不是迁移计数。等待类型、第三方线程职责
-仍 UNKNOWN；CPU 使用时间不能区分 MPI 忙轮询与有效工作。
+进程 stat 已汇总该 rank 的 CPU 用量，线程行用来解释这些用量的分布。首个样本建立基线。退出前缺少末端样本的线程按右删失处理。线程在两次轮询之间创建并退出时不会被观察到，因此 `max_sampled_threads` 只表示采到的最大线程数。进程和线程读数的时刻不同，差额无法归给短命线程。
 
-job 默认是所有已观测**进程** CPU seconds subtotal，P>1 异步读取的窗口一般不完全重合，
-status=partial，job core-equivalent/峰值为空；`sum_rank_mean_core_equivalent` 明确是不同窗口
-rank 均值之和。只有各 rank 存在完全相同的实际起止时间才给 common_exact_windows job 均值和带宽度的窗口峰值；
-不插值、不将各 rank 峰值相加。O1 已有 rank-local run marker；若要正式的跨 rank
-同一窗口 job 指标，仍需同步 marker/计数边界。
-C1 不发布跨 trial CPU 性能统计：进程窗口含初始化、预热和退出，尚不能冒充正式 run 段。
+`/proc/PID/status` 的上下文切换只反映主线程（task）。`last_cpu` 给出最近运行的 CPU；统计迁移还需要其他证据。等待类型和第三方线程职责仍为 `UNKNOWN`。CPU 使用时间同时包括 MPI 忙轮询和实际计算。
+
+作业默认只汇总已观测进程的 CPU 秒数。多 rank 异步采样时，各 rank 的窗口通常不同，作业标记为 `status=partial`，等效核心数与窗口峰值留空。`sum_rank_mean_core_equivalent` 相加的是各 rank 在各自窗口内的均值。
+
+只有每个 rank 都有完全相同起止时刻的窗口，工具才给出 `common_exact_windows` 下的作业均值和带宽度的窗口峰值。工具要求精确匹配窗口，不做插值。O1 已提供每个 rank 自己的运行阶段标记。正式跨 rank 指标仍需要同步标记与读数边界。
+
+C1 进程窗口含初始化、预热和退出。跨 trial 的正式运行统计需要用运行阶段窗口另行测量。
 
 observer 汇总与 rank 平行；collector 周期样本包含读取/写入/注册核验的 CPU 成本，但初始化、
 收尾、诊断进程及短命 nvidia-smi 的完整开销不能仅靠它求和。cgroup CPU/throttling 按
@@ -83,7 +79,7 @@ cgroup 都是重叠范围，不能相加，更不能加到 rank CPU。需要 C2 
 
 ## Affinity、cpuset 与共享 quota
 
-每个 rank 的 allowed_cpus 为已观测 task affinity 并集与有效 cpuset/online 集合的交集；
+线程 affinity 决定线程可以在哪些 CPU 上运行。cgroup cpuset 进一步限制可用 CPU 集合，quota 则限制一段时间内可用的 CPU 时间。对同一个 rank，先取已观测线程 affinity 的并集，再与有效 cpuset 和在线 CPU 集合求交，得到 `allowed_cpus`。
 线程快照数不一致则 hierarchy_complete=false。逻辑 CPU 是调度容量，不等价于物理核心吞吐。
 quota_cores 是可见祖先 quota/period 的最小值；cpu.max=max 不设上限。
 controller 未委派时对应文件可能不存在，此层继承可见祖先限制；存在但不可读的文件仍为

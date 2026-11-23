@@ -4,52 +4,51 @@
 
 ## 1. 范围和记号
 
-参考版本：`../gpumd-reference` commit `9d23496e41319b9e2af5221a7df6285387401d1e`。
-下文 src/force、src/integrate 等路径和行号均指该参考 commit。数值子集在
-src/gpumd_compat 内复现并标 Origin；DMG-MD 的 局部域分解域、gid 排序、缓存和 O2/O3 编排
-与参考不同，现行合同见[MPI](../standards/mpi-runtime.md)、[分区](../standards/domain-partition.md)。
-不得把参考全 N launch 当作 DMG-MD 当前行为，构建不使用 reference 源码。
+本文核对的 GPUMD 源码提交是 `9d23496e41319b9e2af5221a7df6285387401d1e`。所有 `src/force`、`src/integrate` 等上游路径和行号都指这个历史提交。L20 的 `../gpumd-reference` 现用于 GPUMD 5.9.1 短程 golden。[兼容矩阵](../standards/compatibility-matrix.md)
 
-本文列出普通单-bead NEP/NEP-ZBL 的第一次力、每步 NVE/`nvt_ber`、thermo、XYZ 输出实际可执行的 CUDA kernel。PIMD、附加外力、其他势和 measurement kernel 不在清单中。
+下面沿单 bead 普通 NEP/NEP-ZBL 的初始力和 NVE/`nvt_ber` 每步计算，列出各 CUDA 核函数从哪些原子读取数据、向哪些原子写回。范围包括 thermo 和 XYZ 输出，不含 PIMD、附加外力、其他势及其他 measurement 核函数。
 
-记号：
+上游通常一次启动全 N 个原子。DMG-MD 在仓库内的 `src/gpumd_compat` 复现带 Origin 注记的数值子集，构建不使用外部参考源码。局部域分解模式另行划分计算中心、按全局 ID 排序，并管理缓存、分区和通信（O2/O3）。[MPI 标准](../standards/mpi-runtime.md)、[分区标准](../standards/domain-partition.md)
 
-- `N`：GPUMD 当前完整体系原子数，也是大多数 SoA/ELL 的 stride。
-- `Nc`：DMG-MD 最终力中心数，局部域分解为 owned_count。
-- `Nl`：局部域分解owned+ghost 可寻址原子数，即 local_count。
-- ELL 邻居索引：`NL[neighbor_ordinal * N + center]`。
-- 向量 SoA：`x[0:N], y[0:N], z[0:N]`；virial SoA 为 9 个 `N` 分量块。
-- `Rr(a,b)=(rc_radial[a]+rc_radial[b])/2`，`Ra(a,b)` 类似。
-- “完整邻居表”指每个有向边 `i→j` 也存在 `j→i`，且每行按原子下标升序。many-body gather 的反向边二分查找依赖这两点。
+| 记号 | 含义 |
+| --- | --- |
+| `N` | 上游全体系原子数，也是大多数 SoA/ELL 数组的步长 |
+| `Nc` | DMG-MD 最终力中心数，局部域分解模式取 owned_count |
+| `Nl` | 本 rank 能访问的负责原子和边界副本数（local_count） |
+| `NL[neighbor_ordinal * N + center]` | ELL 邻居表中，给定中心、给定邻居序号的槽位 |
+| `x[0:N], y[0:N], z[0:N]` | 向量 SoA 的三个分量块。virial 有 9 个同样长度的分量块 |
+| `Rr(a,b)=(rc_radial[a]+rc_radial[b])/2` | a、b 类型对的径向截断半径，角向半径 `Ra(a,b)` 同理 |
+
+本文的“完整邻居表”对每条有向边 `i→j` 都保存反向边 `j→i`，每行按原子下标升序排列。多体力汇总时按邻居行做二分查找，两项条件缺一不可。
 
 ## 2. timestep 外壳 kernel
 
 | kernel / 文件 | launch 域 | 读 | 写 | atomic | 完整表/ghost/MPI 语义 |
 | --- | --- | --- | --- | --- | --- |
-| `gpu_velocity_verlet`，`src/integrate/ensemble.cu:176-214` | 全 `N`，一 thread/atom；compute1/2 各一次 | mass、force、velocity | velocity；compute1 还写 position | 否 | 当前积分所有原子。MPI 必须只 launch owned；ghost 不能写 |
-| `gpu_apply_pbc`，`src/force/force.cu:424-459` | 全 `N` | box inverse、position SoA | wrapped position SoA | 否 | 当前写全局数组；MPI 应在迁移/halo 前只处理 owned，triclinic 用 fractional ownership |
+| `gpu_velocity_verlet`，`src/integrate/ensemble.cu:176-214` | 全 `N`，一 thread/atom；compute1/2 各一次 | mass、force、velocity | velocity；compute1 还写 position | 否 | 参考程序积分全部原子。MPI 只更新本 rank 负责的原子，不得积分边界副本 |
+| `gpu_apply_pbc`，`src/force/force.cu:424-459` | 全 `N` | box inverse、position SoA | wrapped position SoA | 否 | 参考程序写全局数组。局部域分解在迁移和 halo 交换前折回本 rank 的负责原子。三斜盒若要分解，需按分数坐标处理归属，当前多 rank 拒绝该几何 |
 | `initialize_properties`，`src/force/force.cu:314-333` | 全 `N` | 无 | force 3N、PE N、virial 9N 清零 | 否 | MPI 只需保证 owned 输出唯一；若 kernel 工作区覆盖 ghost，要独立清理 |
 | `gpu_find_thermo_instant_temperature`，`src/integrate/ensemble.cu:434-633` | 固定 8 blocks × 1024 threads；每 block 一种量 | mass、velocity、PE、virial | `thermo[0:8]` | 否；block reduction | 当前读全 `N`。MPI 先 local-owned reduction，再 all-reduce；不能计 ghost |
 | `gpu_berendsen_temperature`，`src/integrate/ensemble_ber.cu:70-83` | 全 `N` | target/coupling、`thermo[0]`、velocity | velocity | 否 | all-reduce 得到全局温度后只缩放 owned |
 | `gpu_sum`，`src/measure/dump_xyz.cu:32-54` | 6 blocks × 1024；每 block 一个 virial 分量 | virial 6×N | 6 个总 virial | 否 | XYZ comment 用；MPI 改成 owned local sum + global reduction |
 
-`fix`/`move` 启用后，`Ensemble::velocity_verlet()` 走分离的 `gpu_velocity_verlet_v` 和 `gpu_velocity_verlet_x` (`ensemble.cu:216-295`)，并读取每原子 group label。MVP 若只支持无 fix/move 的 NVE/NVT，不会执行它们；parser 仍应明确拒绝未支持组合。
+`fix`/`move` 启用后，`Ensemble::velocity_verlet()` 走分离的 `gpu_velocity_verlet_v` 和 `gpu_velocity_verlet_x` (`ensemble.cu:216-295`)，并读取每原子 group label。DMG-MD 当前只支持无 fix/move 的上述系综，解析器须明确拒绝未支持组合。
 
 ## 3. large-box 邻居表 kernel
 
-调用证据：`Neighbor::find_neighbor_global()` (`src/force/neighbor.cu:756-800`)；第一次力必重建，以后任一原子相对参考位置移动超过 `skin/2` 才重建。`Neighbor::initialize()` 在 `neighbor.cu:824-832` 把固定 `skin=1 Å` 的容量按 `(rc+skin)^3/rc^3` 放大。
+上游 `Neighbor::find_neighbor_global()`（`src/force/neighbor.cu:756-800`）在第一次求力前建表。以后按位移检查缓存，若有原子相对参考位置移动超过 `skin/2` 则重建。`Neighbor::initialize()` 在 `neighbor.cu:824-832` 把固定 `skin=1 Å` 的容量按 `(rc+skin)^3/rc^3` 放大。
 
 | kernel/辅助操作 | 域 | buffer（布局） | atomic | 数据/同步证据 | MPI 处置 |
 | --- | --- | --- | --- | --- | --- |
-| `gpu_check_atom_distance` (`neighbor.cu:646-684`) | 全 `N` | 读 old/new position SoA；写单一 device counter | block sum 后 `atomicAdd` | wrapper 每次把 counter H2D/D2H (`741-753`)，形成 host sync | 需 local owned max/OR + MPI all-reduce；迁移后必须强制 rebuild |
+| `gpu_check_atom_distance` (`neighbor.cu:646-684`) | 全 `N` | 读 old/new position SoA；写单一 device counter | block sum 后 `atomicAdd` | wrapper 每次把 counter H2D/D2H (`741-753`)，形成 host sync | 本地检查负责原子的位移上界，再用 MPI 汇总超限原因。迁移后须重建 |
 | `find_cell_counts` (`neighbor.cu:42-60`) | 所有可入 cell 的原子 | 读 position；写 `cell_count[cell]` | 是 | cell size=`rc_build/2` | local cell list 可含 owned+ghost；需明确重复 image |
 | `thrust::exclusive_scan` (`neighbor.cu:196-197`) | cell 数 | count → prefix | 内部实现 | 在同一默认 stream 排在 contents 前 | 可共享，或换成等价 scan |
-| `find_cell_contents` (`neighbor.cu:62-83`) | 所有可入 cell 的原子 | 读 position/prefix；写 `cell_contents` | 对 cell insertion counter atomic | contents 值是当前数组下标 | 重构为 local index；global ID另存 |
+| `find_cell_contents` (`neighbor.cu:62-83`) | 所有可入 cell 的原子 | 读 position/prefix；写 `cell_contents` | 对 cell insertion counter atomic | contents 值是当前数组下标 | 重构为 local index；全局 ID 另存 |
 | `gpu_find_neighbor_ON1` (`neighbor.cu:85-162`) | `[N1,N2)` 中心 | cell arrays、type（未实际用于距离）、position；写 `NN/NL` ELL | 否 | 只接受候选 `n2>=N1 && n2<N2` (`144`)；当前调用为 `[0,N)` | 必须去掉“邻居也在中心域”的条件，改成 owned/dependency center + `[0,Nl)` candidates |
 | `gpu_sort_neighbor_list` (`src/force/neighbor.cuh:112-136`) | 当前全 `N` blocks；一 block/row | `NN/NL` | 否 | many-body 反向边的二分查找需要排序 | 直接复用算法；只 sort 有效中心行，并保证反向行存在 |
 | `gpu_update_xyz0` (`neighbor.cu:688-697`) | 全 `N` | current position → reference position | 否 | rebuild 末尾执行 | 保存 owned reference；ghost 更新/迁移使 local identity 变化时重建 |
 
-`gpu_find_local_neighbor_from_global` (`neighbor.cu:699-737`) 只在其他势/局部 cutoff wrapper 使用；普通 `NEP::compute_large_box()` 不是通过它过滤，而是执行下一节的 `find_neighbor_list_large_box`。
+`gpu_find_local_neighbor_from_global` (`neighbor.cu:699-737`) 只在其他势/局部 cutoff wrapper 使用；普通 `NEP::compute_large_box()` 直接执行下一节的 `find_neighbor_list_large_box`。
 
 ## 4. large-box NEP 核心 kernel
 
@@ -72,7 +71,7 @@ src/gpumd_compat 内复现并标 Origin；DMG-MD 的 局部域分解域、gid �
 
 | buffer | 类型/尺寸 | 布局 | 分布式映射 |
 | --- | --- | --- | --- |
-| position/force | double `3N` | component-major SoA | position local；force owned output（可有 local capacity stride） |
+| position/force | double `3N` | component-major SoA | 位置覆盖本地槽位，只有负责原子的力可输出。局部域分解模式以 `local_count` 为逻辑步长，capacity 只表示存储容量 |
 | virial | double `9N` | component-major SoA，内部顺序 `xx,yy,zz,xy,xz,yz,yx,zx,zy` | owned only |
 | PE | double `N` | atom-major scalar | owned only；dependency center 的 PE 可不保存/不通信 |
 | `NN_radial/angular` | int `N` | center scalar | owned + dependency centers |
@@ -100,9 +99,10 @@ src/gpumd_compat 内复现并标 Origin；DMG-MD 的 局部域分解域、gid �
 
 ## 5. halo 深度的代码证明
 
-### 5.1 不是一个 cutoff
+<a id="51-不是一个-cutoff"></a>
+### 两跳依赖从哪里来
 
-对 owned 中心 `i`：
+要计算本 rank 负责的原子 `i` 的最终力，须沿下列读取关系找到第二层邻居。
 
 1. `find_descriptor(i)` 读取所有 `j`，距离至多 `R(i,j)`。
 2. `find_force_radial(i)` 读取 `Fp(j)` (`nep.cu:727-728`)。
@@ -115,11 +115,12 @@ src/gpumd_compat 内复现并标 Origin；DMG-MD 的 局部域分解域、gid �
 H_position(i) = max over i-j-k [ R_force(i,j) + R_descriptor(j,k) ]
 ```
 
-统一 cutoff 下最坏约为 `2*Rmax`；如果邻居表跨步复用，还要为最外层建表/迁移策略明确 skin 余量，不能含糊写成“2rc”。typewise 精确界和 ZBL 约束需由加载后的参数计算。
+当所有类型用同一截断半径时，两跳距离的最坏情形约为 `2*Rmax`。如果跨步复用邻居表，还须计入建表和迁移预留的 skin。精确的类型对半径及 ZBL 约束须从已加载的势参数推导。
 
-### 5.2 两个可行通信方案
+<a id="52-两个可行通信方案"></a>
+### 当前的位置交换与待实现的中间场交换
 
-方案 A，深位置 halo：
+局部域分解模式已采用两跳位置边界。rank 先获得所需坐标和类型，再在本地重算依赖中心的描述符与有向部分力，最后只对负责原子求最终力。这样只需小幅修改核函数，但会保存更多边界副本，并重复一部分邻居中心计算。
 
 ```text
 exchange positions/types to two-hop bound
@@ -127,9 +128,7 @@ exchange positions/types to two-hop bound
 → final force only on owned
 ```
 
-优点是 kernel 改动少；缺点是 ghost 数量和重复计算大。
-
-方案 B，分阶段中间场交换（首选长期方向）：
+分阶段中间场交换方案是首选的长期方向，尚未实现。它只交换一跳坐标，每个中心的负责进程计算中间量，再把邻居需要的值发送给相应进程。
 
 ```text
 one-hop position/type halo
@@ -140,7 +139,7 @@ one-hop position/type halo
 → final center-owned gather
 ```
 
-此方案不需要 reverse **force** exchange，但必须定义两次 forward exchange 和边的稳定匹配键。若发送 `Fp+sum_fxyz` 并在接收端重算 partial，则带宽/算力权衡不同；尚需实验。
+该方案由中心汇总最终力，无须将副本的力反向传回。但必须定义两次中间量前向交换，并为跨 rank 的有向边定义稳定匹配键。另一种做法是发送 `Fp+sum_fxyz`，让接收方重算部分力。两者的通信量和计算量仍待实验比较。
 
 ## 6. small-box 路径
 
@@ -153,8 +152,8 @@ one-hop position/type halo
 | `find_force_radial_small_box`，`nep_small_box.cuh:398-494` | 每中心/edge；只读 center `Fp`；写 `±f` 到 n1/n2，virial 到 n2 | **是** double atomic | ghost 会收到 partial force/virial，必须 reverse exchange |
 | `find_force_angular_small_box`，`nep_small_box.cuh:496-618` | center Fp/sum + explicit edge r12；写 n1/n2 | **是** | 同上；不使用 separate partial/gather 两 kernel |
 | `find_force_ZBL_small_box`，`nep_small_box.cuh:620-703` | angular list + r12；写 n1/n2 force、n2 virial、center PE | **是** | 同上；多 image identity 必须保留 |
-| fallback `atomicAdd(double*)` | `nep_small_box.cuh:24-37` | CAS 实现旧架构 double atomic | 是 | 数值顺序不确定；rank 数/调度会改变低位 |
-| `apply_mic_small_box` | `nep_small_box.cuh:39-54` | expanded box fractional MIC | 否 | 必须连同 image 生成逻辑验证 |
+| `atomicAdd(double*)` 的后备实现，`nep_small_box.cuh:24-37` | 在旧架构上用 CAS 实现 double 原子加法 | 是 | 累加顺序不确定，rank 数和调度可改变低位 |
+| `apply_mic_small_box`，`nep_small_box.cuh:39-54` | 按扩展盒分数坐标计算最小像 | 否 | 须同时验证周期像生成逻辑 |
 
 large/small 的力分解不同，不能只替换邻居构建器后共用同一通信协议。
 
@@ -205,11 +204,11 @@ descriptor/partial: [N4, N5)       （owned 两侧各 2 cells ≈ rc）
 - 只沿一个方向切 slab、固定 2/4 cell halo，并假定 `rc/2` cell；
 - 最多 16 GPU 的固定数组/单节点设备可见性假设。
 
-因此 `NEP_MULTIGPU` 是很好的“两个依赖层”代码证据，不是 MPI runtime 的基类。
+`NEP_MULTIGPU` 的两个边界层为区分坐标域和中间量计算域提供了代码依据。MPI 实现自行管理每个 rank 的设备和数据。
 
 ## 8. 同步依赖
 
-单 GPU默认 stream 上的正确顺序是：
+上游单 GPU 的默认 stream 按以下顺序执行。
 
 ```text
 PBC
@@ -227,19 +226,12 @@ PBC
 → optional dump reduction/copies
 ```
 
-方括号只在 rebuild 时执行。每 1000 次 large-box 计算还会把所有 neighbor counts D2H 并 append `neighbor.out` (`nep.cu:1007-1025`)，产生同步和非显式用户输出；DMG-MD 保留该副作用；局部域分解在本次 filter 后经 MAX 只由 root 写，
-具体 call 计数/字节见[MPI 合同](../standards/mpi-runtime.md)。
+位移检查决定是否重建。方括号里的 cell 计数、扫描、填表、排序和参考坐标更新只在重建时执行。每 1000 次 large-box 计算，程序还把所有邻居计数复制到主机并追加写入 `neighbor.out`（`nep.cu:1007-1025`），产生同步和隐式输出。DMG-MD 保留该输出。局部域分解模式在本次类型对过滤后归约最大值，仅由 rank 0 写出。[调用计数和字节数](../standards/mpi-runtime.md)
 
-MPI/CUDA 流必须显式建立以下 happens-before：owned migration 完成 → position halo 到达 → descriptor 完成 → `Fp`/partial 通信完成 → final force → thermo all-reduce → thermostat/measurement。不能依赖默认 stream 和阻塞 D2H 恰好提供的全局同步。
+跨 GPU 时须显式保证数据可用。当前局部实现先完成所需迁移和位置 halo 刷新，再从本地依赖中心生成描述符与部分力，最后计算负责原子的力。启用重叠时，独立中心可提前计算，边界中心仍须等待其输入。需要热力学量时，最终力计算完成后才能归约并交给恒温器或输出。未来若采用分阶段中间场交换方案，还要确保 `Fp` 和所需反向边的部分力送达后才计算依赖它们的最终力。默认 stream 或碰巧阻塞的设备到主机复制均不能替代这些依赖关系。
 
 ## 9. 当前复现与后续边界
 
-NEP 数学 helper 与 large-box kernel 已在 compat 复现；局部域分解已分离中心/候选域，按 gid
-排序反边，以深位置 halo 闭合依赖。small-box 仍为 P1/全量复制路径，未分布式化；NEP_MULTIGPU
-只作依赖证据，不复用 GPU0 分发/回收编排。
+兼容层已复现 NEP 数学辅助函数和大盒核函数。局部域分解模式分别指定中心域和候选域，按全局 ID 排序邻居行，用两跳位置边界取得求力所需坐标。小盒仍走单 rank 或全量复制模式。DMG-MD 未采用 `NEP_MULTIGPU` 的 GPU0 分发和回收方式。
 
-O2 默认关闭的 mask 分区保持 L stride 与每中心顺序；O4 可显式在 O3 begin/finish 之间执行独立 early，
-详见[分区](../standards/domain-partition.md)、[halo 生命周期](../standards/halo-lifecycle.md)。
-分阶段中间场交换仍见[扩展](../plans/domain-decomposition.md)；O4 当前验收见
-[报告](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)，O5 见[重叠计划](../plans/communication-computation-overlap.md)。
-这些是 DMG-MD 的调度扩展，不是锁定 GPUMD reference 的行为。
+可选的掩码分区保留 L 步长及每个中心的运算顺序，默认关闭（O2）。显式启用计算与通信重叠时，可以在开始和完成 halo 交换之间执行独立计算（O3/O4）。这些调度属于 DMG-MD。分阶段中间场交换方案仍待实现。[分区](../standards/domain-partition.md)、[halo 生命周期](../standards/halo-lifecycle.md)、[扩展计划](../plans/domain-decomposition.md)、[O4 验收](../status/validation/communication-computation-overlap.md#overlap-o4-20261016)、[O5 重叠计划](../plans/communication-computation-overlap.md)

@@ -1,81 +1,26 @@
-# GPUMD NEP MD differential/golden baseline 结果
+# GPUMD 短程数值基线
 
-类别：进度与实测备忘。  
-结果日期：2026-09-09。  
-状态：历史结果有效，但不能代替对当前 HEAD 的重新执行。
+<a id="baseline-20260909"></a>
+## 2026-09-09 初版 golden
 
-## 1. 结论
+初版普通 GPUMD 冻结实现为 `9d23496e`。回归覆盖小盒静态求值、大盒短 NVE、含 ZBL 的边界，以及多段 NVT/restart。相同输入用于核对输出文件结构和科学字段。[测试方法与容差来源](../../../tests/baseline/README.md)
 
-锁定 GPUMD reference 的四组短程 baseline 已生成 committed golden，并在单张 NVIDIA
-GeForce RTX 4090 上完成独立全量复跑和 30 次重复校准。随后 DMG-MD candidate 也通过相同
-四组 differential case。本文只记录这次已执行结果；当前验收规则见
-[golden-test-standard.md](../../standards/golden-test-standard.md)，实际参数以测试脚本和 manifest
-为准。
+<a id="l20-baseline-20261120"></a>
+## 2026-11-20 GPUMD 5.9.1 与候选工作树
 
-锁定 reference：
+当日在 NVIDIA L20 上，用 Release/sm_89、CUDA 12.9.86 和普通 GPUMD 5.9.1（`11ba6fb`）重新生成短程 golden。三个 restart 改用 17 位有效数字，续跑段的 thermo 和轨迹随输入精度改变。其余 15 个科学输出逐字节一致；将旧 restart 输入新参考时，续跑输出仍与旧 golden 一致。
 
-- GPUMD commit：`9d23496e41319b9e2af5221a7df6285387401d1e`；
-- executable SHA-256：
-  `3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414`；
-- GPU：NVIDIA GeForce RTX 4090，compute capability 8.9；
-- driver：580.173.02；CUDA compiler：12.9 / nvcc 12.9.86；
-- reference 子进程固定只看见一张 GPU，确保走 ordinary `NEP`，不进入
-  `NEP_MULTIGPU`。
-
-原记录没有单独保存与本结果严格对应的 DMG-MD Git commit，因此不得把本文结果直接解释为
-当前任意 commit 已通过。当前进度声明见 [current.md](../current.md)。
-
-## 2. 已执行矩阵
-
-| case | 已执行覆盖 | 主要输出 |
-| --- | --- | --- |
-| `single_small_static` | 单元素 NEP4、small-box、多周期 image、静态 force/PE/virial | `initial.xyz`、`thermo.out`、`neighbor.out` |
-| `single_large_nve` | 单元素 NEP4、large-box、两个连续 run、6 步 NVE、restart | 静态帧、短轨迹、thermo、restart |
-| `multi_nvt_restart` | 双元素 NEP4、`nvt_ber`、三个 run、restart 后新进程续跑 | initial/resume 两阶段输出 |
-| `nep_zbl_boundary` | 三元素 universal NEP4-ZBL、跨周期边界 0.5 Å 近邻 | 静态逐原子量和 neighbor |
-
-所有动力学输入均提供显式 velocity，因此没有把默认随机初速度混入数值 baseline。短程 harness
-只逐原子比较 6 步以内的轨迹；长期守恒与统计由 `tests/long_nve/` 独立承担。
-
-## 3. 实际运行命令
-
-在 DMG-MD 仓库根目录执行：
+`0e8360f` 加工作树修改的候选和新版普通 GPUMD，各通过 4/4 项。manifest 记录实际参考二进制身份。以下为仓库根目录下的复验入口：
 
 ```bash
 source ../env/md-mpi.sh
-python3 tests/baseline/run_baselines.py \
-  --reference ../gpumd-reference/src/gpumd --device 0
-python3 tests/baseline/run_baselines.py \
-  --candidate ./build/dmg-md --device 0
-python3 tests/baseline/run_baselines.py \
-  --reference ../gpumd-reference/src/gpumd --device 0 --calibrate 30
+python3 tests/baseline/run_baselines.py --reference ../gpumd-reference/src/gpumd --device 0
+python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0
 ```
 
-当时结果为：
+输入、参考身份和容差见[基线配置](../../../tests/baseline/manifest.json)。
 
-- pinned GPUMD reference 的所有输出与 committed golden 逐字节一致；
-- 30 次 repetition 的全部结构字段一致，已比较数值的最大绝对差和相对差均为 0；
-- DMG-MD candidate 的四组 case 全部通过 manifest 中的结构和数值门槛。
+<a id="l20-long-nve-reference-gate-20261120"></a>
+## 长程入口
 
-一次完整 repetition 包含 4 个 case、5 个独立 GPUMD 进程；30 次校准共执行 150 个进程。
-校准覆盖 12,528 个 force 数、42,021 个 virial 数、5,655 个 energy 数和 12,528 个
-position 数，以及 thermo/restart 字段。
-
-## 4. 适用范围
-
-结果限于上述 binary/输入/单卡环境的四个短程 case；不证明跨架构、跨 MPI reduction tree
-byte-exact、domain 分解或完整 nightly/release。candidate commit 未单独记录，不能映射为
-当前任意 HEAD 通过。比较层级由 Golden Test 标准维护。
-
-## 5. 权威产物和更新纪律
-
-| 内容 | 权威来源 |
-| --- | --- |
-| runner 行为 | `tests/baseline/run_baselines.py` |
-| case、输出结构、容差、输入哈希 | `tests/baseline/manifest.json` |
-| committed reference 输出 | `tests/baseline/goldens/` |
-| 30 次校准原始汇总 | `tests/baseline/calibration.json` |
-| 使用方法 | `tests/baseline/README.md` |
-
-golden 更新与容差纪律见[Golden Test](../../standards/golden-test-standard.md)，
-本记录不另维护规则。
+长程 NVE 仍锁定前一参考版本。长短 manifest 不一致时，运行器在启动 case 前退出。因此，短程迁移通过后，长程参考身份和 release 规模回归仍需单独处理。[长程操作说明](../../../tests/long_nve/README.md)

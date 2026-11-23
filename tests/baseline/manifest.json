@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "reference": {
-    "commit": "9d23496e41319b9e2af5221a7df6285387401d1e",
-    "executable_sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414",
+    "commit": "11ba6fbdb4d71b2cdb351b39972fa057521585b3",
+    "executable_sha256": "6ab97ed2de95591fd8d2f6e7c86568bc658d8c97b038aa67e0fa2a8e79b9510b",
     "required_visible_gpu_count": 1
   },
   "input_sha256": {

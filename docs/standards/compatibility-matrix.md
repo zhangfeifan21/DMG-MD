@@ -1,36 +1,45 @@
 # 输入/输出兼容矩阵
 
-类别：现行标准。核对日期：2026-11-04。NPT 范围以[控压器标准](barostat.md)与[NPT/G-B 验收矩阵](../status/validation/npt-validation.md#npt-matrix-20261104)的已验收状态为准。
+已有 GPUMD 输入可先按下表确认势和系综，再核对 `model.xyz` 的属性、`run.in` 命令及需要的输出。矩阵描述 2026-11-20 核对的程序。输入虽然能通过解析，但专项测试尚未确认的边界仍记为 UNKNOWN。
 
-GPUMD 参考 commit 为 `9d23496e41319b9e2af5221a7df6285387401d1e`。本页声明 DMG-MD 当前
-支持范围；标为参考证据的 `src/force`、`src/measure` 等路径均在锁定 GPUMD 树中，行号只
-适用于该 commit。当前入口为 `src/{run_parser.cpp,model_parser.cpp,runtime.cu,domain_runtime.cu}`
-和 `src/gpumd_compat/`。无法证明的边界记 UNKNOWN，不构成兼容承诺。
+兼容层的源码来自 GPUMD 提交 `9d23496e41319b9e2af5221a7df6285387401d1e`。除特别注记外，上游 `src/force`、`src/measure` 等路径和行号均指该提交。L20 的短程 golden 改用 Spack GPUMD 5.9.1（`11ba6fbdb4d71b2cdb351b39972fa057521585b3`）。可执行文件 SHA-256 和输入哈希见 [baseline manifest](../../tests/baseline/manifest.json)。历史验收以每份报告记录的版本为准。
+
+DMG-MD 启动入口是 `src/dmgmd_main.cpp`。命令和模型分别由 `src/run_parser.cpp`、`src/model_parser.cpp` 解析，两种并行模式分别由 `src/runtime.cu`、`src/domain_runtime.cu` 执行。
 
 ## 1. 产品与并行范围
 
-支持普通 NEP4/5 与 NEP-ZBL、单 bead 经典 MD、NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp`，以及已验收的各向同性 `npt_ber`
-及下表命令。恒温器的状态、随机数与统计限制见[系综标准](ensembles.md)。
-P1 恒走全量复制模式；P>1 只支持正交全周期，满足 large-box/slab 半径条件才走局部域分解模式，否则在已支持
-范围内 全量复制回退路径。详细条件见[MPI runtime](mpi-runtime.md)。
-局部域分解支持上述三种 NVT；NPT 默认与既有生产验收范围为全量复制路径。显式 `DMGMD_DOMAIN_NPT=rebuild|affine` 为默认关闭的[实验局部 NPT](domain-npt.md)，独立 DN4 统计审核已通过，限于 单节点 NEP4-C、5760 原子、300 K/0 GPa、各向同性正交全周期体系；base 为 P1/HostStaged/off 与 P2/P4 两后端各自的 off、rebuild、affine，half 仅 P1/HostStaged/off、P2/HostStaged/affine、P4/CudaAware/affine；详见[局部 NPT 标准](domain-npt.md)。`npt_scr` 的 G-B 已通过，但统计支持严格限于 216 原子 NEP-C、300 K/0 GPa、单节点各向同性正交全周期矩阵：base 为 P1/HostStaged 与 P2/P4 的 HostStaged/CudaAware，half-dt 仅 P1/HostStaged。NEP5/ZBL 只有另行记录的短程合同证据；NPT 与非 NEP 势的组合不支持。原注册18个 formal look 的总体 INCONCLUSIVE 历史结论保留；本次有限矩阵不证明普遍严格 NPT 采样、遍历性、RDMA 或跨节点支持。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)及[机器索引](../status/validation/npt-scr-n3-confirmation-index.json)。
+每个作业使用一个势文件，运行单 bead 经典分子动力学模拟。当前接受普通 NEP4/5 和各自的 ZBL 变体。NEP3、temperature、dipole、polarizability、charge 模型和多势组合均拒绝。
 
-每作业恰好一个 potential。GPUMD 的多 potential 追加及方向参数不在 DMG-MD 范围；
-NEP3、temperature/dipole/polarizability/charge 模型均拒绝。白名单以外的命令/ensemble
-（包括 fix/move、replicate、变盒、其他 thermostat、minimize/phonon/PIMD/MC、其他势、
-完整 measurement、kspace/dftd3/PLUMED、旧 dump 名称等）都报带来源位置的 unsupported。
-未知命令附 unknown 标记，不静默忽略；未来候选不等于支持。
+LJ 和 EAM/alloy 仍待实现。生产版要求多卡必须有局部求力实现，这两种势先交付通过数值验收的单卡版本。Tersoff、Langevin 和 BAOAB 是后续候选。[生产多卡路由](architecture-decisions.md#production-domain-routing)、[开发进度](../plans/dmg-md-v1.0-progress.md)
+
+| 系综 | 全量复制模式 | 局部域分解模式 |
+| --- | --- | --- |
+| NVE、`nvt_ber`、`nvt_nhc`、`nvt_bdp` | 已验收，见[系综标准](ensembles.md) | 满足盒和 slab 几何判据时启用，已有单节点验收 |
+| `npt_ber` | 默认路径，已验收各向同性、正交全周期 NEP | 显式实验路径，范围见[局部 NPT 标准](domain-npt.md) |
+| `npt_scr` | 默认路径，已通过 G-B 的 216 原子 NEP-C 冻结统计矩阵 | 显式实验路径，已通过独立的 5760 原子 NEP4-C 冻结统计矩阵 |
+
+单 rank（P1）始终使用全量复制模式。多 rank（P>1）会拒绝三斜盒及有非周期方向的盒。对于正交全周期盒，还须通过 NEP 大盒和分片宽度检查，才有资格进入局部域分解模式。当前程序允许初始局部资格不足的作业回退到全量复制模式。
+NVE/NVT 的 P1 路径没有这两项分布式几何守卫，完整的三斜和非周期输入兼容性未验收。
+NPT 在所有 rank 数均要求正交全周期盒。仅显式设置 `DMGMD_DOMAIN_NPT=rebuild|affine`
+才允许试用局部 NPT。一旦进入局部积分，候选盒失格时所有 rank 都在提交前终止。实际分派见 [MPI runtime](mpi-runtime.md)。
+
+两套 SCR 统计证据分别受原子数、势、温压、步长、rank、后端及路由条件约束。
+NEP5/ZBL 只有短程 NPT 合同证据。原注册 18 个 formal look 的总体 INCONCLUSIVE 结论保留。
+完整矩阵见[控压器标准](barostat.md)和[局部 NPT 标准](domain-npt.md)。
+
+第 4 节列出全部 `run.in` 命令。白名单外的命令或系综会报带来源位置的 `unsupported`，
+未知命令另带 `unknown`。当前缺少键合相互作用和刚性约束、长程静电、多势混合、
+能量最小化、任意变盒、外场和增强采样。RDF、MSD、声子、PIMD、MC 等命令也在白名单之外。
 
 ## 2. 文本与 model.xyz
 
-- `run.in` 一行一命令、空白分词、大小写敏感、无 shell 引号/转义。首字符为 # 的 token
-  起截断，abc#def 不截断；每条非空命令最多 32 tokens。当前 parser 先解析完整 IR 再执行。
-- model 第一行恰一 int，N≥2；第二行 pbc 默认为 T/T/T，显式时恰三个 T/F（忽略大小写）；
-  Lattice 必须九个有限值。奇异盒的稳定错误行为未完成专项验证。
-- 第二行接受等号周围空白与引号分组；schema/property 名忽略大小写，原子 species 区分大小写。
-- Properties 为 name:type:width 三元组，width>0，必含 species/pos；atom 行恰好匹配总列宽。
-  额外属性占列但不解析；只读 N 行，后续额外行忽略。标准 type/width 组合未被严格校验，
-  malformed schema 不视为支持，安全边界列入 backlog。
+每行 `run.in` 只写一条命令，按空白分词，区分大小写，不解释 shell 引号或转义。只有 token 的第一个字符是 `#` 时才从该 token 起截断注释。`abc#def` 会保留。每条非空命令最多 32 个 token。程序先解析完整输入，再开始执行。
+
+`model.xyz` 第一行只能有一个整数 N，要求 N≥2。第二行省略 `pbc` 时，默认 T/T/T。显式指定时恰好给三个 T/F，忽略大小写。`Lattice` 须有九个有限值。奇异盒的错误行为尚未专项验证。
+
+第二行允许等号周围有空白，也接受引号分组。schema 和 property 名忽略大小写，元素名区分大小写。`Properties` 由 `name:type:width` 三元组组成，width>0，必须包含 species 和 pos。每行原子数据的总列数须与声明相同。额外属性占列，但程序不解析其值。程序只读取 N 行原子，忽略其后多余行。
+
+当前解析器没有严格核验每种标准属性的类型和宽度。畸形 schema 的完整输入语料和安全边界仍待验证。
 
 ```text
 N
@@ -43,17 +52,18 @@ pbc="T T T" Lattice="ax ay az bx by bz cx cy cz" Properties=species:S:1:pos:R:3
 | --- | --- | --- |
 | species | 1 | 必需；精确匹配 potential header，定义 type |
 | pos | 3 | 必需；double Å |
-| mass | 1 | 可选；double amu、>0，否则查 GPUMD 元素表；无默认质量时明确 InputError |
-| charge | 1 | 可选；存 float，缺省 0；普通 NEP charge 单位仍 UNKNOWN |
+| mass | 1 | 可选，单位 amu，按 double 存储。显式值须 >0。省略时查 GPUMD 元素表，查不到默认质量则报 InputError |
+| charge | 1 | 可选，按 float 存储，默认 0。可输出到 XYZ，普通 NEP 求力不使用该字段 |
 | vel | 3 | 可选；Å/fs 输入乘 10.18051；存在 vel 时 velocity 命令不重生成 |
 | group | M | 可选；M 个 int labels，0≤label<N；允许缺失 group ID，形成空组 |
 
-参考语法锚点为 `src/model/read_xyz.cu`；当前错误来自 model_parser.cpp，不承诺复制参考
-std::map::at 异常文字。输入上限、奇异盒与恶意 schema 的完整 corpus 尚未建立。
+上游的语法实现位于 `src/model/read_xyz.cu`。本程序由 `model_parser.cpp` 报错，报错文字可能与上游 `std::map::at` 异常不同。输入上限、奇异盒与恶意 schema 的完整测试语料尚未建立。
 
 ## 3. 普通 NEP/NEP-ZBL 文件
 
 ### 3.1 头部语法
+
+按模型版本选择首行。`_zbl` 版本还需给出 ZBL 行。以下两种 `cutoff` 写法分别给各元素共用的半径和按元素指定的半径。
 
 ```text
 nep4|nep5|nep4_zbl|nep5_zbl  num_types  symbol_0 ... symbol_(T-1)
@@ -73,7 +83,7 @@ ANN num_neurons 0
 
 | 项 | 实际行为 |
 | --- | --- |
-| version token | `NEP::NEP()` 接受普通 `nep4`, `nep4_zbl`, `nep5`, `nep5_zbl`；参考代码还接受不在当前产品范围的 NEP4 temperature/dipole/polarizability (`src/force/nep.cu:108-143`) |
+| version token | DMG-MD 入口的 `load_potential_metadata` 只接受 `nep4`、`nep4_zbl`、`nep5`、`nep5_zbl`。上游 `NEP::NEP()` 的其他分支见 `src/force/nep.cu:108-143` |
 | `num_types` | int；第一行 token 总数必须正好 `2+num_types` |
 | symbols | 定义 model species→type 映射；同时在内置元素表查 Z。未知 symbol 的 Z 保持 0，代码不报错 (`nep.cu:157-166`) |
 
@@ -93,20 +103,23 @@ ANN num_neurons 0
 - uniform 行正好 5 tokens；typewise 行正好 `2*T+3` tokens。
 - 代码不验证首 token 是 `cutoff`。
 - cutoff 单位为 Å；type-pair cutoff 在 kernel 中取两个 type 值的算术平均。
-- `rc`/global neighbor build 使用最大的 **radial** type cutoff；filter 又先拒绝 radial 外邻居才判断 angular，隐含 angular 不大于 radial但未显式校验。
+- 全局邻居表按各类型最大的径向截断半径 `rc` 建表。后续先按径向半径过滤，剩下的邻居才按角向半径过滤。即使输入的角向半径较大，径向半径外的原子也不会进入角向表。程序没有显式检查两种半径的大小关系。
 - `MN_radial>819` 明确报错；`MN_angular` 上限以及二者正值未见完整校验。
 - device 容量取 `ceil(MN_input*1.25)`，`neighbor.out` 打印放大后的最大值。
 
 ### 3.5 descriptor/ANN 参数布局
 
 - `n_max`、`basis_size` 各必须正好 3 tokens，但不验证 keyword。
-- `l_max` 至少 4 tokens；代码读取到第8个参数，额外 token 被忽略。各 `has_q_*` 作为 int读取，未验证只能0/1。
-- `ANN` 必须正好3 tokens，但不验证 keyword或第三项为0。
+- `l_max` 至少有 4 个 token。代码最多读取到第 8 个参数，忽略额外 token。各 `has_q_*` 按 int 读取，没有检查值是否限于 0/1。
+- `ANN` 行恰有 3 个 token，不检查关键字，也不检查第三项是否为 0。
+
+对上述版本和参数布局，描述符维数决定势文件后续要读多少行。T 表示元素类型数。
+
 - `dim=(nmaxR+1)+(nmaxA+1)*num_L`。
 - NEP4 ANN 参数数：`(dim+2)*num_neurons*num_types+1`。
 - NEP5 ANN 参数数：`((dim+2)*num_neurons+1)*num_types+1`。
 - descriptor 参数数：`T^2*((nmaxR+1)*(basisR+1)+(nmaxA+1)*(basisA+1))`。
-- 随后读取 `num_para+dim` 行（ANN+descriptor+q_scaler），每行只用第一个 token并转换到 float GPU buffer。
+- 随后读取 `num_para+dim` 行（ANN+descriptor+q_scaler），每行只用第一个 token，转换为 float 后存入 GPU 缓冲区。
 - 对缺行/空行/额外字段的稳定错误文字尚未用 executable test 证明，标记 `UNKNOWN`。
 
 ## 4. 当前 run.in 命令
@@ -118,27 +131,26 @@ ANN num_neurons 0
 | time_step | `time_step DT [MAX_DISTANCE]` | DT 为有限实数 fs，默认 1 fs；可选最大距离>0 Å，按全局 owned 最大速度限步。NHC/BDP/NPT 要求固定有限正步长且不接受 MAX_DISTANCE；旧系综负 DT 边界未验收 |
 | ensemble | `ensemble nve` / `ensemble nvt_ber T1 T2 TAU` | T1/T2>0 K，TAU≥1；目标按 step/steps 插值；run 必须已有 ensemble |
 | ensemble | `ensemble nvt_nhc T1 T2 Tdamp` / `ensemble nvt_bdp T1 T2 Tdamp` | 温度有限且>0 K，Tdamp 有限且≥1，单位步数；目标同上。root 链/RNG、段首重置、默认 seed 见[系综标准](ensembles.md) |
-| ensemble | `ensemble npt_ber T1 T2 Tdamp P B tau_p` | 8-token 各向同性；T 为 K，Tdamp/tau_p 为步数，P/B 为 GPa；P 可负、B 有限且>0；仅 NEP/NEP-ZBL、正交全周期全量复制模式，默认 P>1 走全量复制回退路径；实验局部开关见上文。B2 已验收，见[控压器标准](barostat.md) |
-| ensemble | `ensemble npt_scr T1 T2 Tdamp P B tau_p` | G-B PASS；全量复制统计支持限于上述 216 原子冻结矩阵，另有[实验局部 5760 原子冻结矩阵](domain-npt.md)通过。18个原注册 formal look 的总体 INCONCLUSIVE 历史保留；不外推至其他势、RDMA、跨节点或普遍严格 NPT；见[最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)与[NPT矩阵](../status/validation/npt-validation.md#npt-matrix-20261104) |
+| ensemble | `ensemble npt_ber T1 T2 Tdamp P B tau_p` | 8 个 token，各向同性。T 以 K 输入，Tdamp/tau_p 按步数，P/B 以 GPa 输入。P 可负，B 须有限且 >0。限 NEP/NEP-ZBL 和正交全周期盒，默认采用全量复制模式。实验局部设置见上文。[Berendsen 验收（B2）](barostat.md) |
+| ensemble | `ensemble npt_scr T1 T2 Tdamp P B tau_p` | G-B PASS 仅限上述全量复制模式的 216 原子冻结矩阵。[5760 原子局部实验](domain-npt.md)单独通过。原注册 18 个分析节点总体仍为 INCONCLUSIVE。其他势、RDMA、跨节点和普遍严格 NPT 均不在统计范围内。见[最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)与[NPT矩阵](../status/validation/npt-validation.md#npt-matrix-20261104) |
 | run | `run STEPS` | int；0/负步数 parser 未拒绝，未作为验证过的动力学兼容行为 |
 | dump_thermo | `dump_thermo INTERVAL` | int>0；thermo.out append |
 | dump_xyz | `dump_xyz INTERVAL FILE [OPTIONS/QUANTITIES]` | interval>0；见下表；同段可多条 |
 | dump_restart | `dump_restart INTERVAL` | int>0；restart.xyz 覆盖 |
 | correct_velocity | `correct_velocity INTERVAL [GROUPING_METHOD]` | interval≥10，method 有效；step%interval==0，含段内 step0；与 NHC/BDP/NPT 组合明确拒绝 |
 
-无输入 vel 时 root 默认以 300 K 初始化并广播；无 seed 的随机初速不保证重复运行相同。
-显式 velocity 按全局输入顺序生成并做全局动量修正，不是每 rank 独立 RNG。
-每段 run 先计算初始 force；dump 在完成的 step+1 达 interval 时触发，无 step0 dump。
-同段重复 dump_thermo/restart 拒绝；没有后续 run 的 dump 在结束时报错。
-NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全文件预检在任何段写出科学
-输出前完成，具体白名单见[限制](ensembles.md#并行限制与通信)。
+输入未提供 vel 时，rank 0 默认按 300 K 初始化速度并广播。随机初始化若未指定 seed，多次运行可能给出不同结果。显式 `velocity` 命令也在 rank 0 按输入行序生成速度，随后作全局动量修正。
+
+每段 `run` 先求初始力。完成的步数 `step+1` 达到输出间隔才会输出，段内 step 0 没有初始快照。同一段重复声明 dump_thermo 或 dump_restart 会报错。作业结束时若还有没有后续 run 的 dump 声明，也会报错。
+
+NHC、BDP 和两种 NPT 在写科学数据前预检整份输入。分区、重叠、调度和 trace 须使用[系综标准规定的默认值](ensembles.md#并行限制与通信)。
 
 ### dump_xyz 选项
 
 | token | 参数 / 行为 |
 | --- | --- |
 | group | METHOD ID，有效非负分组/ID，只输出所选组；重复拒绝 |
-| precision | single（默认 %.9g）或 double（%.17g）；重复拒绝 |
+| precision | single（默认 `%.9g`）或 double（`%.17g`）；重复拒绝 |
 | mass / charge | 输出 mass:R:1 / charge:R:1 |
 | velocity / force / potential | vel:R:3 / forces:R:3 / energy_atom:R:1 |
 | unwrapped_position | unwrapped_position:R:3 |
@@ -147,8 +159,7 @@ NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全�
 | bec | 当前普通 NEP runtime 明确 unsupported |
 
 参数可混排，列固定按 mass、charge、velocity、force、potential、unwrapped、virial、group
-排列，不按参数先后。未知参数报错。FILE 尾部为 * 时去掉星号加 step+1，每帧独立覆盖；
-其他文件 append。输出 global ID 顺序等于输入行顺序；group 也保持该相对顺序。
+排列，不按参数先后。未知参数报错。若 FILE 以 `*` 结尾，程序把星号换成 `step+1`，每帧分别覆盖对应文件。其他名称采用追加写入。整体系按输入行的全局 ID 顺序输出，分组也保留相对行序。
 
 ## 5. 多段 run 状态
 
@@ -159,7 +170,7 @@ NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全�
 | timestep / ensemble | 保留最近配置，直到覆盖 |
 | NHC 链 / BDP 与 SCR RNG、Gaussian cache | 每段新建；NHC 质量固定于该段 T1；固定 seed 的 BDP/SCR 在新段重新开始注册流 |
 | dump / correct_velocity / maximum_distance | 段末清空，后段须重新声明 |
-| ownership/cache | 全量复制模式的 owner 与局部域分解的 epoch 延续；局部域分解段首 force 不强制 rebuild |
+| ownership/cache | 两种模式都延续 owner/cache。局部域分解段首会先处理待更新的盒或布局，再计算初始力。有效缓存可以复用 |
 | 文件 | thermo/单文件 XYZ append，restart 覆盖 |
 
 参考原程序的 fix/move/deform 状态不属于当前支持合同，见[GPUMD 审计](../reference/gpumd-runtime-audit.md)。
@@ -168,7 +179,7 @@ NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全�
 
 ### 6.1 `thermo.out`
 
-每段启用 `dump_thermo I` 时 append header：
+每一段启用 `dump_thermo I` 时，程序先追加以下表头。
 
 ```text
 # dump_thermo I
@@ -178,52 +189,50 @@ NHC/BDP 还拒绝非默认 partition/overlap/schedule/trace 实验选项；全�
 # columns T KE PE sxx syy szz syz sxz sxy ax ay az bx by bz cx cy cz
 ```
 
-代码见 `src/measure/dump_thermo.cu:49-72`。每个数据行 18 个 `%20.10e` 字段：
+格式由 `src/runtime.cu` 的 `write_thermo_header` 和 `write_thermo_row` 写入。历史上游锚点是 `src/measure/dump_thermo.cu:49-72`。每个数据行有 18 个 `%20.10e` 字段。
 
 | 列 | 单位/语义 |
 | --- | --- |
 | `T` | K，`Σ_owned m*v²/(3N*kB)`；无 fixed/move group，不扣质心 |
 | `KE` | eV，`1.5*N*kB*T` |
-| `PE` | eV，全局每原子PE之和 |
-| `sxx syy szz syz sxz sxy` | GPa，virial+kinetic stress / volume 后乘160.2177 |
-| `a,b,c` 9列 | Å，晶格向量逐个输出 |
+| `PE` | eV，全体系逐原子势能之和 |
+| `sxx syy szz syz sxz sxy` | GPa，virial 与动能项求和后除以体积，再乘 160.2177 |
+| `a,b,c` 共 9 列 | Å，晶格向量逐个输出 |
 
-thermo 量在 VV2 后、thermostat/barostat 缩放前采样；NPT 同一步 thermo 压力/virial 是缩放前值，而 box 列与 XYZ/restart 的晶格和 wrapped positions 是缩放后状态。速度只由 thermostat 缩放，barostat 不缩放速度；`unwrapped_position` 不随盒缩放。温度定义保持 3N，与采样 fixture 的有效自由度限制分别说明。精确时点和限制见[控压器标准](barostat.md)。
+热力学量在速度 Verlet 后半步（VV2）结束时采样，此时还没有缩放速度或盒长。同一步 NPT 输出中，压力和 virial 属于缩放前的状态。盒矩阵和 XYZ/restart 的 wrapped positions 属于缩放后的状态。速度只由恒温器缩放，控压器不改变速度，也不缩放 `unwrapped_position`。输出温度按 3N 定义，统计实验另行记录有效自由度。[控压器和输出时点](barostat.md)
 
 ### 6.2 `dump_xyz`
 
-每帧 extended XYZ：
+每一帧均为扩展 XYZ 格式。第一行给出全体系或所选组的原子数。第二行从 `Time=%.8f` 开始，时间单位 fs，随后写 pbc、Lattice、总能量、总 virial、stress 和 Properties。每行原子默认写 `species pos_x pos_y pos_z`，可选属性按前述固定顺序追加。
 
-1. 第一行：输出原子数（全体系或选定group）。
-2. 第二行固定从 `Time=%.8f` 开始，时间单位fs；随后 pbc、Lattice、总energy、总virial、stress和Properties。
-3. 原子行默认 `species pos_x pos_y pos_z`，再按固定quantity顺序。
+第二行的能量和 virial 用 eV，应力用 eV/Å³。XYZ 不使用 thermo 写 GPa 时的转换因子。virial 和 stress 均以对称 3×3 矩阵的 9 个值输出。逐原子 virial 按内部索引 `0,3,4,6,1,5,7,8,2` 写出。上游依据为 `src/measure/dump_xyz.cu:184-238`。
 
-第二行量纲：energy/virial 为 eV；stress 是 eV/Å³，**不**乘 thermo 的 GPa conversion (`src/measure/dump_xyz.cu:184-238`)。virial/stress以对称3×3的9值输出。每原子virial的输出映射为内部索引 `0,3,4,6,1,5,7,8,2`。
-
-全体系原子行按 `Atom` 原数组顺序；group输出按 `Group::cpu_contents`，它也是扫描原数组所得顺序。MPI兼容输出必须按 stable global ID恢复这一顺序。
+整体系输出沿用 `Atom` 原数组行序。分组使用 `Group::cpu_contents`，它按同一顺序扫描原数组。MPI 输出通过稳定的全局 ID 恢复这些顺序。
 
 ### 6.3 `restart.xyz`
 
 - 固定名字 `restart.xyz`，匹配步以 `w` 覆盖。
-- `%g` 格式，第一行N，第二行 `pbc`, `Lattice`, `Properties`。
-- 无group时：`species:S:1:pos:R:3:mass:R:1:vel:R:3`。
-- 有group时追加 `:group:I:M` 并输出每种 grouping method label。
-- velocity由内部单位除10.18051为 Å/fs。
-- 不保存 time、force、PE、virial、RNG、thermostat/barostat state或global ID。
+- 第一行写原子数，第二行写 `pbc`、`Lattice` 和 `Properties`。
+- 当前 L20 工作树使用 `%.17g` 写晶格、位置、质量和速度，与 GPUMD 5.9.1 的
+  `src/measure/dump_restart.cu` 一致。历史短程 golden 的旧格式为 `%g`。
+- 无 group 时使用 `species:S:1:pos:R:3:mass:R:1:vel:R:3`。
+- 有 group 时追加 `:group:I:M` 并输出每种 grouping method 的 label。
+- 速度从内部单位除以 10.18051，单位为 Å/fs。
+- time、force、PE、virial、unwrapped position、charge、显式 global ID 及控制器/RNG 状态均未存盘。
 
-因此它能作为新的 `model.xyz` 状态输入，但代码不会自动重命名/读取。不同 rank 数恢复承诺
-状态字段兼容；NHC/BDP/SCR 重建链/RNG，**不提供轨迹连续 restart**。NPT Berendsen 同样不承诺单长 run、分段 run 和文件 restart 逐步连续，B2 实测差异见[报告](../status/validation/npt-validation.md#npt-ber-20261103)。详见[系综标准](ensembles.md#分段输出与-restart)与[控压器标准](barostat.md)。
+将 `restart.xyz` 用作新的 `model.xyz` 可以在另一 rank 数下从保存的字段启动。此操作需要
+配套的 `run.in` 和势文件。新作业重新生成原子 ID、力、并行布局和控制器状态。
+轨迹连续性不在 restart 合同内。NPT Berendsen 单长 run、分段 run 和文件 restart 的实际
+差异见 [B2 报告](../status/validation/npt-validation.md#npt-ber-20261103)。
+关于随机状态，见[系综标准](ensembles.md#分段输出与-restart)和[控压器标准](barostat.md)。
 
 ### 6.4 隐式 neighbor.out
 
-ordinary large-box NEP 每 1000 次 force 调用（含 call0）append 一条邻居统计。
-全量复制保留 root 副作用，非 root 写本机私有 scratch。局部域分解在本次 typewise 表生成后对
-各 dependency 域 local max 做两个 MPI_MAX，仅 root 写；空域贡献零。O2 replay 不重复记录。
-完整隔离/记账见[MPI runtime](mpi-runtime.md#io-与-nep_multigpu)。
+普通大盒 NEP 每 1000 次求力向 `neighbor.out` 追加一条邻居统计，首次调用（call0）也记录。在全量复制模式下，rank 0 写可见文件，其他 rank 写本机私有临时目录。局部域分解模式在本次类型对邻居表生成后，对依赖中心的两个局部最大值分别执行 MPI_MAX，仅 rank 0 写出。空域贡献零。分区验证的重放不会重复写日志（O2）。[I/O 隔离和通信计数](mpi-runtime.md#io-与-nep_multigpu)
 
 ## 7. 单位汇总
 
-| 量 | 用户输入/输出 | GPUMD内部/转换 |
+| 量 | 用户输入/输出 | GPUMD 内部值或转换方法 |
 | --- | --- | --- |
 | length/cutoff | Å | Å |
 | time/timestep | fs | 除 `10.18051` |
@@ -233,7 +242,7 @@ ordinary large-box NEP 每 1000 次 force 调用（含 call0）append 一条邻�
 | energy | eV | eV |
 | force | eV/Å | eV/Å |
 | virial | eV | eV |
-| thermo stress | GPa | 内部eV/Å³乘 `160.2177` |
+| thermo stress | GPa | 内部 eV/Å³ 乘 `160.2177` |
 | XYZ stress | eV/Å³ | 不转换 |
 
 常数证据：`src/utilities/common.cuh`。

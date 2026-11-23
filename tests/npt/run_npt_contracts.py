@@ -163,7 +163,7 @@ def prepare(args: argparse.Namespace) -> None:
         "test_contract": {
             "ber_reference_steps": 100, "scr_repeat_steps": 20,
             "ranks_and_backends": "selected at run time; exact inventory recorded per run",
-            "restart_precision": "C printf %g; six significant digits",
+            "restart_precision": "C printf %.17g; compared at .6g",
         },
     }
     write_json(out / "freeze.json", freeze)
@@ -326,7 +326,7 @@ class ContractRunner:
         if final["fields"].get("Lattice") is None:
             raise RuntimeError(f"{stage}: trajectory lacks final lattice")
         if [format(float(x), ".6g") for x in final["fields"]["Lattice"].split()] != \
-                restart["fields"]["Lattice"].split():
+                [format(float(x), ".6g") for x in restart["fields"]["Lattice"].split()]:
             raise RuntimeError(f"{stage}: restart lattice does not match final snapshot %g serialization")
         for prop in ("pos", "vel"):
             ti = next(i for i, (name, _, _) in enumerate(final["properties"]) if name == prop)
@@ -337,7 +337,7 @@ class ContractRunner:
             for tr, rr in zip(final["rows"], restart["rows"]):
                 if tr[0] != rr[0]:
                     raise RuntimeError(f"{stage}: trajectory/restart atom identity mismatch")
-                if [format(float(x), ".6g") for x in tr[toff:toff + width]] != rr[roff:roff + width]:
+                if [format(float(x), ".6g") for x in tr[toff:toff + width]] != [format(float(x), ".6g") for x in rr[roff:roff + width]]:
                     raise RuntimeError(f"{stage}: restart {prop} does not match snapshot %g serialization")
         box_xyz = [float(x) for x in final["fields"]["Lattice"].split()]
         box_thermo = rows[-1][9:18]

@@ -2,95 +2,94 @@
 <a id="mpi-runtime-m1-与-m2a"></a>
 # MPI runtime：全量复制与局部域分解
 
-类别：现行标准。核对日期：2026-11-05。
+类别：现行标准。核对日期：2026-11-20。
 
-模式名称：**全量复制模式**（英语 `replicated-full`；普通路径日志为 `m1-fallback`，NPT 路由日志为 `m1`）、**局部域分解模式**（英语 `local-domain`；路径日志为 `m2a`）、**分阶段中间场交换方案**（英语 `staged-field exchange`，尚未实现）以及**单 rank 基线**（英语 `single-rank baseline`）。日志和测试数据中的机器字段为合同内容，正文使用上述可读名称。
+## 作业如何选模式
 
-`run_replicated` 每 rank 只加载一次 NEP 参数，deferred workspace 在选定路径后分配。
-NPT 默认使用全量复制模式；显式 `DMGMD_DOMAIN_NPT=rebuild|affine` 的实验路径见[局部 NPT 合同](domain-npt.md)。对于 NVE/NVT，P1 使用全量复制模式；P>1 满足正交全周期、各方向厚度>2.5*(rc_radial_max+1)、slab_width≥d_coord 且半径可证明时采用局部域分解模式，否则回退到全量复制模式。
-P>1 triclinic/非周期直接 unsupported。非 NPT 路由时，root 输出：
+DMG-MD 每个 MPI 进程（rank）使用一张 GPU。全量复制模式下，每张 GPU 保存整盒原子、计算整盒 NEP 力。局部域分解模式下，程序沿一个轴把盒分成条带。每张 GPU 计算本地负责原子的最终力，只交换求力所需的边界数据。
+
+| 名称 | 代码与日志 |
+| --- | --- |
+| 全量复制模式 | `replicated-full`。普通分派记录 `m1-fallback`，默认 NPT 路由记录 `m1`。 |
+| 局部域分解模式 | `local-domain`。分派日志记录 `m2a`。 |
+| 分阶段中间场交换方案 | `staged-field exchange`，尚未实现。 |
+| 单 rank 基线 | `single-rank baseline`，单 rank 的运行对照。 |
+
+程序在启动时为整份作业选择模式。`run_replicated` 每 rank 只加载一次 NEP 参数，选好模式后再分配工作区（deferred workspace）。
+
+单 rank 始终使用全量复制模式。多 rank 拒绝三斜盒和带非周期方向的盒。正交全周期盒的各方向厚度须大于 `2.5*(rc_radial_max+1)`，并满足 `slab_width≥d_coord` 和半径证明，才具备局部域分解资格。已满足基础盒约束但局部资格不足时，当前实现选全量复制模式。
+
+任一 NPT 声明默认使整份作业使用全量复制。显式 `DMGMD_DOMAIN_NPT=rebuild|affine`
+可以按[实验合同](domain-npt.md)进入局部域分解。普通分派或实验 NPT 的初始资格判定输出
+下列日志。若实际进入局部 NPT，还会输出 `DMGMD_DOMAIN_NPT mode=rebuild|affine`。
 
 ```text
 DMGMD_DOMAIN mode=m2a|m1-fallback axis=x|y|z|none d_dep=... d_coord=... reason=...
 ```
 
-布局由[data-layout](data-layout.md)定义，NEP 依赖证据在[kernel 清单](../reference/kernel-inventory.md)。
-O2 分区与 O4 overlap 均默认 off；显式 O4 普通步在 O3 begin/finish 之间提交独立 early。
+D-013 规定了待实现的生产路由。生产版提供单卡和局部多卡两种入口。用户显式请求多卡时，应用应在积分前拒绝不具备局部资格的作业。当前实现仍按上述规则回退。[生产路由决策](architecture-decisions.md#production-domain-routing)
+
+局部域分解可以在交换边界坐标时，先提交只依赖本地原子的求力工作。分区（O2）识别这部分工作，通信接口（O3）提供发起和完成两个调用，重叠调度（O4）在两者之间提交计算。分区和重叠默认关闭。[数据布局](data-layout.md) · [NEP 内核依赖](../reference/kernel-inventory.md) · [分区与重叠](domain-partition.md)
 
 <a id="m1-空间所有权"></a>
 ## 全量复制模式的空间所有权
 
-reader 的 global=owned=local=N、ghost=0，但 MPI 权威 owner 是 SpatialOwnership：
-owner_by_slot 单一事实源，派生 owned_indices/mask 与 gid→slot，gid 为 [0,N) permutation。
-owned_indices 按 gid 排序，空 slab/N<P 合法。P1 全归 rank0，不选轴/重算 owner。
-P>1 沿最长边切等宽 fractional 半开 slab；tie 为 y 胜 x/y 或 y/z，x 胜 x/z。
-内部面属右侧，s=0 首 slab，s=1 最后；wrap 保留单次 <0/+1、>1/-1。
+读取器给每个 rank 建立一份完整原子数组，计数为 `global=owned=local=N` 和 `ghost=0`。运行时另给每个原子分配唯一的负责 rank，由它积分并提供热力学量和输出数据。`SpatialOwnership` 以 `owner_by_slot` 保存归属，派生 `owned_indices`、掩码和从原子全局 ID（gid）到槽位的映射。gid 是 `[0,N)` 的排列，`owned_indices` 按 gid 排序。允许空条带和 `N<P`。
 
-全量复制迁移是 gid 逻辑移交，不压缩/重排数组。旧 owner 做 VV1，新 owner 做 VV2：
+单 rank 的原子都归 rank 0，跳过选轴和归属重算。多 rank 沿盒的最长边切成等宽条带，用分数坐标划分半开区间。x 与 y 或 y 与 z 等长时选 y，x 与 z 等长时选 x。内部边界属于右侧，`s=0` 属于第一条带，`s=1` 属于最后一条带。坐标越界时只折回一次（`<0/+1` 或 `>1/-1`）。
 
-1. 修速触发时，先用 current ownership indexed velocity Allgatherv，root CPU 修正后 Bcast。
-2. adaptive 只扫 owned；owned VV1/position/unwrapped 更新。
-3. current ownership indexed position Allgatherv 恢复每张卡完整坐标。
-4. 全 N wrap/清零/ordinary NEP scratch。
-5. 从 wrapped position 重算 next owner，固定 16 B map-hash Allreduce 保证各 rank 一致；
-   本地构造失败也走同一握手。变化时先按旧 owner Allgather 最新 half-step velocity 和
-   可选 unwrapped，再 adopt next owner、epoch++ 并重建 indexed plan；不变则复用。
-6. next owner 执行 VV2、thermo、控温和输出，下一步沿用该 owner。
+全量复制模式下的迁移只改变 gid 对应的负责 rank，各 rank 的数组槽位及顺序保持原样。旧 rank 完成速度 Verlet 的第一半步（VV1），新 rank 完成第二半步（VV2）。
 
-普通步不复制 velocity；其非 owned 消费者只有上述修速/迁移。type/mass/group/gid 静态复制。
-NEP 读取邻居 Fp/反向 partial，故 full scratch 不能简单改为 owned N1/N2。
+1. 触发修速时，按当前归属索引通过 `Allgatherv` 汇集速度，在根 rank 的 CPU 上修正后用 `Bcast` 广播。
+2. 自适应时间步只检查负责原子。当前负责 rank 执行 VV1，更新位置和已启用的展开坐标。
+3. 按当前归属索引用 `Allgatherv` 汇集位置，恢复每张 GPU 的完整坐标。
+4. 对全部 N 个原子折回坐标、清零并执行普通 NEP 求力。
+5. 根据折回盒内的坐标计算下一归属，并用固定 16 B 的归属表哈希做 `Allreduce`。本地构造失败也参加同一次握手。归属改变时，按旧归属用 `Allgather` 汇集最新半步速度和可选的展开坐标，再提交新归属、递增 epoch 并重建索引计划。归属未变时继续用原计划。
+6. 新负责 rank 执行 VV2、热力学量计算、控温和输出。下一步沿用此归属。
 
-启动先校验完整 map hash，再 Allreduce N 个 owned mask，要求每项=1。hash 在 variable-count
-通信前执行；mask 不能替代全 map 一致性。记录 CENTER_PARTITION/OWNERSHIP；每次 owner
-变化输出 OWNERSHIP_EPOCH（最多64条 transitions）。这证明物理输出覆盖，不证明 NEP 数学分片。
+速度只在修速和迁移时复制给非负责 rank。类型、质量、组和 gid 保留静态副本。普通 NEP 读取邻居 `Fp` 和反向部分力，完整工作区必须保留这些依赖，单改 `N1/N2` 只计算负责中心会遗漏所需中间量。
+
+启动时先检查完整归属表哈希，再用 `Allreduce` 对 N 个负责标记求和，每项必须等于 1。检查哈希的步骤位于变长通信前，兼顾归属表一致性与原子唯一覆盖。程序记录 `CENTER_PARTITION` 和 `OWNERSHIP`，归属变化时还记录 `OWNERSHIP_EPOCH`，最多记录 64 次转换。上述检查证明物理输出覆盖。NEP 计算是否分片要另看求力路径。
 
 <a id="m1-isotropic-box-change-contract-b1"></a>
 ### 全量复制模式的各向同性盒变更
 
-The host box-control primitive validates a candidate orthogonal, fully periodic
-box, its double inverse, volume and float copy before changing live state. A GPU
-preflight scans only `global_count` positions using `local_count` as the SoA
-stride and copies back one invalid flag; only a clean preflight launches the
-scale kernel. Padding, velocity and `unwrapped` remain untouched. The operation
-then refreshes `RuntimeOwnership`'s inverse/partition axis and sends a one-shot
-notification to the replicated-full/global NEP neighbor cache. P=1 retains
-`partition_axis=-1`; P>1 ownership map/hash must remain unchanged under an
-isotropic scale. The next global Verlet build consumes the notification and
-clears it only after rebuilding. Neighbor setup recomputes `thickness_*` through
-the existing `get_num_bins` path. This primitive is now used by the supported
-isotropic NPT default routes. With `DMGMD_DOMAIN_NPT=off`, the local-domain
-entry rejects NPT before dynamics or halo updates; the opt-in owned transaction
-is specified separately in [domain NPT](domain-npt.md). Detailed B1
-acceptance evidence remains in the validation report.
+提交前检查候选盒的正交全周期性、double 逆矩阵、体积和 float 副本。GPU 以
+`local_count` 为 SoA stride，仅预检 `global_count` 个位置，并返回一个异常标志。
+预检通过后才缩放位置。padding、速度及 `unwrapped` 保持原值。
 
-For either supported NPT ensemble, this operation runs after VV2, thermo and
-thermostat and before snapshot/thermo/XYZ/restart output. The same-step thermo stress remains
-the pre-scale sample while box columns and snapshot wrapped positions use the
-scaled state. `unwrapped` follows the pinned v1 behavior and is not affinely
-scaled. Targeted results are recorded in
-[box contract validation](../status/validation/npt-validation.md#box-contract-20261103).
+提交会刷新 `RuntimeOwnership` 的盒逆与分区轴，并标记全局 NEP 邻居缓存失效。P1 保留
+`partition_axis=-1`。P>1 的各向同性缩放要求 owner map/hash 不变。下次全局 Verlet
+重建后清除失效标记。`get_num_bins` 重新计算 `thickness_*`。
+
+更新位于 VV2、thermo 和 thermostat 之后，所有输出之前。同一步 thermo stress 使用缩盒前样本。
+box 列与快照的 wrapped position 使用缩盒后状态。
+证据见 [B1 盒合同验收](../status/validation/npt-validation.md#box-contract-20261103)。
 
 ### NPT 路由与控制状态（B2–B4/G-B）
 
-默认 `DMGMD_DOMAIN_NPT=off` 时，`npt_ber` 与已通过 G-B 的 `npt_scr` 使用全量复制模式的全局盒变更原语；P>1 无论几何是否满足局部域分解资格条件均由 dispatcher 强制全量复制模式，并输出 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`。开关 off 的局部入口在任何动力学/halo 更新前拒绝 NPT。显式实验开关使用独立 owned 两阶段事务，范围见[局部 NPT](domain-npt.md)。SCR 的统计支持限于 216 原子 NEP-C、300 K/0 GPa、单节点冻结矩阵：base 为 P1/HostStaged 与 P2/P4 两后端，half-dt 仅 P1/HostStaged；原18-look总体 INCONCLUSIVE 历史仍保留。详见[n3最终确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)。
+默认 `DMGMD_DOMAIN_NPT=off` 时，`npt_ber` 和已通过 G-B 的 `npt_scr` 使用全量复制模式的盒变更接口。多 rank 即使满足局部域分解的几何条件，也会走全量复制，并输出 `DMGMD_DOMAIN mode=m1 reason=npt-m1-only`。如果把 NPT 交给关闭实验开关的局部入口，入口会在积分或更新边界前拒绝。显式开启局部实验模式后，只对负责原子缩放坐标，先预检再提交。[局部 NPT](domain-npt.md)
 
-盒缩放因子是 rank 0 单一状态，成功后向所有 rank 广播同一个标量；每 rank 对完整位置数组做相同仿射缩放，再刷新盒逆、partition 轴与 global neighbor cache。不得每 rank 独立算压力随机数。压力采样与 thermostat/box 更新的时点见[控压器标准](barostat.md)。SCR 的 root RNG/BDP→pressure-noise 调用序列按已验收 B3 实现与 B4 记录执行；该验收不表示支持 RDMA、跨节点或局部域分解模式下的 NPT。
+全量复制模式的 SCR 统计验收取单节点 216 原子 NEP-C，在 300 K、0 GPa 下运行。基准步长包括 P1/HostStaged 以及 P2、P4 的两个后端，半步长只包括 P1/HostStaged。最初 18 次分析的总体判定为 `INCONCLUSIVE`，后续独立确认通过上述范围。[G-B 独立确认](../status/validation/npt-validation.md#npt-scr-confirmation-20261104)
+
+rank 0 计算盒缩放因子并广播状态和因子。全量复制模式的每个 rank 对完整位置数组应用
+同一因子。SCR 按 B3/B4 验收的顺序，由 root 先取恒温随机数，再取压力随机数。
+压力与更新的采样时点见[控压器标准](barostat.md)。局部 NPT 的验收单独记录在[实验合同](domain-npt.md)。
 
 ## 通信后端与部署
 
-唯一支持栈为 Open MPI+UCX。原生 source ../env/md-mpi.sh；Docker 自动加载
-/opt/dmgmd/env/md-mpi.sh。固定 UCX PML/MCA path 并排除 HCOLL；内置 PMIx 可用编译时目录。
-默认 HostStaged：device pack→pinned D2H→MPI→H2D→device unpack。
-CudaAware 传 device buffer，先经 MPIX query、Allreduce(IN_PLACE)/Allgatherv/Gatherv/Bcast
-主动数值自检及 p2p 自检；数值不符回退 HostStaged，MPI 错误按失败合同 abort。
-一 rank 一 GPU，local rank 选择与 UUID 去重；不构造 NEP_MULTIGPU。
+目前只支持 Open MPI 和 UCX 组成的运行栈。原生运行时加载 `../env/md-mpi.sh`，Docker 自动加载 `/opt/dmgmd/env/md-mpi.sh`。环境固定 UCX PML 和 MCA 路径，排除 HCOLL。内置 PMIx 可使用编译时目录。
+
+默认后端 `HostStaged` 先在设备上打包，再经固定页主机缓冲区完成 D2H、MPI 和 H2D，最后在设备上解包。`CudaAware` 直接向 MPI 传设备缓冲区。启用前执行 MPIX 查询，并对 `Allreduce(IN_PLACE)`、`Allgatherv`、`Gatherv`、`Bcast` 及点对点收发做数值自检。自检数值不符时回退到 `HostStaged`。MPI 出错时按失败规则终止作业。
+
+每 rank 根据 local rank 选择一张 GPU，运行时用 UUID 检查重复绑定。MPI 路径不构造 `NEP_MULTIGPU`。
 
 <a id="m1-每步通信量"></a>
 ## 全量复制模式的每步通信量
 
-collective API 计全局 input/output buffer 字节，不代表物理 wire traffic。indexed pack 按
-owned slot 转 AoS，接收按 gid/slot plan 恢复 SoA；不能按 rank 拼接顺序消费。plan 建立时
-验证身份，普通步不重复传 gid。令 P=rank 数、N=global_count，无 adaptive/输出/迁移：
+集合通信按传给 MPI 的逻辑输入和输出缓冲区计字节，实际链路流量另算。发送时按负责槽位打包成逐原子记录（AoS），接收后按 gid 和槽位的映射恢复为逐分量数组（SoA）。接收端必须使用映射还原槽位。程序建立映射时就核对身份，因此普通步无需重复发送 gid。
+
+下表取 P 为 rank 数、N 为 `global_count`。自适应时间步、输出和迁移的额外通信在下一表单列。
 
 | collective | MPI input | MPI output |
 | --- | ---: | ---: |
@@ -134,23 +133,21 @@ root 更新失败时先将 `status=0` 广播，再广播错误字符串，所有
 出口；失败路径的错误文字通信不属于成功步预算。逐 rank 因子位模式和上述成功步增量的实测见
 [恒温器矩阵](../status/validation/thermostat-validation.md#thermostat-matrix-20261102)。
 
-含 BDP 的整个输入在执行前校验 `DMGMD_ENSEMBLE_SEED` 的 presence 和原始字符串：root
+含 BDP 或 SCR 的整个输入在执行前校验 `DMGMD_ENSEMBLE_SEED` 的设置状态和原始字符串。root
 用长度+内容两次 Bcast 分发，再以一次 Allreduce 比较各 rank；之后解析 uint32 十进制。
 局部域分解模式的独立入口再次执行同一预检，避免绕过 dispatcher 时漏检；这些启动控制通信不计逐步行。
 没有逐步 RNG 状态传输。选项限制、分段重置和非连续 restart 见[系综合同](ensembles.md)。
 
 ## 日志与整体计时
 
-DMGMD_COMM_LOG_INTERVAL 默认1000，各 rank 须一致；行是被采样的单步量，不是 K 步聚合。
-逐步精确测试显式 K=1。局部域分解另有逐 rank 类别字段，见下文。
+`DMGMD_COMM_LOG_INTERVAL` 默认为 1000，各 rank 须一致。每行只统计被采样的一个步。需要检查每一步时设为 `1`。局部域分解还输出逐 rank 字段。
 
-每 run 输出 DMGMD_TIMING phase=run，CUDA sync+MPI barrier 后起算，结束同步完成；
+每个运行段输出 `DMGMD_TIMING phase=run`。CUDA 同步和 MPI barrier 完成后开始计时，段末同步完成时停止。
 含段首 force、步循环、通信/输出和启用的诊断收尾。seconds_min/mean/max 是同作业 rank 范围，
 吞吐=global_count*steps/seconds_max，不把 duplicated NEP 计为额外物理工作。
-phase=total 从所选 runtime 入口到 finish 后起止，包含部分初始化/清理；不含 main 解析、
-MPI 初始化、dispatcher 势加载和全部析构/finalize，不是进程生命周期。
-正式端到端比较用关闭详细 profiler 的 run 墙钟。正确性 suite 不设速度门槛，历史单机
-benchmark 见[状态](../status/current.md)，跨节点效率无实测。
+`phase=total` 从选定的运行入口计至 `finish` 返回，包括部分初始化和清理。这个区间从分派加载势之后开始，范围也排除了 `main` 解析、MPI 初始化和完整的析构及 finalize。
+
+正式端到端比较使用关闭详细分析后的 `run` 墙钟。正确性测试没有速度门槛。当前只有单机记录，跨节点效率尚待实测。[验证状态](../status/current.md)
 
 ## I/O 与 NEP_MULTIGPU
 
@@ -171,36 +168,26 @@ finish 先归约恢复状态（失败判作业失败），再校验父 temp 根�
 不新加 collective，避免 peer 已阻塞时挂起。I/O setup 的协调在抛出前完成，不能推广为所有
 runtime 错误都先归约；Open MPI 转发 stderr，记录顺序不等于执行顺序。
 
-## 局部域分解路径 路径（现行合同）
+## 局部域分解路径（现行合同）
 
 ### 布局与身份
 
-局部域分解模式的 device 数据面下每 rank 只保存自己的 owned 原子与 ghost；完整 host identity
-当前仍按 `data-layout.md` 保留用于静态元数据/兼容输出：
+局部域分解模式下，每张 GPU 保存本 rank 的负责原子（owned atom）和其他 rank 的边界副本（ghost atom）。依赖副本（dependency ghost）需要计算中间量，仅坐标副本（coordinate-only ghost）只提供邻居候选。主机仍保留完整的原子身份，用于静态元数据和按输入顺序输出。[数据布局](data-layout.md)
 
-- 槽位顺序统一为 `[0, owned)` owned（按 global_id 升序）、随后 dependency
-  ghosts、最后 coordinate-only ghosts；ghost 段按 `(source face, source rank,
-  global_id)` 确定性排序；`local_count` 是所有 SoA 与 NEP workspace 的唯一
-  stride（`global_count` 只是元数据）；
-- dependency ghosts 是与本 rank slab 的 MIC 距离 <= `d_dep` 的相邻 rank owned
-  原子（获得 Verlet 行、typewise 表、descriptor/Fp/partial）；coordinate-only
-  ghosts 是距离在 `(d_dep, d_coord]` 的原子（仅作邻居候选）；
-- 每个槽位携带 global_id、owner/source rank、face 与周期 image shift 元数据；
-  发送端按 MIC 带去重，接收端拒绝重复 gid。当前每 gid 只有一个 wrapped slot，
-  image shift 不再叠加到数值坐标，不表示已支持多 image ghost；
-- `manager_owner` 在一个 cache epoch 内保持不变，可以暂时不同于当前位置算出的
-  `geometric_owner`；只有统一 rebuild transaction 才提交 owner 迁移。ghost 位置在普通步
-  通过缓存 face 计划刷新（24 B/原子），成员关系只在统一 rebuild 时重估（40 B membership
-  记录 + 4 B/face count handshake）。
+数组前段 `[0, owned)` 保存负责原子，按 `global_id` 升序排列。后面依次放依赖副本和仅坐标副本。两段副本各按 `(source face, source rank, global_id)` 排序。`local_count` 是所有 SoA 数组和 NEP 工作区的唯一跨度（stride），`global_count` 只作元数据。
 
-缓存充分条件见[cache-validity](cache-validity.md)。typewise 半径按 pinned kernel 的实际消费路径枚举：radial list 成员需要
-`d < (rc_radial[t1]+rc_radial[t2])/2`，angular list（radial-first filter）需要
-`d < min(Rr, Ra)`，ZBL 消费 angular list，因此 `R_force = R_dep = Rr`；
-`d_dep = max R_force + skin`，`d_coord = max chain (R_force + R_dep) + 2*skin`。
-类型对平均严格复现 kernel 的 float 表达式 `(a+b)*0.5f`，并取其与 loaded-float
-操作数精确平均的较大者；kernel 向上舍入时再向 `+inf` 扩一个 double ULP，禁止 host
-double 平均低估实际消费 cutoff。
-无法证明上界（非有限/非正 cutoff）时 fail closed。
+以最小镜像约定（MIC）算原子到本 rank 条带的距离。距条带不超过 `d_dep` 的副本归入依赖层，程序为这些中心构建 Verlet 行和按类型对截断的邻居表，并计算描述符、`Fp` 和部分力。距离在 `(d_dep, d_coord]` 内的副本只提供坐标。
+
+每个槽位保存 `global_id`、管理 rank、来源 rank、边界面和周期镜像偏移。发送端按 MIC 带去重，接收端拒绝重复 gid。每个 gid 只有一个折回盒内的槽位，周期镜像偏移只作元数据，坐标保持原值。多镜像副本尚未支持。
+
+管理归属（manager owner，`manager_owner`）是当前负责积分的 rank，在一个缓存周期内保持不变。按当前位置计算的几何归属（geometric owner，`geometric_owner`）可以先改变，迁移在统一重建时才提交。普通步沿已有条带边界通信计划刷新副本坐标（24 B/原子）。统一重建时重新选取边界成员，每条成员记录为 40 B，每个面另交换 4 B 的计数。
+
+两跳位置边界须覆盖固定版本内核访问的所有邻居。径向表要求 `d < (rc_radial[t1]+rc_radial[t2])/2`。角向表从径向表再筛选，要求 `d < min(Rr, Ra)`。ZBL 使用角向表，因此 `R_force = R_dep = Rr`。据此得到：
+
+- `d_dep = max R_force + skin`
+- `d_coord = max chain (R_force + R_dep) + 2*skin`
+
+用内核的 float 表达式 `(a+b)*0.5f` 算类型对平均，同时求输入 float 操作数的精确平均，取两者较大值。内核结果向上舍入时再向 `+inf` 扩一个 double ULP，避免主机计算低估 cutoff。遇到非有限或非正 cutoff 等无法证明上界的情况，拒绝局部域分解资格。[缓存有效性证明](cache-validity.md)
 
 <a id="每步顺序m2a"></a>
 ### 局部域分解路径的每步顺序
@@ -213,48 +200,33 @@ double 平均低估实际消费 cutoff。
 3. owned VV first half（+ unwrapped 跟踪）；
 4. owned 位置按 pinned 单次 `<0/+1`、`>1/-1` 语义 wrap；若单步位移导致坐标一次 wrap 后
    仍在盒外，则统一 decision 在任何 halo/force 前报 unsupported multi-box displacement；
-5. 唯一 cache decision：VV1 在 wrap 前把 owned 原子的真实位移累加到 epoch
-   displacement；只检查每个 global ID 的 manager copy，将局部最大位移平方的严格超限
-   判定合入一次 uint32 reason-mask OR。空 owned rank 仍参加 OR，不做缓存位移 MAX。
-   非有限位移、无法证明的连续性或单步超过一个盒长在 halo/force 前全 rank
-   报错；全局位移 `> skin/2` 才进入 rebuild，恰好阈值仍复用。Neighbor 接受明确的
-   `confirmed_reuse` / `must_rebuild` action，不再执行第二次位移检查；
-6. 普通步保持 manager、slot/layout、membership、communication map 与 neighbor rows 不变，
-   只按缓存 face 计划刷新 ghost 坐标（24 B/原子），并验证 mapping/refreshed epoch；微小跨
-   slab 或周期端只改变 `geometric_owner`，不单独迁移；
-7. rebuild transaction 中，若 manager 与最终 geometric owner 不同，则沿现有 direct
-   all-rank 路由执行 Alltoall count handshake + Alltoallv，一步直达最终 slab；载荷含 gid、
-   type、mass、charge、group labels、wrapped position、half-step velocity、unwrapped（启用
-   时），force/PE/virial 不迁移。随后统一重建 membership/layout/map，复用或扩展 capacity，
-   清零 epoch displacement 并重建 neighbor rows；无 owner 变化的 skin rebuild 也走同一
-   membership/layout/neighbor transaction；
+5. VV1 在折回坐标前累计负责原子的真实位移。每个 rank 只检查自己负责的全局 ID，将局部最大位移平方是否严格超限合入一次 uint32 原因按位或归约（reason-mask OR）。空 rank 也参加。缓存判定只用这次 OR。非有限位移、连续性无法证明或单步超过一个盒长时，全体 rank 在交换边界或求力前报错。固定盒的全局位移 `> skin/2` 时重建，恰好等于阈值时仍复用。局部 NPT 另有变盒判据。邻居表按 `confirmed_reuse` 或 `must_rebuild` 执行。[局部 NPT](domain-npt.md)
+6. 普通步验证通信映射和刷新对应的缓存版本，只沿已有边界计划刷新副本坐标（24 B/原子）。管理归属、槽位、成员、通信映射和邻居表保持不变。小幅跨条带或跨周期边界只改变几何归属。
+7. 统一重建时，若当前负责 rank 与几何归属不同，先用 `Alltoall` 交换待迁移原子数，再用 `Alltoallv` 把记录直接送到最终条带的 rank。记录包括 gid、类型、质量、电荷、组标签、折回盒内的位置、半步速度及已启用的展开坐标（unwrapped）。力、势能（PE）和 virial 在此处不传。随后统一重建边界成员、布局和映射，复用或扩展容量，清零累计位移并重建邻居表。即使负责 rank 未变化，超过 skin 位移界时也走同一套重建过程。
 8. 域分片 NEP：dependency-center 邻居表/descriptor/partial
    （`[0, owned+dep)`），owned radial force/many-body/ZBL（`[0, owned)`），
    候选 `[0, local_count)`；
 9. owned VV second half；
 10. 按[消费者需求](thermo-demand.md)执行 owned thermo 求和 + 8-double Allreduce
-    （NVE 只在 thermo/XYZ 输出步需要；NVT 每步保留，ghost 的 PE/virial scratch 不参与）；
+    （NVE 只在 thermo/XYZ 输出步需要，NVT 和实验 NPT 每步均需。ghost 的 PE/virial scratch 不参与）；
 11. owned thermostat（NHC 后半步或 BDP/Berendsen 末步缩放；NHC 前半步在第 3 项 VV1 前
     另做 owned KE 归约、root 链更新与因子广播）；
-12. 输出/measurement：local-owned-prefix gather 携带 global ID，root 恢复恰好
+12. 实验局部 NPT 在输出前还执行控压。若盒因子变化，先验证候选盒并在所有 rank 上达成一致，
+    才提交盒和 owned 位置。下次求力前按[局部 NPT 合同](domain-npt.md)刷新或重建。
+13. 输出/measurement：local-owned-prefix gather 携带 global ID，root 恢复恰好
     N 条按 global ID 排序的记录后复用既有 formatter（ghost 永不直接输出）。
 
 第一个 run 前的初始力先完成 local owned 初始化、bootstrap 设备 wrap（与
 pinned wrap kernel 逐位一致）、halo 与 NEP workspace。多段 run 延续同一 domain state，
-不在段间恢复 replicated device arrays，也不因段首兼容 force call 强制重建已确认的
-membership/neighbor cache。restart 不序列化 cache/owner epoch；新进程按新 rank 数从输入行
-bootstrap 新 epoch。
+无须在段间恢复 replicated device arrays。若有未处理的盒变化或布局重新上传，段首先完成
+求力准备。仍有效的 membership/neighbor cache 可以复用。restart 新进程按新的 rank 数
+从输入行重建 cache 和 owner epoch。
 
 ### 通信后端与字节口径
 
-O3 的 begin/progress/finish、单槽位、FUNNELED、请求/事件完成与错误合同见
-[halo 生命周期](halo-lifecycle.md)。默认立即 finish；O4 可显式在二者间提交 early。两后端 payload
-与请求数量不变；finish 现在等待物理 unpack 完成才释放槽位。
+普通步发起点对点交换后默认立即等待结果。显式开启重叠时，可在发起和等待之间提交只依赖负责原子的计算。通信接口在 GPU 完成解包、写入边界副本后才释放槽位。两种后端沿用同一载荷与请求数量。[边界交换接口与线程限制](halo-lifecycle.md)
 
-`HostStaged` 与 `CudaAware` 都为 p2p 扩展了同一 tag 方案（左右方向独立 tag 与
-buffer，P=2 同 peer 安全；P=1 无操作；零 count 合法）。CudaAware 启用门新增
-真实 device-buffer p2p Send/Recv 自检（自检失败回退 HostStaged），由
-`tests/mpi/check_environment.py` 断言 `cuda_aware_p2p_self_test=passed`。
+`HostStaged` 与 `CudaAware` 都用独立 tag 和缓冲区区分左右两面。P=2 时两面可发给同一个 rank，P=1 时跳过点对点交换。允许 count 为零。`CudaAware` 启用前执行真实设备缓冲区点对点 Send/Recv 自检，数值失败回退到 `HostStaged`。`tests/mpi/check_environment.py` 断言成功记录 `cuda_aware_p2p_self_test=passed`。
 
 `DMGMD_COMM` 的既有六个字段保持 global-aggregate 语义（全量复制与 局部域分解一致）；新增
 字段口径如下，均记录**发送 rank 自己的 local 值**，每 rank 另有
@@ -267,17 +239,13 @@ buffer，P=2 同 peer 安全；P=1 无操作；零 count 合法）。CudaAware �
 | `migration_send/recv_bytes_local` | local | Alltoallv 迁移记录（无 group 时 80 B/原子，unwrapped 启用时 104 B） |
 | `control_send/recv_bytes_local` | local | face count handshake（8 B/轮）、Alltoall/Allgather of counts |
 
-默认 `DMGMD_COMM_LOG_INTERVAL=1000`，因此普通短 run 不再逐步输出通信记录；需要逐步
-精确记账的测试显式设置为 `1`。局部域分解模式的逐次 `DMGMD_DOMAIN_LAYOUT` 与
-`DMGMD_DOMAIN_MIGRATION` 默认关闭，设置 `DMGMD_DOMAIN_DIAGNOSTICS=1` 后恢复，字段与
-rank 语义不变。无论详细诊断是否开启，每个 run 段末每 rank 输出一条
-`DMGMD_DOMAIN_SUMMARY`，记录该段的 migration/rebuild 步数、layout upload、workspace
-逻辑更新、capacity growth event、GPU allocation 与 thermo 实际计算/跳过次数；这些计数为 rank-local，不新增
-逐步 collective。详细 layout 记录中的 `gpu_allocations` 是本次 Atom+NEP+Neighbor layout
-更新实际触发的 `GPU_Vector` 分配次数。
+测试逐步通信时显式设 `DMGMD_COMM_LOG_INTERVAL=1`。设置 `DMGMD_DOMAIN_DIAGNOSTICS=1` 后，才逐次记录 `DMGMD_DOMAIN_LAYOUT` 和 `DMGMD_DOMAIN_MIGRATION`，沿用现有字段与 rank 含义。
 
-普通 局部域分解步不含任何 N-scaled collective（position Allgatherv 不存在于此协议）；
-输出步增加 gid gather（8N）+ 各字段 gather（8 B/atom/component，root 侧恢复
+每个运行段结束时，每 rank 都输出一条 `DMGMD_DOMAIN_SUMMARY`。它记录本 rank 的迁移与重建步数、布局上传、工作区逻辑大小更新、扩容、GPU 分配，以及实际计算或跳过热力学量的次数。这些计数不增加逐步集合通信。详细布局记录中的 `gpu_allocations` 指这次更新 Atom、NEP 和 Neighbor 布局时实际发生的 `GPU_Vector` 分配次数。
+
+普通 NVE/NVT 局部域分解步省去按 N 扩张的 position Allgatherv。
+实验 NPT 的附加控制通信见[局部 NPT 合同](domain-npt.md)。
+输出步增加 gid gather（8N）及各字段 gather（8 B/atom/component，root 侧恢复
 input-slot 顺序）；correct_velocity 触发步增加 80N 的 gather/scatter。除下述周期记录外，
 每步固定执行 decision reason OR（4P）；有 thermo 消费者时增加 64P 与一次 SUM，所以
 input/output 各为 `4P + 64P * needs_thermo` B、`1 + needs_thermo` 次 collective；
@@ -286,22 +254,18 @@ NVT 的 `needs_thermo` 恒为 1。rebuild 若发生 owner 变化再增加 Alltoa
 migration-OR + neighbor-rebuild-OR 双判定，不得由 Neighbor 再发起位移 collective。
 O7 将原缓存 displacement MAX 的阈值判定移到各 rank 后合入 OR；自适应时间步的
 MAX 及下述 neighbor 周期 MAX 保留。证明、独立实际调用计数与配对实测见
-[O7 报告](../status/performance/cache-reduction-results.md#o7-results-20261023-report)。
+[缓存判定](cache-validity.md)。
 `neighbor.out` 每 1000 次 force 调用（含首次）由各 rank dependency-center local
 max 经 `MPI_MAX` 聚合后仅 rank 0 写单条既有格式记录。统计必须在**本次** Verlet/typewise
 邻居表生成后读取；真正 `local_count=0` 的 rank 贡献零但仍参加 collective。初始力或段首力
 的聚合属一次性 control plane，不计入 step 行；若记录落在 step force，则该 step 精确增加
 2 次 collective、`mpi_input_bytes_global += 16P`、`mpi_output_bytes_global += 16P`。
 
-设置 `DMGMD_DOMAIN_TIMING=1` 后，每个积分步恰好分类为 `ordinary` 或 `rebuild`，并用固定
-CUDA event 与 host monotonic clock 记录 decision、migration、membership/layout、
-allocation/upload、halo pack/transfer-wait/unpack、cell/neighbor、NEP、integration、thermo、
-scientific output 和 remaining。默认关闭时不创建计时 event（O3 生命周期 event 始终存在）、不输出逐步记录、也不增加计时专用
-同步；开启时为每步保留 event，在既有段末 device synchronization 后读取，不依赖 NVE thermo D2H；
-诊断资源为 O(段步数)，并在每个 run 段末
-各做一次 SUM/MIN/MAX 归约，输出有界 summary/histogram。device interval、host critical-path
-interval 与 MPI-call wall interval可能重叠，报告不得相加；端到端性能仍以详细计时关闭时的
-`DMGMD_TIMING phase=run seconds_max` 为准。
+设置 `DMGMD_DOMAIN_TIMING=1` 后，每个积分步恰好归类为 `ordinary` 或 `rebuild`。程序用 CUDA 事件和主机单调时钟记录决策、迁移、成员与布局、分配与上传、边界打包与等待及解包、网格邻居、NEP、积分、热力学量、科学输出和剩余阶段。
+
+默认关闭时，程序只保留 O3 生命周期所需的事件，跳过详细计时事件、逐步记录和专用同步。开启时为每步保留事件，在已有的段末设备同步后读取，因此 NVE 跳过热力学量的 D2H 时也能计时。诊断资源为 O(段步数)。每个段末各做一次 SUM、MIN 与 MAX 归约，输出有界汇总和直方图。
+
+设备区间、主机关键路径区间和 MPI 调用墙钟可以重叠。报告应分别列出。端到端性能以关闭详细计时后的 `DMGMD_TIMING phase=run seconds_max` 为准。
 
 `DMGMD_DOMAIN_TRACE=1` 仅在同时设置 `DMGMD_DOMAIN_TIMING=1` 的 局部域分解路径有效，默认关闭。
 `DMGMD_DOMAIN_DIAGNOSTICS` 启动记录中的 `timing`/`trace` 是程序实际模式。每 rank/步
@@ -328,7 +292,7 @@ D2H/段末同步提供先后及就绪边界，无法从这些字段给设备事�
 完整 runner 覆盖和比较原则只在[Golden Test](golden-test-standard.md)维护，CLI 见
 [MPI README](../../tests/mpi/README.md)；已执行结果见[当前状态](../status/current.md)。
 [O2 分区](domain-partition.md)保持 L stride、半径和每中心顺序；先完成 halo 后串行执行。
-分阶段中间场交换方案、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)；O5 正式性能矩阵已完成，见[报告](../status/performance/communication-computation-overlap-results.md#o5-20261021-report)，O10 等剩余工作见[计划](../plans/communication-computation-overlap.md)。
+分阶段中间场交换方案、3D 与多节点硬化见[扩展计划](../plans/domain-decomposition.md)，O10 等剩余工作见[计划](../plans/communication-computation-overlap.md)。
 
 ## O4 默认关闭的普通步重叠
 

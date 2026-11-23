@@ -716,7 +716,7 @@
         "sha256": "c3c9cd0b81a3f18ebbd8f4379dfbd3dbf929785eb5aa883fa4730b025d70bcdf"
       },
       "reference_binary": {
-        "path": "/data/home/zhangyifei/fdata/zhangyifei/newmd/gpumd-reference/src/gpumd",
+        "path": "../gpumd-reference/src/gpumd",
         "sha256": "3ab365cc8fccdb979697d5a9b28ff9fe1cb14c89d1e08d2063ac1e5b7786e414"
       },
       "candidate_source_digest": {
