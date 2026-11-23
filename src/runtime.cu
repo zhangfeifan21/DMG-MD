@@ -1314,6 +1314,35 @@ void write_restart(
 
 }  // namespace detail
 
+static std::string format_rejection_message(
+    const std::string& failure_reason,
+    const std::string& failure_detail,
+    int world_size)
+{
+  std::string msg;
+  msg += "╔════════════════════════════════════════════════════════════════╗\n";
+  msg += "║ DMG-MD: Multi-GPU Production Run Rejected                      ║\n";
+  msg += "╚════════════════════════════════════════════════════════════════╝\n\n";
+  msg += "This input is not eligible for local domain decomposition (M2a mode)\n";
+  msg += "in a production multi-GPU run.\n\n";
+  msg += "Reason: ";
+  msg += failure_reason;
+  msg += "\n";
+  if (!failure_detail.empty()) {
+    msg += "Detail: ";
+    msg += failure_detail;
+    msg += "\n";
+  }
+  msg += "\nTo run this input, use a single GPU:\n\n";
+  msg += "    mpirun -n 1 dmgmd\n\n";
+  msg += "Or enable M1 replicated-full testing mode (not recommended for production):\n\n";
+  msg += "    export DMGMD_FORCE_M1_REPLICATED=1\n";
+  msg += "    mpirun -n ";
+  msg += std::to_string(world_size);
+  msg += " dmgmd\n\n";
+  return msg;
+}
+
 void run_replicated(
     const RunProgram& program,
     Model model,
@@ -1436,6 +1465,39 @@ void run_replicated(
               << (partition_mode == gpumd_compat::DomainPartitionMode::verify ? "verify" : "serial")
               << " scheduling=completed-halo-serial timing_scope=split-pipeline\n";
   }
+
+  // D-013: Production multi-GPU routing decision
+  // P=1 (single-GPU): always use replicated-full (M1)
+  // P>1 (multi-GPU): 
+  //   - If eligible for local domain (M2a), use it
+  //   - If ineligible and not in explicit test mode (DMGMD_FORCE_M1_REPLICATED),
+  //     reject the run with diagnostic message
+  //   - If DMGMD_FORCE_M1_REPLICATED is set, allow M1 fallback for testing
+  
+  const char* force_m1_test_env = std::getenv("DMGMD_FORCE_M1_REPLICATED");
+  const bool force_m1_for_testing = force_m1_test_env && std::string(force_m1_test_env) == "1";
+  
+  if (mpi.world_size() > 1 && !eligibility.eligible && !force_m1_for_npt && !force_m1_for_testing) {
+    // Multi-GPU ineligible input in production mode → reject
+    std::string failure_reason = eligibility.reason;
+    std::string failure_detail;
+    
+    // Enrich the failure detail based on reason
+    if (eligibility.reason == "box-dimension") {
+      failure_detail = "one or more box dimensions too small for domain decomposition";
+    } else if (eligibility.reason == "affine-cell-index-bound") {
+      failure_detail = "NPT with affine box motion exceeds cell indexing bounds";
+    } else if (eligibility.reason == "insufficient-extent") {
+      failure_detail = "simulation box lacks sufficient spatial extent";
+    }
+    
+    if (mpi.is_root()) {
+      std::cerr << format_rejection_message(failure_reason, failure_detail, mpi.world_size());
+    }
+    mpi.abort(EXIT_FAILURE);
+    return;  // Never reached, but quiets compiler
+  }
+
   if (eligibility.eligible && !force_m1_for_npt) {
     if (uses_npt && mpi.is_root()) {
       std::cout << "DMGMD_DOMAIN_NPT mode="
