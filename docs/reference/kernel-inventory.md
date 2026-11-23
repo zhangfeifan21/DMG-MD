@@ -1,10 +1,10 @@
 # NEP MD CUDA kernel 清单与通信依赖
 
-类别：锁定 GPUMD 的 kernel 与依赖证据。核对日期：2026-10-16。
+类别：GPUMD 内核与依赖的源码审计。核对日期：2026-10-16。
 
 ## 1. 范围和记号
 
-本文核对的 GPUMD 源码提交是 `9d23496e41319b9e2af5221a7df6285387401d1e`。所有 `src/force`、`src/integrate` 等上游路径和行号都指这个历史提交。L20 的 `../gpumd-reference` 现用于 GPUMD 5.9.1 短程 golden。[兼容矩阵](../standards/compatibility-matrix.md)
+本文核对的 GPUMD 源码提交是 `9d23496e41319b9e2af5221a7df6285387401d1e`。所有 `src/force`、`src/integrate` 等上游路径和行号都指这个历史提交。L20 的短程 golden 由普通 GPUMD 5.9.1 生成。[兼容矩阵](../standards/compatibility-matrix.md)
 
 下面沿单 bead 普通 NEP/NEP-ZBL 的初始力和 NVE/`nvt_ber` 每步计算，列出各 CUDA 核函数从哪些原子读取数据、向哪些原子写回。范围包括 thermo 和 XYZ 输出，不含 PIMD、附加外力、其他势及其他 measurement 核函数。
 

@@ -25,7 +25,6 @@ from cpu_binding import Audit, digest
 from profile_overlap_o6_ncu import attempt
 
 
-REFERENCES = ('gpumd-reference', 'lammps-reference', 'lammps-matpl-reference')
 SECTIONS = ['LaunchStats', 'Occupancy', 'SchedulerStats', 'WarpStateStats',
             'MemoryWorkloadAnalysis', 'SourceCounters']
 
@@ -36,13 +35,6 @@ def load(path):
 
 def git(*args, cwd=b.ROOT):
     return subprocess.check_output(['git', *args], cwd=cwd, text=True)
-
-
-def references():
-    return {name: dict(head=git('rev-parse', 'HEAD', cwd=b.ROOT.parent/name).strip(),
-                      status=git('status', '--short', '--untracked-files=all', cwd=b.ROOT.parent/name),
-                      ignored=git('ls-files', '--others', '--ignored', '--exclude-standard',
-                                  cwd=b.ROOT.parent/name).splitlines()) for name in REFERENCES}
 
 
 def copy_verified(source, target):
@@ -67,7 +59,6 @@ def preserve(root, previous, accepted):
             dirty=git('status', '--short'), production_sha256=production,
             current_binary_sha256=digest(b.ROOT/'build/dmg-md')))
         (root/'initial.patch').write_text(git('diff', '--binary', 'HEAD'))
-        o5.freeze(root/'reference-before.json', references())
     copy_verified(previous/'dmg-md-o4', root/'dmg-md-o4')
     copy_verified(accepted/'dmg-md-o8', root/'dmg-md-o8')
     if digest(root/'dmg-md-o8') != load(accepted/'science.json')['candidate_sha256']:
@@ -250,10 +241,6 @@ def analyze(root):
     initial = load(root/'initial-state.json')
     unchanged = all(digest(b.ROOT/n) == h for n, h in initial['production_sha256'].items())
     unchanged = unchanged and digest(b.ROOT/'build/dmg-md') == initial['current_binary_sha256']
-    before, after = load(root/'reference-before.json'), references()
-    b.save(root/'reference-after.json', after)
-    if before != after:
-        raise ValueError('reference status or ignored inventory changed')
     gate_path = root/'gates.json'
     gate = load(gate_path) if gate_path.exists() else {}
     passed = gate.get('status') == 'PASS' and len(gate.get('results', [])) == 4
@@ -275,7 +262,7 @@ def analyze(root):
         decision=outcome, implementation='NO_KERNEL_CHANGE', correctness='UNCHANGED_BINARY_GATES_PASS' if passed else 'PARTIAL',
         performance='NOT_MEASURED_NO_CANDIDATE', new_performance_trials=0,
         hardware_cause='INCONCLUSIVE', candidate=None, production_unchanged=unchanged,
-        references_unchanged=True, formal_cpu=None,
+        formal_cpu=None,
         limitation='No candidate speed or regression claim. Old O6 measurements are inherited evidence, not new O9 trials.')
     b.save(root/'analysis.json', summary)
     print(json.dumps(summary, indent=2), flush=True)

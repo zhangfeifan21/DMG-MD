@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shutil
 import signal
 import socket
 import statistics
@@ -74,6 +75,33 @@ def command_output(command):
     return result.stdout
 
 
+def installed_binary(explicit, program):
+    location = explicit if explicit is not None else shutil.which(program)
+    if location is None:
+        raise ValueError(f'{program} not found on PATH. Supply its executable path.')
+    path = Path(location).resolve()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError(f'executable is missing or not executable: {path}')
+    return path
+
+
+def reported_versions(engine, log):
+    """Read release labels from normal job output when the engine prints them."""
+    patterns = {
+        'gpumd': {'GPUMD': r'^\s*\*\s*version\s+([^*\n]+)'},
+        'wpe': {'GPUMD': r'^\s*\*\s*version\s+([^*\n]+)',
+                'WPE': r'^\s*Potential engine:\s*Wisevolve Potential Engine[ \t]+(\S[^\r\n]*)'},
+        'lammps': {'LAMMPS': r'^\s*LAMMPS \(([^)\n]+)\)',
+                   'Kokkos': r'Kokkos version\s+(\S+)'},
+    }
+    versions = {}
+    for name, pattern in patterns.get(engine, {}).items():
+        match = re.search(pattern, log, re.MULTILINE)
+        if match:
+            versions[name] = match.group(1).strip()
+    return versions
+
+
 def geometry(spec, ranks):
     case = dict(fixtures.load_manifest()['cases'][spec['fixture']])
     case['cells'] = list(spec['cells'])
@@ -90,7 +118,7 @@ def geometry(spec, ranks):
     fixtures.validate_generated_potential(case, potential)
     cutoff_line = next(s for s in potential.splitlines() if s.startswith('cutoff '))
     cutoff = float(cutoff_line.split()[1])
-    # Pinned GPUMD NEP_MULTIGPU::compute: floor(L/(rc/2))/P >= 10.
+    # GPUMD NEP_MULTIGPU::compute: floor(L/(rc/2))/P >= 10.
     if ranks > 1 and (int(lengths[1] / (cutoff / 2)) // ranks < 10
                      or min(lengths) <= 2.5 * (cutoff + 1)):
         raise ValueError(f'ineligible multi-GPU geometry: {lengths}, ranks={ranks}')
@@ -106,7 +134,7 @@ def run_input(engine, ranks, case, warmup, steps):
     # Final thermo is included in the timed segment and forces a host-visible result.
     return (f'potential nep.txt{axis}\ntime_step {case["time_step_fs"]}\n'
             f'ensemble nve\nrun {warmup}\n'
-            f'dump_thermo {steps}\nrun {steps}\n')
+            f'ensemble nve\ndump_thermo {steps}\nrun {steps}\n')
 
 
 def fields(line):
@@ -165,7 +193,7 @@ def parse_timing(text, engine, ranks, atoms, warmup, steps, backend, selected=No
             raise ValueError('ranks did not bind unique GPUs')
         seconds = float(records[-1]['seconds_max'])
     elif engine == 'lammps':
-        if ('KOKKOS mode with Kokkos version' not in text or
+        if ('KOKKOS mode' not in text or
                 'will use up to 1 GPU(s) per node' not in text or
                 'NEP Kokkos potential nep.txt loaded successfully' not in text or
                 'pair matpl/nep/kk' not in text or 'kokkos_device' not in text):
@@ -188,6 +216,9 @@ def parse_timing(text, engine, ranks, atoms, warmup, steps, backend, selected=No
                 raise ValueError('LAMMPS timing rank/step/atom count mismatch')
         seconds = float(records[-1][0])
     else:
+        uses_wpe = 'Potential engine: Wisevolve Potential Engine' in text
+        if uses_wpe != (engine == 'wpe') or (engine == 'wpe' and ranks != 1):
+            raise ValueError('GPUMD potential backend or WPE GPU count differs from the requested engine')
         records = re.findall(r'Time used for this run = ([\deE+.\-]+) second\.', text)
         if len(records) != 2:
             raise ValueError('expected exactly warmup and measured GPUMD run timers')
@@ -478,7 +509,13 @@ def report(output, results, repeats):
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-    lines = ['# Benchmark results', '', '| case | engine/backend/profile | GPUs | atoms | samples | ms/step | atom-step/s | speedup | efficiency | DMG/GPUMD | DMG/LAMMPS |',
+    lines = ['# Benchmark results', '']
+    labels = {', '.join(f'{name} {version}' for name, version in row['reported_versions'].items())
+              for row in results if row.get('reported_versions')}
+    if labels:
+        lines.extend(f'- {label}' for label in sorted(labels))
+        lines.append('')
+    lines += ['| case | engine/backend/profile | GPUs | atoms | samples | ms/step | atom-step/s | speedup | efficiency | DMG/GPUMD | DMG/LAMMPS |',
              '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     def fmt(value):
         return '—' if value is None else f'{value:.4g}'
@@ -503,10 +540,12 @@ def main():
     p.add_argument('--ranks', default='1,2,4,8')
     p.add_argument('--cases', help='comma-separated manifest case names; overrides profile selection')
     p.add_argument('--backends', default=','.join(manifest['backends']))
-    p.add_argument('--engines', default='gpumd,lammps,dmgmd')
+    p.add_argument('--engines', default='gpumd,lammps,dmgmd',
+                   help='comma-separated: gpumd, lammps, dmgmd, wpe (WPE runs only at P=1)')
     p.add_argument('--candidate', type=Path, default=ROOT / 'build/dmg-md')
-    p.add_argument('--reference', type=Path, default=ROOT.parent / 'gpumd-reference/src/gpumd')
-    p.add_argument('--lammps-bin', type=Path, default=ROOT / 'build-lammps-nep-kk-preserved/lmp')
+    p.add_argument('--reference', '--gpumd-bin', type=Path, help='ordinary GPUMD executable (default: gpumd on PATH)')
+    p.add_argument('--wpe-bin', type=Path, help='single-GPU WPE host executable (default: gpumd-wpe on PATH)')
+    p.add_argument('--lammps-bin', type=Path, help='LAMMPS KOKKOS/NEP executable (default: lmp on PATH)')
     p.add_argument('--mpiexec', default='mpiexec')
     p.add_argument('--mpiexec-arg', action='append', default=[])
     add_binding_options(p)
@@ -583,11 +622,13 @@ def main():
     if (not set(ranks) <= set(manifest['ranks']) or len(ranks) != len(set(ranks))
             or len(devices) < max(ranks) or len(devices) != len(set(devices))):
         p.error('unique ranks must be 1/2/4/8, with enough distinct devices')
-    if not set(engines) <= {'gpumd', 'lammps', 'dmgmd'} or not set(backends) <= set(manifest['backends']):
+    if not set(engines) <= {'gpumd', 'lammps', 'dmgmd', 'wpe'} or not set(backends) <= set(manifest['backends']):
         p.error('invalid engine/backend')
     if len(set(engines)) != len(engines) or len(set(backends)) != len(backends) or len(set(cases)) != len(cases):
         p.error('duplicate matrix entries')
-    if args.cpu_cores_per_rank and 'gpumd' in engines:
+    if 'wpe' in engines and 1 not in ranks:
+        p.error('WPE uses one GPU. Include 1 in --ranks.')
+    if args.cpu_cores_per_rank and {'gpumd', 'wpe'}.intersection(engines):
         p.error('GPUMD aggregate CPU entry is not yet accepted; use MPI engines for fixed binding')
     bindings = {rank: binding_plan(args, rank) for rank in ranks} if args.cpu_cores_per_rank else {}
     if any(profile[k] <= 0 for k in ('warmup', 'steps', 'repeats')) or profile['min_seconds'] < 0:
@@ -600,8 +641,11 @@ def main():
             p.error(f'unknown case: {name}')
         spec = manifest['cases'][name]
         for rank in ranks:
+            rank_engines = [engine for engine in engines if engine != 'wpe' or rank == 1]
+            if not rank_engines:
+                continue
             case, lengths = geometry(spec, rank)
-            for engine in engines:
+            for engine in rank_engines:
                 for backend in (backends if engine == 'dmgmd' else ['none']):
                     for mode in (profiling if engine == 'dmgmd' else ['off']):
                         plan.append(dict(case=name, scaling=spec['scaling'], ranks=rank, atoms=case['atoms'],
@@ -630,10 +674,14 @@ def main():
                                      'DMGMD_OVERLAP_TRACE': str(int(args.overlap_trace))} for mode in profiling},
                           'mpiexec_args': args.mpiexec_arg, 'cpu_binding': bindings}, indent=2))
         return 0
+    binaries = {'dmgmd': args.candidate.resolve()}
+    for engine, path, program in (('gpumd', args.reference, 'gpumd'),
+                                  ('lammps', args.lammps_bin, 'lmp'),
+                                  ('wpe', args.wpe_bin, 'gpumd-wpe')):
+        if engine in engines:
+            binaries[engine] = installed_binary(path, program)
     output = create_output_directory(args.output)
     print(f'Output: {output}', flush=True)
-    binaries = {'dmgmd': args.candidate.resolve(), 'gpumd': args.reference.resolve(),
-                'lammps': args.lammps_bin.resolve()}
     identity = {name: {'path': str(binaries[name]), 'sha256': sha(binaries[name])} for name in engines}
     snap = snapshot()
     selected = resolve_devices(devices, snap)
@@ -653,12 +701,6 @@ def main():
                              ROOT / 'tests/lammps_reference/launch_rank.py']}}
     for name, cmd in {'dmgmd_revision': ['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
                       'dmgmd_status': ['git', '-C', str(ROOT), 'status', '--porcelain'],
-                      'reference_revision': ['git', '-C', str(ROOT.parent / 'gpumd-reference'), 'rev-parse', 'HEAD'],
-                      'reference_status': ['git', '-C', str(ROOT.parent / 'gpumd-reference'), 'status', '--porcelain'],
-                      'lammps_revision': ['git', '-C', str(ROOT.parent / 'lammps-reference'), 'rev-parse', 'HEAD'],
-                      'lammps_status': ['git', '-C', str(ROOT.parent / 'lammps-reference'), 'status', '--porcelain'],
-                      'matpl_revision': ['git', '-C', str(ROOT.parent / 'lammps-matpl-reference'), 'rev-parse', 'HEAD'],
-                      'matpl_status': ['git', '-C', str(ROOT.parent / 'lammps-matpl-reference'), 'status', '--porcelain'],
                       'gpu_topology': ['nvidia-smi', 'topo', '-m'],
                       'gpu_details': ['nvidia-smi', '-q'], 'cpu': ['lscpu'],
                       'nvcc': ['nvcc', '--version'], 'mpi': ['mpiexec', '--version'],
@@ -682,16 +724,6 @@ def main():
     metadata['untracked_source_sha256'] = {f: sha(ROOT / f) for f in untracked.split('\0')
                                            if f and (ROOT / f).is_file() and
                                            f.startswith(('tests/', 'scripts/', 'src/', 'include/', 'docs/'))}
-    save(output / 'metadata.json', metadata)
-    if 'gpumd' in engines and metadata['reference_revision'].strip() != manifest['reference_commit']:
-        raise RuntimeError('reference checkout does not match pinned commit')
-    if 'lammps' in engines:
-        if (metadata['lammps_revision'].strip() != manifest['lammps_commit'] or
-                metadata['matpl_revision'].strip() != manifest['matpl_commit'] or
-                metadata['lammps_status'].strip() or metadata['matpl_status'].strip()):
-            raise RuntimeError('LAMMPS/MatPL reference checkout differs from pinned clean revisions')
-        overlay = ROOT / 'third_party/lammps-matpl-overlay/manifest.json'
-        metadata['lammps_overlay_manifest_sha256'] = sha(overlay)
     save(output / 'metadata.json', metadata)
     if 'dmgmd' in engines or 'lammps' in engines:
         with (output / 'preflight.txt').open('w') as stream, contextlib.redirect_stdout(stream):
@@ -787,8 +819,6 @@ def main():
                 result['command'] = command
                 result['launch_environment'] = {k: environment[k] for k in environment
                                                 if k.startswith(('CUDA_', 'DMGMD_', 'LAMMPS_', 'OMP_'))}
-                if sha(binaries[job['engine']]) != identity[job['engine']]['sha256']:
-                    raise RuntimeError('binary changed during benchmark')
                 before = snapshot()
                 save(directory / 'before.json', before)
                 if cpu_session:
@@ -807,7 +837,9 @@ def main():
                     raise RuntimeError('trial timeout (process group terminated)')
                 if code:
                     raise RuntimeError(f'exit {code}; inspect stdout.txt/stderr.txt (including possible OOM)')
-                seconds = parse_timing((directory / 'stdout.txt').read_text(), job['engine'], job['ranks'],
+                stdout = (directory / 'stdout.txt').read_text()
+                result['reported_versions'] = reported_versions(job['engine'], stdout)
+                seconds = parse_timing(stdout, job['engine'], job['ranks'],
                                        job['atoms'], profile['warmup'], profile['steps'], job['backend'],
                                        visible if job['engine'] == 'lammps' else None)
                 if job['engine'] == 'dmgmd' and job['ranks'] > 1:

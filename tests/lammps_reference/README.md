@@ -4,12 +4,12 @@
 
 ## 生成各引擎输入
 
-在仓库根目录加载测试环境。把 `WORK_ROOT` 指向可写位置，每组输入使用新目录。参考 checkout 保持只读。
+在仓库根目录加载测试环境。把 `WORK_ROOT` 指向可写位置，每组输入使用新目录。从站点安装选取可执行文件。
 
 ```bash
 source ../env/md-mpi.sh
 REPO="$(pwd -P)"
-WORK_ROOT="$REPO/../scratch/lammps-reference-new"
+WORK_ROOT="$REPO/../scratch/lammps-static-new"
 python3 tests/lammps_reference/lammps_inputs.py --suite baseline \
   --output "$WORK_ROOT/baseline"
 python3 tests/lammps_reference/lammps_inputs.py --suite long-nve \
@@ -22,12 +22,12 @@ python3 tests/lammps_reference/lammps_inputs.py --suite long-nve \
 
 ## 计算同一构型的静态量
 
-以 `carbon_crystal` 为例。`GPU_ID` 填已分配的 GPU 编号或 UUID。`LAMMPS_BIN` 和 `GPUMD_BIN` 填与参考合同相符的可执行文件绝对路径。LAMMPS 需要支持 MatPL NEP 的 Kokkos 构建。
+以 `carbon_crystal` 为例。`GPU_ID` 填已分配的 GPU 编号或 UUID。`LAMMPS_BIN` 和 `GPUMD_BIN` 指向要比较的程序。LAMMPS 需要支持 MatPL NEP 的 Kokkos 构建。
 
 ```bash
 GPU_ID=0  # 示例，换成分配的设备
-LAMMPS_BIN=/path/to/lmp
-GPUMD_BIN="$REPO/../gpumd-reference/src/gpumd"
+LAMMPS_BIN="$(command -v lmp)"
+GPUMD_BIN="$(command -v gpumd)"
 STATIC="$WORK_ROOT/long-nve/smoke/carbon_crystal/seed-0/static"
 GPUMD_WORK="$WORK_ROOT/gpumd-carbon"
 

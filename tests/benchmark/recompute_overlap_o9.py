@@ -32,7 +32,8 @@ def main():
     module=importlib.import_module('overlap_o9_confirmation')
     if Path(module.__file__).resolve().parent!=root/'source-files/tests/benchmark':
         raise ValueError('analysis must use sealed source')
-    module.references=lambda:json.loads((root/'reference-after.json').read_text())
+    if hasattr(module, 'references'):  # Older sealed analyzers replay their original observation.
+        module.references=lambda:json.loads((root/'reference-after.json').read_text())
     module.analyze(root)
 
 

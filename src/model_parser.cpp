@@ -26,8 +26,7 @@ using gpumd_compat::get_tokens;
 
 using MassEntry = std::pair<const char*, double>;
 
-// Compatibility data copied verbatim from the pinned GPUMD
-// src/model/read_xyz.cu.  Units and NEP math are source-shared; this small
+// Compatibility data copied verbatim from GPUMD 9d23496e, src/model/read_xyz.cu.  Units and NEP math are source-shared; this small
 // host-only default table is kept here because GPUMD does not expose it.
 constexpr MassEntry kMasses[] = {
     {"H", 1.0080000000}, {"He", 4.0026020000}, {"Li", 6.9400000000},

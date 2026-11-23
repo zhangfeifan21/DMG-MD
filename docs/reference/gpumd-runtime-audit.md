@@ -1,6 +1,6 @@
-# 锁定 GPUMD runtime 审计
+# GPUMD runtime 源码审计
 
-本页沿着锁定版 GPUMD 的一次模拟追踪输入、求力、积分与输出。范围限于普通单 bead NEP/NEP-ZBL、NVE 和 `nvt_ber`，核对日期为 2026-10-16。表内上游 src 路径和行号均指提交 `9d23496e41319b9e2af5221a7df6285387401d1e`。L20 现有的 `../gpumd-reference` 为 GPUMD 5.9.1，供短程 golden 使用。[参考版本](../standards/compatibility-matrix.md)
+本页沿着所审计版本的一次 GPUMD 模拟追踪输入、求力、积分与输出。范围限于普通单 bead NEP/NEP-ZBL、NVE 和 `nvt_ber`，核对日期为 2026-10-16。表内上游 src 路径和行号均指提交 `9d23496e41319b9e2af5221a7df6285387401d1e`。L20 的短程 golden 由普通 GPUMD 5.9.1 生成。[参考版本](../standards/compatibility-matrix.md)
 
 参考程序大多用全体系原子数 N 作数组步长。DMG-MD 复现其数学和输出格式，自行实现 MPI 并行。阅读下表时，第二列描述上游行为，第三列说明分布式实现要满足的条件。
 

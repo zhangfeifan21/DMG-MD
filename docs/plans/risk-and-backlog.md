@@ -6,9 +6,9 @@
 
 | 优先级 | 工作 | 剩余事项 |
 | --- | --- | --- |
-| P0 试用 | [生产分派、三种材料和 WPE 性能](dmg-md-v1.0-progress.md) | 在独占单节点上，逐材料完成 SCR 科学与提速验收 |
+| P0 试用 | [生产分派、三材料 NPT 与性能报告](dmg-md-v1.0-progress.md) | 逐材料通过 SCR 科学检查，报告普通 GPUMD 和 LAMMPS/KOKKOS/NEP 同卡数、WPE 固定单卡三项对照，测量自身强扩展 |
 | P0 发布 | [V1.0 正式版](dmg-md-v1.0-development-workflow.md) | 完成 C0–C3/C5 和 D1–D5 |
-| 对照 | [CPU 绑定](mpi-cpu-binding.md)、[LAMMPS 对照](lammps-multigpu-benchmark.md) | 完成跨引擎绑定、动力学和正式性能矩阵 |
+| 外部对照准备 | [CPU 绑定](mpi-cpu-binding.md)、[LAMMPS 对照](lammps-multigpu-benchmark.md) | 核验跨引擎身份、绑定和控压可比性，优先三材料 NPT，NVE 矩阵单列 |
 | 后续 | [域分解扩展](domain-decomposition.md)、[双节点 I/O](multi-node-io.md) | 在两台物理节点验证正确性并独立测量性能 |
 
 下表 P0/P1/P2 表示风险严重度：P0 涉及物理错误、越界或死锁，P1 涉及兼容或规模，P2 涉及性能工程。排期以上表为准。已受当前规则和测试控制的风险，仍需在扩展时复核。

@@ -10,11 +10,11 @@
 
 当日在 NVIDIA L20 上，用 Release/sm_89、CUDA 12.9.86 和普通 GPUMD 5.9.1（`11ba6fb`）重新生成短程 golden。三个 restart 改用 17 位有效数字，续跑段的 thermo 和轨迹随输入精度改变。其余 15 个科学输出逐字节一致；将旧 restart 输入新参考时，续跑输出仍与旧 golden 一致。
 
-`0e8360f` 加工作树修改的候选和新版普通 GPUMD，各通过 4/4 项。manifest 记录实际参考二进制身份。以下为仓库根目录下的复验入口：
+`0e8360f` 加工作树修改的候选和新版普通 GPUMD，各通过 4/4 项。manifest 记录实际参考二进制身份。下列命令中的 `GOLDEN_GPUMD` 指向该次数值基线布局中的参考程序。[短程自检的路径要求](../../../tests/baseline/README.md)
 
 ```bash
 source ../env/md-mpi.sh
-python3 tests/baseline/run_baselines.py --reference ../gpumd-reference/src/gpumd --device 0
+python3 tests/baseline/run_baselines.py --reference "$GOLDEN_GPUMD" --device 0
 python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device 0
 ```
 

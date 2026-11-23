@@ -33,7 +33,7 @@ python3 tests/npt/generate_inputs.py --output "$WORK_ROOT/fixture-check" --write
 
 两端使用完全相同的显式速度 `model.xyz`、`run.in` 和 NEP 势。按短程 [golden 容差](../baseline/manifest.json) 检查 200 行 thermo、6 列应力、9 列盒数据、稀疏 XYZ 和重启快照。保留已有 golden 和容差。短程矩阵用 P1/P2/P4 及 HostStaged、CudaAware。5,184 原子用例达到局部资格的尺度，原 B2 的 NPT 作业仍须报告全量复制模式。
 
-正式比较前，冻结候选和参考程序身份、生成输入、基线容差 manifest、脚本哈希和三个只读参考 checkout 的状态。冻结文件独立于运行结果。先复核其身份并记录 SHA-256，再开启正式结果。
+B2 的历史数值冻结工具记录候选、参考程序、生成输入、容差 manifest、脚本哈希及当时的三份源码工作树状态。重做该冻结需要原有布局。冻结文件独立于运行结果。先复核其身份并记录 SHA-256，再开启正式结果。
 
 ```bash
 python3 tests/npt/freeze_b2.py --candidate "$CANDIDATE" --reference "$GPUMD_REF" \
@@ -44,13 +44,13 @@ python3 tests/npt/run_npt_ber.py --candidate "$CANDIDATE" --reference "$GPUMD_RE
   --work-root "$WORK_ROOT/b2-results"
 ```
 
-驱动串行启动用例，保留命令、环境、输入输出哈希、日志、路由、容差、首个数值差异、重启与输出检查、参考 checkout 前后状态。三个参考目录只读。负例应在时限内非零退出，打印指定诊断，且不生成轨迹或重启文件。比较失败时保留原结果，按原判据排查。
+驱动串行启动用例，保留命令、环境、输入输出哈希、日志、路由、容差、首个数值差异、重启与输出检查。该历史驱动还会对照冻结时的源码状态。负例应在时限内非零退出，打印指定诊断，且不生成轨迹或重启文件。比较失败时保留原结果，按原判据排查。
 
 ## SCR 统计原注册（B3）
 
 原 B3 的 8 种子矩阵在基准步长下覆盖 P1 HostStaged 及 P2/P4 的两种后端。半步长只做 P1 HostStaged。每步记录温度、压力和体积，稀疏 XYZ 与重启由另外的 Ber 测试覆盖。
 
-B3 另冻一份输入和执行身份。冻结包含原生 ACF 辅助程序（Geyer 估计器）、GPUMD 随机数初始化的源码及 `nm`、`objdump` 证据、输入哈希和只读 checkout 状态。
+B3 另冻一份输入和执行身份。冻结包含原生 ACF 辅助程序（Geyer 估计器）、GPUMD 随机数初始化的源码及 `nm`、`objdump` 证据、输入哈希和该次科学注册的源码状态。
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/npt/freeze_b3.py \

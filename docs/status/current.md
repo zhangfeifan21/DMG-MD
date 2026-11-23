@@ -4,7 +4,7 @@
 
 V1.0 尚未发布。当前实现包含 NEP 局部域分解和实验局部 NPT。含 NPT 的作业默认使用全量复制，局部 `affine` 或 `rebuild` 需要显式开启。多卡命令和进程数本身，不能证明各卡只计算局部原子的力。[如何检查日志](../reference/multi-gpu-implementation.md#怎样判断一次作业是否真正分了区)
 
-生产分派、三种材料相对 WPE 的正式计时和完整 V1.0 发布仍待完成。长程 NVE 与旧三引擎运行器的参考身份，需要分别与短程基线协调。[后续任务](../plans/dmg-md-v1.0-progress.md)
+生产分派、三材料 NPT 的正式性能矩阵和完整 V1.0 发布仍待完成。首版逐项报告同卡数普通 GPUMD、同卡数 LAMMPS/KOKKOS/NEP 和固定单卡 GPUMD-WPE，并列出 DMG-MD 自身强扩展。科学验收独立判定，性能报告如实记录结果。长程 NVE 数值回归仍需协调参考身份。NVE 计时可直接使用站点安装的引擎。[L20 已测版本](../standards/cross-engine-reference.md#benchmark-engines) · [对标矩阵与可比条件](performance/npt-benchmarks.md#performance-matrix) · [后续任务](../plans/dmg-md-v1.0-progress.md)
 
 <a id="l20-v1-audit-20261120"></a>
 ## 2026-11-20 单节点核查

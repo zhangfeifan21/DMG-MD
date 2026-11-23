@@ -21,13 +21,13 @@ python3 tests/thermostats/test_reference_options.py
 
 CTest 注册 NHC、随机速度重标定（SVR）的标量测试、统计分析器检查和其他项目测试。NHC 的 3 个独立用例各执行连续 4 次半步，比较缩放因子和完整链状态的双精度位模式。SVR 的 16 个用例覆盖种子、自由度奇偶、Gaussian 缓存及 `taut<=0.1`。控制器测试还核对非根进程不分配链及随机数状态、每段重置和 Berendsen 原表达式。
 
-重新生成标量参考时，脚本从锁定的 GPUMD checkout 读取函数，在独立目录编译。上游 NHC 在 `m=0` 时有一次会被覆盖结果的负索引读取。参考程序加 padding 避免未定义行为。DMG-MD 在读取前分支，保留有效表达式和求值顺序。参考 checkout 只读，既有 golden 与容差继续用作比较依据。
+只有重新生成标量参考才需要读相应提交的 GPUMD 源码。`GPUMD_SOURCE` 指向这份上游源码，脚本在独立目录编译抽取的函数。上游 NHC 在 `m=0` 时有一次会被覆盖结果的负索引读取。参考程序加 padding 避免未定义行为。DMG-MD 在读取前分支，保留有效表达式和求值顺序。既有 golden 与容差供日常回归使用。
 
 ```bash
 python3 tests/thermostats/fixtures/generate_nhc.py \
-  --reference-root ../gpumd-reference --output "$WORK_ROOT/nhc-oracle.json"
+  --reference-root "$GPUMD_SOURCE" --output "$WORK_ROOT/nhc-oracle.json"
 python3 tests/thermostats/fixtures/generate_svr.py \
-  --reference-root ../gpumd-reference --output "$WORK_ROOT/svr-oracle.json"
+  --reference-root "$GPUMD_SOURCE" --output "$WORK_ROOT/svr-oracle.json"
 ```
 
 <a id="环境短程和失败关闭"></a>
@@ -121,7 +121,7 @@ python3 tests/thermostats/run_harmonic.py \
 
 `reference_gpumd_harmonic.py` 只读抽取未改动的 GPUMD NHC/SVR 函数，在独立 CPU 驱动中施加谐振力。NHC 前后半步保留 GPUMD 的温度到动能往返计算。每个 BDP 种子启动新进程，隔离上游静态 Gaussian 缓存。
 
-LAMMPS 需要 `EXTRA-FIX` 的 `temp/csvr`，应先核对现有 NEP/Kokkos 二进制的包。若需要构建，从锁定参考导出独立源码，并启用 `PKG_EXTRA-FIX=on`。CPU 对照可关闭 MPI、OpenMP 和 Kokkos。`split-validation` 比较输出设置所需的 `run 1` / `run N-1` 与单段结果，验证 LAMMPS 的输出安排。`LAMMPS_CPU` 填符合条件的可执行文件。
+LAMMPS 需要 `EXTRA-FIX` 的 `temp/csvr`，应先核对现有 NEP/Kokkos 二进制的包。该 CPU 数值对照可使用带 `temp/csvr` 的现成安装。自行构建时启用 `PKG_EXTRA-FIX=on`。CPU 对照可关闭 MPI、OpenMP 和 Kokkos。`split-validation` 比较输出设置所需的 `run 1` / `run N-1` 与单段结果，验证 LAMMPS 的输出安排。`LAMMPS_CPU` 填符合条件的可执行文件。
 
 ```bash
 export DMGMD_ACF_HELPER="$BUILD_DIR/tests/dmgmd_autocorrelation"

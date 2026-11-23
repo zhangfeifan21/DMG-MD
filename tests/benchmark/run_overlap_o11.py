@@ -62,11 +62,6 @@ def jobs(group, steps, repeats=1):
     return result
 
 
-def references():
-    from run_overlap_o9 import references as get
-    return get()
-
-
 def copy(source, target):
     from run_overlap_o9 import copy_verified
     copy_verified(source,target)
@@ -166,7 +161,6 @@ def freeze(root):
         science=jobs('science',{f'{c}-p{p}':3 for c,p in CORE+EXTRA+DEGRADED}),
         pilot=jobs('pilot',{f'{c}-p{p}':256 for c,p in CORE+EXTRA+DEGRADED}))
     o5.freeze(root/'frozen-plan.json',plan)
-    o5.freeze(root/'reference-before.json',references())
     (root/'initial.patch').write_text(subprocess.check_output(['git','diff','--binary','HEAD'],cwd=b.ROOT,text=True))
     (root/'initial-status.txt').write_text(subprocess.check_output(['git','status','--short'],cwd=b.ROOT,text=True))
     (root/'head.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD'],cwd=b.ROOT,text=True))
@@ -382,7 +376,6 @@ def analyze(root):
         science_check([validate(root,'science',j) for j in gate['science_jobs']])
     routes=all(any(c['contrast']==name for c in contrasts) for name in ('B_over_A','C_over_B','A_net','C_net'))
     outcome=completion(gates_ok,complete and (not extension or (root/'extension-plan.json').exists()),diagnostics,primary,routes)
-    if references()!=load(root/'reference-before.json'): raise ValueError('read-only references changed')
     recommendations=[]
     if outcome!='PARTIAL':
         for case,p in CORE:
@@ -396,7 +389,7 @@ def analyze(root):
     b.save(root/'analysis.json',dict(recommendations=recommendations,scope_policy=plan['scope_policy'],stage='O11',status='PARTIAL' if outcome=='PARTIAL' else 'COMPLETE',
         decision=outcome,implementation='UNCHANGED_ACCEPTED_BINARY',correctness='PASS' if gates_ok else 'PARTIAL',
         trials=len(rows),contrasts=contrasts,extension_required=extension,cpu_diagnostics=len(cpu),
-        formal_cpu=None,production_defaults_changed=False,selected=plan['selected'],references_unchanged=True))
+        formal_cpu=None,production_defaults_changed=False,selected=plan['selected']))
     b.save(root/'cpu-analysis.json',cpu)
     write_csv(root/'main-trials.csv',rows)
     write_csv(root/'contrasts.csv',contrasts)
@@ -415,7 +408,6 @@ def seal(root):
         for path in (b.ROOT/folder).rglob('*'):
             if path.is_file() and path.suffix in ('.py','.json'):
                 copy(path,root/'source-files'/path.relative_to(b.ROOT))
-    o5.freeze(root/'reference-after.json',references())
     hash_content=content_digester()
     inventory={str(p.relative_to(root)):hash_content(p) for p in root.rglob('*') if p.is_file()
         and p.name not in ('raw-inventory.json','scheduler.lock') and '__pycache__' not in p.parts}

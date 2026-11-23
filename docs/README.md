@@ -8,7 +8,7 @@
 | 核对已有 GPUMD 输入是否受支持 | [兼容矩阵](standards/compatibility-matrix.md) |
 | 理解多卡分工，并从日志确认实际模式 | [多卡实现导读](reference/multi-gpu-implementation.md) |
 | 查看试用条件及已验证的范围 | [当前状态](status/current.md) |
-| 比较 WPE 迁移耗时、强扩展和 GPU·小时 | [性能方法与结果](status/performance/npt-benchmarks.md) |
+| 比较同卡数 GPUMD、LAMMPS/KOKKOS/NEP、单卡 WPE，以及 DMG-MD 单卡能力与强扩展 | [性能方法、可比工况与结果](status/performance/npt-benchmarks.md#performance-matrix) |
 
 <a id="输入并行和数值合同"></a>
 ## 理解和修改实现
@@ -24,7 +24,7 @@
 | CPU 资源与观测 | [CPU 绑定](standards/cpu-binding.md)、[CPU 采样](standards/cpu-sampling.md) |
 | GPUMD 复现与引擎对照 | [GPUMD 调用过程](reference/gpumd-runtime-audit.md)、[内核清单](reference/kernel-inventory.md)、[golden 验收规则](standards/golden-test-standard.md)、[跨引擎对照](standards/cross-engine-reference.md) |
 
-测试怎么运行、怎样读取结果，见[测试目录总览](../tests/README.md)。修改前还须按仓库 [AGENTS.md](../AGENTS.md) 核对参考代码的只读边界和验证要求。
+测试怎么运行、怎样读取结果，见[测试目录总览](../tests/README.md)。修改前还须按仓库 [AGENTS.md](../AGENTS.md) 核对仓库内兼容代码的来源和相应验证要求。
 
 <a id="科学验收与后续工作"></a>
 ## 查验历史结果

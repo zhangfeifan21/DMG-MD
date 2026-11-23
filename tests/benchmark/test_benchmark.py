@@ -48,6 +48,60 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertGreater(lengths[1], max(lengths[0], lengths[2]))
                 self.assertEqual(case['atoms'], base['atoms'] * (p if spec['scaling'] == 'weak' else 1))
 
+    def test_installed_program_has_no_source_tree_requirement(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / 'gpumd'
+            binary.touch(mode=0o755)
+            with patch.dict(os.environ, PATH=temp):
+                self.assertEqual(bench.installed_binary(None, 'gpumd'), binary.resolve())
+                self.assertEqual(bench.installed_binary(binary, 'lmp'), binary.resolve())
+                with self.assertRaisesRegex(ValueError, 'not found on PATH'):
+                    bench.installed_binary(None, 'lmp')
+            binary.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, 'not executable'):
+                bench.installed_binary(binary, 'gpumd')
+
+    def test_timing_runs_an_installed_external_build_without_git_metadata(self):
+        def metadata_command(command):
+            if command[0] == 'git':
+                self.assertEqual(command[1:3], ['-C', str(bench.ROOT)])
+            return ''
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            program = root / 'gpumd'
+            program.write_text("#!/bin/sh\n"
+                               "echo '* version experimental *'\n"
+                               "echo 'Time used for this run = 1 second.'\n"
+                               "echo 'Time used for this run = 2 second.'\n"
+                               "echo '" + ' '.join(['0'] * 18) + "' > thermo.out\n")
+            program.chmod(0o755)
+            args = ['run_benchmark.py', '--profile', 'smoke', '--engines', 'gpumd',
+                    '--ranks', '1', '--devices', '0', '--output', str(root / 'run')]
+            gpu = {'gpus': [{'index': '0', 'uuid': 'GPU-test'}]}
+            with patch.object(sys, 'argv', args), patch.dict(os.environ, PATH=temp), \
+                    patch.object(bench, 'snapshot', return_value=gpu), \
+                    patch.object(bench, 'command_output', side_effect=metadata_command):
+                self.assertEqual(bench.main(), 0)
+            output = next(root.glob('run-*'))
+            metadata = json.loads((output / 'metadata.json').read_text())
+            result, = json.loads((output / 'results.json').read_text())
+            self.assertEqual(metadata['binaries']['gpumd']['path'], str(program.resolve()))
+            self.assertEqual(result['reported_versions'], {'GPUMD': 'experimental'})
+
+    def test_wpe_uses_the_reported_backend_independently_of_version(self):
+        timers = 'Time used for this run = 1 second.\n' * 2
+        for version in ('1.0.0', 'new-build', ''):
+            log = f'Potential engine: Wisevolve Potential Engine {version}\n' + timers
+            self.assertEqual(bench.parse_timing(log, 'wpe', 1, 64, 2, 5, 'none'), 1)
+            with self.assertRaises(ValueError):
+                bench.parse_timing(log, 'gpumd', 1, 64, 2, 5, 'none')
+        self.assertEqual(bench.reported_versions('gpumd', timers), {})
+        self.assertEqual(bench.reported_versions('lammps', 'LAMMPS (custom build)'),
+                         {'LAMMPS': 'custom build'})
+        with self.assertRaises(ValueError):
+            bench.parse_timing(timers, 'wpe', 1, 64, 2, 5, 'none')
+
     def test_gpumd_excludes_warmup_and_checks_multigpu(self):
         log = ('Try to use 4 GPUs for the NEP part.\n'
                'Time used for this run = 3 second.\nTime used for this run = 1.2e1 second.\n')
@@ -224,6 +278,7 @@ class BenchmarkTests(unittest.TestCase):
         dmg = bench.run_input('dmgmd', 8, case, 20, 100)
         ref = bench.run_input('gpumd', 8, case, 20, 100)
         self.assertEqual(dmg, ref.replace('nep.txt y', 'nep.txt'))
+        self.assertEqual(dmg.count('ensemble nve\n'), 2)
         self.assertNotIn('velocity ', dmg)
         self.assertNotIn('dump_xyz', dmg)
 

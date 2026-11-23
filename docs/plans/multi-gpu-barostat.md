@@ -16,6 +16,6 @@ DN0–DN4 已在限定范围完成数值验收。生产分派边界已经确定�
 
 采用生产入口时，继续核对旧力的使用次序、提交新盒前的全 rank 资格检查，以及下一次求力前的刷新或重建。`rebuild` 提供强制重建对照，`affine` 只有通过位移和形变余量检查才复用；具体条件由局部 NPT 标准维护。
 
-性能对照固定卡数、后端、输入和输出频率，比较内部 `off/rebuild/affine`，确认缓存复用节省了哪些工作。P1 和相同卡数的全量复制保留数值参照。碳、水和铜的最终生产输入分别完成同快照能量、力、virial 及平衡态检查，再按[测量方法](../status/performance/npt-benchmarks.md)比较 WPE 单卡与 DMG-MD 1/2/4 卡。
+DN5 在固定卡数、后端、输入与输出频率下比较内部 `off/rebuild/affine`，量化缓存复用的影响。P1 和同卡数全量复制保留为数值参照。碳、水和铜的最终输入通过科学检查后，外部性能对照包括同卡数普通 GPUMD、同卡数 LAMMPS/KOKKOS/NEP 及固定单卡 WPE，另报 DMG-MD 的自身强扩展。[比较矩阵](../status/performance/npt-benchmarks.md#performance-matrix)
 
-SCR 决定试用条件，Berendsen 单独记录预平衡结果和时长。局部策略采用须有完整轨迹的耗时证据。双物理节点以及三维分解、负载均衡和中间场交换的后续工作见[扩展计划](domain-decomposition.md)。
+三种材料的 SCR 科学验收和三项对标报告用于试用判断，Berendsen 单列预平衡结果与时长。默认缓存策略采纳以实测完整轨迹的耗时、统计区间和适用工况为依据。双物理节点以及三维分解、负载均衡和中间场交换另见[扩展计划](domain-decomposition.md)。

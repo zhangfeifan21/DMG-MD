@@ -4,7 +4,7 @@ Golden 是参考程序在固定输入上生成的输出。短程比较需要先�
 
 ## 事实源与边界
 
-短程基线的 GPUMD 提交和可执行文件 SHA-256 以 [baseline manifest](../../tests/baseline/manifest.json) 为准。长程测试要求其参考锁与短程基线相符，性能测试按自己的 manifest 检查参考提交。[L20 参考身份与当前限制](cross-engine-reference.md)
+短程基线的 GPUMD 提交和可执行文件 SHA-256 以 [baseline manifest](../../tests/baseline/manifest.json) 为准。长程数值测试要求其参考身份与短程基线相符。性能计时直接使用已安装的引擎，版本随测量结果记录。[L20 性能对照引擎](cross-engine-reference.md#benchmark-engines)
 
 运行哪些检查由测试脚本决定。算例、运行规模（profile）、哈希和容差以本套 manifest 为准。测试目录的 README 给出命令行用法。已运行的结果见[当前状态](../status/current.md)和带日期的验收记录。未执行、跳过和子集通过各自单列，均不能计为完整矩阵通过。
 

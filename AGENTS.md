@@ -8,11 +8,11 @@
 
 先读[当前状态](docs/status/current.md)和[开发进度](docs/plans/dmg-md-v1.0-progress.md)，核对当前实现、已有证据和待办。正式版范围见[开发与发布验收](docs/plans/dmg-md-v1.0-development-workflow.md)。当前工作仍包括 V1.0 开发，旧 NEP/NVE/基础 NVT 原型不限制后续目标；计划能力也不能写成已支持。
 
-兼容目标是直接读取 GPUMD 的 `model.xyz`、势文件和 `run.in`。已声明支持的功能，其语法、默认值、单位、校验、输出文件名、列和物理语义，以锁定参考版本及[兼容矩阵](docs/standards/compatibility-matrix.md)为准。有意偏离须在标准中记录并验证，例如 BDP 的固定默认 seed。未支持的命令必须报明确的 `unsupported` 错误，不能静默忽略。
+兼容目标是直接读取 GPUMD 的 `model.xyz`、势文件和 `run.in`。已声明支持的功能，其语法、默认值、单位、校验、输出文件名、列和物理语义，以[兼容矩阵](docs/standards/compatibility-matrix.md)及对应数值基线为准。有意偏离须在标准中记录并验证，例如 BDP 的固定默认 seed。未支持的命令必须报明确的 `unsupported` 错误，不能静默忽略。
 
 ## V1.0 开发顺序
 
-G-A、G-B 和实验局部 NPT 的 DN0–DN4 已在各自冻结范围通过。近期依次解决生产分派、碳水金属的科学检查，以及与 GPUMD-WPE 的同工况计时。三种材料的单节点 SCR 全部通过后开放试用，Berendsen 单独用于预平衡对照。C0–C3/C5 和 D1–D5 仍待完成。
+G-A、G-B 和实验局部 NPT 的 DN0–DN4 已在各自冻结范围通过。近期优先生产分派以及公开碳、水、FCC 铜的单节点 NPT。三种 SCR 各做科学验收，Berendsen 单列为预平衡。性能按三项对标的报告完整性验收，不设最低加速比。C0–C3/C5 和 D1–D5 仍待完成。
 
 V1.0 的势范围为 NEP4/5、NEP-ZBL、LJ 和 EAM/alloy，目前只有 NEP 已实现。已确定的生产规则要求：单卡可使用全系统实现，多卡必须局部求力；缺少局部实现的组合只开放单卡，全量复制保留显式测试入口。当前程序仍可能启动回退，这项生产规则尚待实现。[分派决策](docs/standards/architecture-decisions.md#production-domain-routing)
 
@@ -40,54 +40,24 @@ DN5 的性能和默认采用仍待验收，跨节点仍待实测。
 
 所有用户可见输出由 rank 0 写入。不能使 GPUMD 兼容行为或 DMG-MD 单 rank 基线回归。无法从源码和测试证明的行为标记为 `UNKNOWN`。
 
-修改并行执行或数据布局前，读取 [MPI 运行时](docs/standards/mpi-runtime.md)和[数据布局](docs/standards/data-layout.md)。了解优化和实际默认值时，读[多卡实现导读](docs/reference/multi-gpu-implementation.md)。测量迁移收益时，按[性能方法](docs/status/performance/npt-benchmarks.md)区分普通 GPUMD 数值基线与 GPUMD-WPE 单卡性能基线。
+修改并行执行或数据布局前，读取[MPI 运行时](docs/standards/mpi-runtime.md)和[数据布局](docs/standards/data-layout.md)。优化和实际默认值见[多卡实现导读](docs/reference/multi-gpu-implementation.md)。编写性能计划、运行器或结论时，逐项报告同卡数普通 GPUMD、同卡数 LAMMPS/KOKKOS/NEP、固定单卡 GPUMD-WPE，并单列 DMG-MD 的单卡表现与自身强扩展。[对标矩阵与可比条件](docs/status/performance/npt-benchmarks.md#performance-matrix)
 
-## GPUMD 复现边界（强制）
+## GPUMD 兼容实现与数值验证
 
-DMG-MD 曾经直接编译 `../gpumd-reference` 内的源文件（tokenizer、Box、neighbor、
-Potential、NEP kernels）。该模式已于 2026-09-09 废除。当前规则：
+DMG-MD 在 `src/gpumd_compat/` 内实现所需的 GPUMD 子集。源码源自上游提交 `9d23496e41319b9e2af5221a7df6285387401d1e`，各文件头注明上游路径及裁剪内容。构建只编译仓库内的兼容代码，运行时独立执行求力和积分。外部引擎由测试工具单独启动。新增兼容实现须注明用途、上游文件和符号。源码审计记录实际调用的函数或 CUDA kernel。
 
-- **禁止直接调用 GPUMD 代码**。DMG-MD 的任何源文件不得 `#include` 指向
-  `../gpumd-reference` 的路径，CMake 不得编译或链接该目录中的任何文件；
-  运行时也不得以 dlopen、子进程等方式调用 GPUMD 可执行文件或库。
-- 所需的 GPUMD 最小子集**只能在本仓库内复现**：位于
-  `src/gpumd_compat/`（命名空间 `gpumd_compat`），复制自锁定 commit
-  `9d23496e41319b9e2af5221a7df6285387401d1e`，文件头注明 Origin file 与裁剪说明。
-- `src/gpumd_compat/` 的数值（浮点表达式、内存布局、kernel launch 参数、累加顺序）
-  与参考实现保持一致；对其任何修改都必须连同 golden 基线（`tests/baseline`、
-  `tests/long_nve`）一起重新验证，不得“顺手清理”。
-- 新增需要 GPUMD 已验证实现的代码时，先在 `src/gpumd_compat/` 中复现并加注释
-  （用途 + GPUMD 对应文件/符号），再接入 DMG-MD runtime；不得回到直接引用
-  `../gpumd-reference` 的做法。
-- `../gpumd-reference` 只作为只读对照与 golden 基线生成源（`run_baselines.py
-  --reference` / `--update-goldens`），不参与 DMG-MD 构建与运行。审计结论仍须记录
-  参考文件、类、函数或 CUDA kernel；使用 `rg` 跟踪实际调用和符号。
+浮点表达式、内存布局、内核启动参数或累加顺序发生变化时，重跑短程 golden 和对应长程回归。普通 GPUMD 5.9.1 生成了 L20 的短程 golden。各套科学回归的输入、程序身份和容差见[数值验证标准](docs/standards/golden-test-standard.md)。
 
-## 外部 reference 的只读边界（强制）
+## 性能对照引擎
 
-`../gpumd-reference`、`../lammps-reference` 和 `../lammps-matpl-reference` 均为锁定的
-**严格只读 reference**。不得在其中应用补丁、复制源码、运行原位构建、生成日志或输出、
-清理文件，也不得为了测试修改势文件。执行参考程序时把工作目录和输出目录放在本仓库允许的工作目录
-或临时目录；每次相关工作前后核对三个 checkout 的 Git 状态，并检查是否新增被忽略的构建产物。
+L20 使用普通 GPUMD 5.9.1、GPUMD-WPE 1.0.0 和 LAMMPS 22 Jul 2025 Update 4（KOKKOS 4.6.2、MatPL NEP）做性能对照。计时直接运行已安装的可执行文件，报告记录当次版本。换用其他版本时，按相同工况检查物理量、实际后端和设备分配。输入和输出放在作业目录。[已测构建及对照标准](docs/standards/cross-engine-reference.md#benchmark-engines)
 
-LAMMPS 锁定 `stable_22Jul2025_update4`（commit
-`611ca3b7f8525ba802373b04f9e3d632d515f7e3`），MatPL 锁定 commit
-`21fabf34eadc57a717f4c7fbce9bb80aad5fd991`。2026-10-09 从原位安装迁出的
-MatPL 补丁源码、CMake 修改和逐文件 SHA-256 保存在
-`third_party/lammps-matpl-overlay/`。短程 golden 使用 GPUMD 5.9.1（`11ba6fb`），兼容层源码仍来自 `9d23496e`。长程和三引擎工具尚有独立的参考身份限制，详见[部署手册](docs/operations/deployment.md)和[当前状态](docs/status/current.md#l20-v1-audit-20261120)。
-
-如需修改或重建 LAMMPS，先从只读 `../lammps-reference` 在本仓库内生成独立工作源码
-（例如 `build-lammps-matpl-src/`），再应用上述 overlay 或新的本地补丁；构建目录也必须在
-本仓库内。不能把 `../lammps-matpl-reference` 当作可编辑插件工作树。任何用于
-GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256，并明确标注等价范围。
-维护者已批准以物理量等价而非文件哈希一致作为三引擎横向判定：所有元素的径向 cutoff
-相同且角向 cutoff 相同时，可把 typewise 行折叠为统一行；若任一值不同必须拒绝该转换。
-转换规则、静态物理量门槛和性能比较边界见 `docs/standards/cross-engine-reference.md`。
+势文件转换须保留原文件和转换后的 SHA-256，标明等价范围。只有所有元素的径向 cutoff 相同、角向 cutoff 也相同时，才可将逐元素行折叠为统一行。先核对同快照的能量、力和 virial，再解释耗时。[输入等价条件](docs/standards/cross-engine-reference.md#比较对象与等价输入)
 
 ## 不可破坏的产品约束
 
 - 不重新实现 NEP 数学公式。NEP 数学子集由 `src/gpumd_compat/` 的复现内核提供
-  （复制自 GPUMD 锁定 commit），在其上只做小范围参数化；重写公式前必须先建立
+  （上游来源见文件头），在其上只做小范围参数化；重写公式前必须先建立
   golden test 并获得维护者确认。
 - 一 MPI rank 只控制一张 GPU。全量复制模式每 rank 持有完整输入坐标和类型，但积分、thermo 与输出写权限只属于 owned atoms；已实现的局部域分解模式使用 rank-local owned/ghost 布局和明确通信工作区。
 - owned atoms 与 ghost atoms 必须有不同的生命周期和写权限；ghost 不得被积分、重复计入 thermo 或直接输出。
@@ -191,7 +161,7 @@ GPUMD/LAMMPS 比较的势文件转换都应保留原文件及转换后 SHA-256�
 
 GPUMD 是数值和兼容性参考。验证至少分四层：
 
-1. 锁定 GPUMD 单 GPU 基线；
+1. 由 golden 清单标明来源的 GPUMD 单 GPU 数值基线；
 2. DMG-MD 单 rank；
 3. MPI 复制数据原型；
 4. MPI domain decomposition。
@@ -263,13 +233,13 @@ DMG-MD 使用一套术语和架构决策。[领域文档读取约定](docs/agent
 
 非平凡任务依次执行以下步骤：
 
-1. 检查本仓库与三个只读 reference checkout 的状态和已有用户修改；
+1. 检查本仓库的 Git 状态和已有用户修改；
 2. 阅读相关说明、构建脚本和测试；
 3. 用 `rg` 从入口沿调用和 buffer 读写追踪；
 4. 给出文件、符号、执行位置、数据所有权和 MPI 影响；
 5. 做最小且在授权范围内的修改；
 6. 构建或执行与风险相称的测试；
-7. 检查 diff，确认未修改 `../gpumd-reference` 和无关文件。
+7. 检查本次 diff 及输出位置，保留已有工作区改动。
 
 若任务会改变 NEP 数学、数据布局、精度、原子所有权、通信半径或兼容性承诺，应先完成证据和 golden test 设计，再请求维护者确认实现方向。
 

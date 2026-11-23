@@ -12,7 +12,7 @@
 | 验证 Berendsen/SCR 控压、压力、统计性质或局部变盒 | [NPT 验收](npt/README.md) |
 | 检查长期守恒、Berendsen NVT 与跨进程数重启 | [长程验收](long_nve/README.md) |
 | 对比 GPUMD、LAMMPS/MatPL 与 DMG-MD 同构型的能量、力和 virial | [跨引擎静态对照](lammps_reference/README.md) |
-| 测量 NVE 耗时或定位开销 | [性能与诊断工具](benchmark/README.md) |
+| 测量三材料 NPT 的三项外部对标，或使用已有 NVE 工具诊断 | [三材料比较矩阵](../docs/status/performance/npt-benchmarks.md#performance-matrix) · [现有 NVE 性能工具](benchmark/README.md) |
 
 <a id="目录职责"></a>
 

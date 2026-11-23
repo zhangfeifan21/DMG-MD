@@ -123,9 +123,8 @@ message(STATUS
 
 # DMG-MD replicates the minimal GPUMD subset it needs inside
 # src/gpumd_compat (tokenizer, Box math, GPU_Vector, neighbor builder,
-# Potential base and the NEP/NEP-ZBL CUDA kernels).  The build must never
-# compile sources from or link against ../gpumd-reference; that checkout is
-# only a read-only reference for audits and golden-baseline generation.
+# Potential base and the NEP/NEP-ZBL CUDA kernels). External simulation
+# engines run as separate programs in comparisons.
 # GPUMD's tokenizer/error implementation is host-only despite its .cu
 # suffix.  Build it as C++ so the parser unit tests stay CPU-only (same
 # treatment the reference build applies to utilities/error.cu).

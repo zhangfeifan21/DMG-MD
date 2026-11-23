@@ -73,8 +73,8 @@ inline double fractional_along_axis(
 }
 
 // Partition axis: the longest box edge, with the deterministic tie rule of
-// the pinned reference partitioner (gpumd-reference/src/force/
-// nep_multigpu.cu:1438-1446): a cascade where direction y wins ties against
+// GPUMD (9d23496e, src/force/nep_multigpu.cu:1438-1446).
+// In its cascade direction y wins ties against
 // x and z, and x wins ties against z (all-equal cubes pick y). The reference
 // compares rc/2 bin counts; replicated-full has no cell-aligned bins yet (that guard is
 // deliberately deferred to local-domain), so the edge lengths are compared directly.

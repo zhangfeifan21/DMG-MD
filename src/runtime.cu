@@ -2,9 +2,8 @@
 #include "dmgmd/ensemble_control.hpp"
 
 // The NEP force path is the DMG-MD-owned replication of the minimal GPUMD
-// subset in src/gpumd_compat (copied from the pinned reference commit
-// 9d23496e41319b9e2af5221a7df6285387401d1e, numerics unchanged).  DMG-MD
-// must never include or link ../gpumd-reference directly.
+// subset in src/gpumd_compat (upstream GPUMD commit
+// 9d23496e41319b9e2af5221a7df6285387401d1e, numerics unchanged).
 //
 // File layout since local-domain: this translation unit keeps the replicated-full/P1
 // replicated-full runtime and the GPUMD-compatible output formatters shared

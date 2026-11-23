@@ -44,7 +44,7 @@ python3 tests/mpi/check_environment.py --candidate ./build/dmg-md --devices 0 --
 
 示例中的 `89` 对应计算能力 8.9，设备编号换成实际分配的 GPU。检查 CTest 结果和跳过项；设备自检会报告 rank、GPU 身份、通信后端和 CUDA 缓冲通信结果。
 
-更换工具链时使用新的构建目录。运行用户输入只需本仓库及上述依赖；维护者更新数值基线时，另需锁定的参考引擎。
+更换工具链时使用新的构建目录。运行用户输入只需本仓库及上述依赖；维护者更新数值 golden 时使用该套清单登记的参考程序。性能测试直接使用站点安装的引擎。[L20 已测版本](../standards/cross-engine-reference.md#benchmark-engines)
 
 ## 3. 运行一个能核对输出的单卡作业
 
@@ -83,4 +83,4 @@ grep -E '^DMGMD_DOMAIN(_NPT)? ' run.log
 
 - CMake 报工具链不匹配，查 `command -v`、三个前缀和 `ompi_info --config`，统一后使用新的构建目录。
 - MPI 的设备探针失败，先核对分配到的 GPU、每节点进程数及站点的 CUDA/UCX 支持，再按探针错误检查设备缓冲通信。[MPI 环境合同](../standards/mpi-runtime.md)
-- 运行器拒绝参考版本，查对应测试的 manifest。核心程序和上面的用户示例只链接仓库内代码及系统工具链。[数值验证](../../tests/baseline/README.md) · [参考引擎合同](../standards/cross-engine-reference.md)
+- 数值回归报告参考身份不符时，查该套回归的 manifest。性能计时找不到程序时，指定已安装的可执行文件或加载对应环境。核心程序和上面的用户示例只链接仓库内代码及系统工具链。[数值验证](../../tests/baseline/README.md) · [参考引擎合同](../standards/cross-engine-reference.md)

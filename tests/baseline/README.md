@@ -6,16 +6,16 @@
 
 ## 核验参考输出与候选程序
 
-从仓库根目录执行。`GPU_ID` 填一张已分配的 GPU 的编号或 UUID。第一条命令用参考程序逐字节核对 golden，第二条命令按 manifest 比较 DMG-MD 输出。
+从仓库根目录执行。`GPU_ID` 填一张已分配的 GPU 的编号或 UUID。`GOLDEN_GPUMD` 指向该批基线登记的数值参考可执行文件。第一条命令用它逐字节核对 golden，第二条命令按 manifest 比较 DMG-MD 输出。
 
 ```bash
 source ../env/md-mpi.sh
 GPU_ID=0  # 示例，换成分配的设备
-python3 tests/baseline/run_baselines.py --device "$GPU_ID"
+python3 tests/baseline/run_baselines.py --reference "$GOLDEN_GPUMD" --device "$GPU_ID"
 python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device "$GPU_ID"
 ```
 
-参考程序默认为 `../gpumd-reference/src/gpumd`，可用 `--reference` 显式指定。脚本从可执行文件的解析路径向上两级核对 Git 提交和工作树状态，并检查参考二进制和输入的 SHA-256。L20 使用的普通 GPUMD 5.9.1 与旧参考的关系见[三引擎对照标准](../../docs/standards/cross-engine-reference.md)。
+该数值参考自检仍从可执行文件的解析路径向上两级核对 Git 提交和工作树状态，并检查参考程序和输入的 SHA-256。L20 的基线布局用于这个自检。日常候选回归直接读取仓库内的 golden，性能测试可指定普通安装的程序。[计时用法](../benchmark/README.md)
 
 每次运行只向子进程暴露一张设备。脚本打印通过用例数与各类别的最大差异，失败时保留工作目录。需要检查成功作业的原始输出时加 `--keep-work`。CUDA 初始化失败会使测试失败，应先检查设备是否可用。
 
@@ -25,8 +25,8 @@ python3 tests/baseline/run_baselines.py --candidate ./build/dmg-md --device "$GP
 
 ```bash
 source ../env/md-mpi.sh
-python3 tests/baseline/run_baselines.py --device "$GPU_ID" --update-goldens
-python3 tests/baseline/run_baselines.py --device "$GPU_ID" --calibrate 30
+python3 tests/baseline/run_baselines.py --reference "$GOLDEN_GPUMD" --device "$GPU_ID" --update-goldens
+python3 tests/baseline/run_baselines.py --reference "$GOLDEN_GPUMD" --device "$GPU_ID" --calibrate 30
 ```
 
 更新要求参考仓库干净，提交和二进制哈希与 manifest 一致。校准例子重复完整矩阵 30 次并覆盖 `calibration.json`，容差仍由 manifest 管理。2026-09-09 的校准使用 GPUMD `9d23496e`。后续 L20 复验见[短程基线记录](../../docs/status/validation/baseline-results.md)。

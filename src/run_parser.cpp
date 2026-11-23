@@ -2,7 +2,7 @@
 
 // Whitespace tokenization uses the DMG-MD-owned replication of GPUMD's
 // get_tokens() (src/gpumd_compat/error.cuh) so run.in token rules stay
-// bit-compatible with the pinned GPUMD reference.
+// bit-compatible with the GPUMD tokenizer used to establish the numerical baseline.
 #include "gpumd_compat/error.cuh"
 
 #include <cerrno>
