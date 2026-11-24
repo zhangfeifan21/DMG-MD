@@ -19,6 +19,8 @@ Label: wayfinder:map
 
 - [长程回归怎样衔接 GPUMD 5.9.1 短程基线](issues/02-long-regression-reference.md): 长短程数值参考同锁 5.9.1 `11ba6fb`，性能计时只记版本；新校准后依次过 smoke、nightly、P4 release，容差不变；旧结果归档到被忽略的 archive/
 
+- [三种 SCR 工况各用什么统计标准验收](issues/03-scr-science-protocol.md) 每种材料对 103 个区间作 95% 同时验收，按 90% 的整组通过概率目标选择采样预算，三种材料合计至少 408 条正式独立链。
+
 ## Not yet specified
 
 扩大后的水或铜若出现长自相关、盒形不再满足分区条件，或局部计算节省的时间被通信与输出抵消，需要先导数据才能定位原因，再定义应补的实验。待清楚到可以表述成具体问题时，新增工单。
