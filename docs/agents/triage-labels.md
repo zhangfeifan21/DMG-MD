@@ -9,3 +9,5 @@
 | `ready-for-agent` | `ready-for-agent` | 规格明确，可由代理独立实施 |
 | `ready-for-human` | `ready-for-human` | 需要人工实施 |
 | `wontfix` | `wontfix` | 维护者决定不处理 |
+| 无对应技能角色 | `completed-by-agent` | 代理已实施并完成验证，证据与提交记录在工单中 |
+| 无对应技能角色 | `completed-by-human` | 人工已实施并完成验证，证据与提交记录在工单中 |

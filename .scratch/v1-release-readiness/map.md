@@ -15,7 +15,9 @@ Label: wayfinder:map
 
 ## Decisions so far
 
-<!-- 仅在子工单解决后，追加标题链接和一句摘要。 -->
+- [三种公开算例按什么规模和快照冻结](issues/01-public-material-inputs.md): 单档 100-120万原子，长宽比2.75，GPUMD预平衡（10万步Berendsen+2万步SCR），四引擎静态验证后冻结，10万步正式benchmark
+
+- [长程回归怎样衔接 GPUMD 5.9.1 短程基线](issues/02-long-regression-reference.md): 长短程数值参考同锁 5.9.1 `11ba6fb`，性能计时只记版本；新校准后依次过 smoke、nightly、P4 release，容差不变；旧结果归档到被忽略的 archive/
 
 ## Not yet specified
 
