@@ -4,13 +4,13 @@ Status: ready-for-agent
 
 ## Problem Statement
 
-组员需要知道，在同一条 NPT 轨迹和同等 GPU 资源下，DMG-MD 与普通 GPUMD、LAMMPS/KOKKOS/NEP 各耗时多少。组内用户还使用单卡 GPUMD-WPE，需要看见 DMG-MD 的单卡能力，以及把一条单卡作业迁到多卡的时间与用卡成本。当前含 NPT 的作业默认使用全量复制模式。已有三材料短程检查，生产规模下的科学验证、真实多卡分派和三项正式计时仍待完成。
+组员希望知道，在相同物理任务和 GPU 资源下，DMG-MD 与普通 GPUMD、LAMMPS/KOKKOS/NEP 各耗时多少，也希望估算一条单卡 GPUMD-WPE 作业迁到 DMG-MD 多卡的耗时和用卡成本。现有三材料短程检查覆盖了作业启动与输出。组员还缺少百万原子规模的科学判定、实际局部分派和正式计时证据。
 
-正式版还承诺用单卡运行 LJ 和 EAM/alloy。当前求力入口仅支持 NEP，长程回归受参考版本锁阻断。维护者需要能逐项复核的发布条件，组员需要可自行构建并验证的候选包。
+正式版还承诺用单卡运行 LJ 和 EAM/alloy。当前求力入口仅支持 NEP。长程参考迁往普通 GPUMD 5.9.1 的规则已经确定，清单迁移与逐级回归待实施。维护者需要能逐项复核的发布条件，组员需要可自行构建并验证的候选包。
 
 ## Solution
 
-先交付单节点 NEP 试用。生产多卡按完整输入选择局部域分解模式，失格作业在积分前给出可操作的诊断。用平衡并放大的公开金刚石碳、致密水和 FCC 铜逐材料验收 SCR 科学结果，Berendsen 单列预平衡。优先报告各引擎可公平比较的 NPT 工况，列全三项外部对标和 DMG-MD 自身强扩展。性能验收不预设胜负。
+单节点 NEP 试用先冻结公开金刚石碳、致密水和 FCC 铜的共同快照。各材料分别验收 SCR 科学结果，Berendsen 单列预平衡。三种材料均通过、生产分派回归通过后，先做 DMG-MD 内部对照并选定局部 NPT 默认缓存策略，再用最终候选完成三项外部对标。试用交付包含单卡表现、同卡数跨引擎对标、单卡 WPE 迁移比及 DMG-MD 自身强扩展。[六项已确认决策](map.md#decisions-so-far) · [先导待测值](#pilot-values) · [实施单调整](#implementation-ticket-updates)
 
 完整 V1.0 还须让现有 NEP 通过统一求力接口，交付单卡 LJ、EAM/alloy 及势与六种系综的联合验收。候选版经过长程回归、干净环境复建和维护者签署后发布。
 
@@ -45,24 +45,107 @@ Status: ready-for-agent
 - **失败与恢复。** 启动失格时集体非零退出，报告请求卡数、失败条件、可执行的单卡重跑命令。少卡数方案须经资格检查才可推荐。运行中候选盒失格时，各 rank 在提交新盒前一致终止。每个原子有唯一所有者，rank 0 按全局原子顺序写科学输出。跨卡数读入重启快照按新作业初始化，保留物理字段，NHC 链和 BDP/SCR 随机状态重新建立。
 - **统一求力与势输入。** C0 从现有 NEP 全系统求力实现提取接口，保留周期折回、清零与求力次序，保留局部布局及变盒后的缓存失效语义。C1 统一读取势类型和元素顺序，诊断不支持的输入。可选最大邻居数仅用于 EAM/alloy，默认 400，合法范围 1 至 1024。
 - **单卡新势与系综。** C2 实现按元素对定义的 LJ 参数和未平移的截断能量。C3 实现 EAM/alloy 的 GPUMD 包装头、setfl 表、元素映射、密度、嵌入能、对势与 Hermite 插值。C5 逐势登记支持组合与示例。六种系综为 NVE，Berendsen、NHC、BDP 三种 NVT，以及各向同性正交全周期盒下的 Berendsen、SCR 两种 NPT。LJ 与 EAM/alloy 首版开放单卡，NEP4、NEP5 及其 ZBL 变体按已声明的单卡和局部组合验收。
-- **三种材料与参考引擎。** 采用维护者选定的公开算例。平衡并放大后，尽量选择三项外部对标共同容纳、可实际分区的体系，在最终规模冻结同一快照、势、步长、温压、阻尼、步数及输出。铜试用采用 NEP4-ZBL，EAM/alloy 另用纯 Cu 与 CuNi。普通 GPUMD 同时提供短程数值 golden 和同卡数性能对照。LAMMPS 同时提供独立物理对照与 KOKKOS CUDA 的 MatPL NEP 同卡数性能对照。WPE 只使用一张 GPU。登记当次引擎版本和二进制，从日志核对实际后端与设备。
-- **性能与试用。** 三材料 NPT 优先。普通 GPUMD、LAMMPS/KOKKOS/NEP 按 P=1、2、4 分别与 DMG-MD 同卡数比较。WPE 单卡对 DMG-MD 单卡衡量单卡能力，对局部 2/4 卡衡量迁移耗时。另报 DMG-MD 固定规模的自身强扩展和并行效率，以及同卡数内部缓存策略对照。三种 SCR 科学验证通过，可比组合完成计时，三项报告完整，作为试用验收依据。性能不设最低倍率，各方向的实测结果均须报告。
+- **三种材料与参考引擎。** 单节点 NEP 试用为三种材料各冻结一份共同输入，包括势、盒、坐标、速度、温压、耦合时间及输出。铜试用采用 NEP4-ZBL，EAM/alloy 另用纯 Cu 与 CuNi。普通 GPUMD 5.9.1 提供数值参考，LAMMPS 提供独立物理对照。性能报告逐次登记实际引擎、二进制和后端。
+- **性能与试用。** 三项对标分别回答同卡数普通 GPUMD、同卡数 LAMMPS/KOKKOS/NEP 和固定单卡 WPE 相对 DMG-MD 的耗时。SCR 生产和 Berendsen 预平衡按各自的可比条件报告。正式样本使用通过科学验收的候选，配对作业使用相同的物理任务和输出要求。
 - **发布交付。** D1 交付 CLI、版本来源、环境探针与退出码。D2 核查许可证、第三方内核及势文件的分发范围。D3 交付原生安装指南、支持矩阵和每种支持势的示例。D4 归档冻结的正确性回归和三项外部对标报告，并用候选源码包独立复建。D5 由维护者核对 G-A 至 G-D、版本、交付件、发布说明和已知限制后签署。
 
 ## Testing Decisions
 
 维护者于 2026-11-23 确认以组员实际启动的 DMG-MD 作业为主要验收入口。测试在独立作业目录准备 `run.in`、`model.xyz` 和势文件，以单 rank 或 MPI 启动候选程序。判据取自退出码、诊断与实际分派、热力学输出、逐原子轨迹、重启后的输出和整段墙钟。保留已有 CTest、标量参考、几何与统计测试，用于确定回归原因。统一求力接口沿用这套作业级验收。
 
-| 验收对象 | 通过条件 | 既有测试依据 |
+| 运行时与发布交付 | 通过条件 | 既有测试依据 |
 | --- | --- | --- |
 | 生产分派与故障 | 单卡作为基线。合格的 2/4 卡作业在 HostStaged、CudaAware 两种通信后端核对实际局部模式及每个原子的唯一负责进程。覆盖 NPT→NVT、初始小盒、条带宽度等于资格边界、设置不一致、缺少局部实现的势。启动拒绝须发生在首步与科学输出之前，运行中盒收缩失格须在提交候选盒前终止。检查全作业退出、诊断和重跑命令。显式内部复制对照继续覆盖原 G-B 回归。 | [MPI 域分解回归](../../tests/mpi/README.md) · [局部 NPT 合同](../../docs/standards/domain-npt.md) |
 | NEP 接入与兼容输出 | C0 接入后，运行单卡短程 golden、2/4 rank 的 NEP 局部回归、长程 smoke 和关键 NHC/BDP 作业。比较文件结构、原子顺序、静态及短程能量、力、virial 和 thermo。使原子跨分区迁移，改变 rank 数读入 restart，核对物理字段、重启边界和新作业结果。 | [短程 golden](../../tests/baseline/README.md) · [恒温器与重启](../../tests/thermostats/README.md) |
 | 势输入与单卡求力 | 势头、元素顺序、缺失或重复字段和非法邻居上限均有可复现的正反例。LJ 对照元素对参数、截断两侧和盒收缩后出现的新邻居。EAM/alloy 用纯 Cu 与 CuNi 检查静态量、短轨迹、表边界、残缺表、邻居恰满及溢出。能量、力和 virial 与锁定参考按规定容差比较。 | [力场验收要求](../../docs/plans/dmg-md-v1.0-development-workflow.md#力场开发卡) |
 | 势与系综的联合矩阵 | LJ、EAM/alloy 各跑六种单卡系综，NEP 跑明示支持的单卡与局部组合。按组合验证输出与新作业重启，记录盒限制和预期拒绝。确定性物理量按冻结误差带比较，随机系综检查同 seed 重复与独立种子的预注册统计。Berendsen 单独检查预平衡方向、稳定性与耗时。 | [Golden 验收原则](../../docs/standards/golden-test-standard.md) · [系综合同](../../docs/standards/ensembles.md) |
-| 三种公开材料的 SCR 科学验收 | 在最终共用快照上先比逐原子能量、力和 virial，再以独立链比较温度、压力、体积均值及体积涨落。每种材料在看到正式结果前冻结平衡段、采样长度、链数、有效样本量和区间判据。证据分材料给出通过、失败或不确定的判定。 | [NPT 专项](../../tests/npt/README.md) · [既有大盒碳统计范围](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116) |
-| 三项外部 NPT 对标与自身强扩展 | 独占四张 L20，等工况测普通 GPUMD、LAMMPS/KOKKOS/NEP 与 DMG-MD 同卡数的 1/2/4 卡，WPE 单卡单列对 DMG-MD 1/2/4 卡。逐材料登记 SCR 与 Berendsen 的可比状态，核验分派、模型、控压语义和 GPU/CPU 绑定。记录完整墙钟、稳态步时、配对区间、GPU·小时和自身强扩展效率。胜、负、持平或不确定均照实报告，不可比项不计算倍率。复制、强制重建和形变复用另做内部对照。 | [三项对标与控压可比矩阵](../../docs/status/performance/npt-benchmarks.md#performance-matrix) · [局部 NPT 与 DN5](../../docs/plans/multi-gpu-barostat.md) |
-| 长程回归与参考身份 | 先使长短程认可的普通 GPUMD 提交及二进制身份一致，并审阅参考差异。依次恢复 100 步 smoke、10,000 步 nightly、完整 release。发布矩阵对碳、水、BaTiO₃-ZBL 三种长程体系取五个种子，NVE 与 NVT Berendsen 各 100,000 步，覆盖 1/2/4/8 rank 和两后端。比较能量漂移、热力学与结构统计、双向同构型静态回放和跨 rank 重启。NVE 计时直接使用已安装的程序，记录实际版本，先核对物理量再解释性能。 | [长程测试与矩阵](../../tests/long_nve/README.md) · [三引擎参考标准](../../docs/standards/cross-engine-reference.md) |
 | CLI、部署与发布包 | 在无 GPU、无作业输入的环境验证 `--help` 与 `--version` 正常退出。在已有兼容 CUDA、CUDA-aware Open MPI 和 UCX 的节点，普通账号独立复建干净候选包，通过 GPU/MPI 探针，运行各势示例并核对输出。候选版本、示例、许可证、第三方声明与签署清单相互对应。 | [原生部署与环境自检](../../docs/operations/deployment.md) · [正式发布验收](../../docs/plans/dmg-md-v1.0-development-workflow.md) |
+
+### 三种公开输入与快照
+
+每种材料只设一档规模。表中给出制备目标，实物以冻结清单的原子数、盒和哈希为准。正交全周期盒沿长边 y 分区，长宽比约 2.75∶1。制备条件为 300 K、0 GPa，温控和控压阻尼分别为 40 步和 1,000 步，初速度种子为 301。[决策 01 输入与规模](issues/01-public-material-inputs.md#answer)
+
+| 材料与势 | 目标原子数 | 目标盒 x × y × z（Å） | 步长（fs） | 控压输入体模量（GPa） |
+| --- | ---: | --- | ---: | ---: |
+| 金刚石碳，NEP4-C | 约 100 万 | 127 × 349 × 127 | 1.0 | 425 |
+| 致密水，水 NEP4 | 约 120 万 | 163 × 448 × 163 | 0.5 | 2.2 |
+| FCC 铜，Song-2024-UNEP-v1 的 Cu（NEP4-ZBL） | 约 120 万 | 172 × 473 × 172 | 1.5 | 140 |
+
+1. 普通 GPUMD 5.9.1 单卡做 100,000 步 Berendsen 预平衡。前 90,000 步每 1,000 步记录一次，后 10,000 步每 100 步记录一次。全程取 100 个等间隔体积点，相对标准差须 <1%。末 5,000 步用 50 点拟合，首尾漂移的绝对值占末段均值的比例须 ≤0.25%。每种材料另做两个单步测试，内压高于目标时盒子膨胀，低于目标时收缩。
+2. 接着用同一引擎做 20,000 步 SCR 快照检查，每 100 步记录一次。相对 300 K 的均温偏差 <3%，均压绝对值 <0.5 GPa，体积相对标准差 <2%，有效样本量 >100。通过后留出末帧的坐标、速度和盒作独立终验。保存制备曲线、耗时和原子顺序。
+3. 每种材料从至少 3 次独立试跑各取一张静态校准快照。以普通 GPUMD 为共同参考，按引擎对和物理量冻结容差，取代早期统一的 `1e-5`。先查明 WPE 的能量与 virial 差异，再在留出的末帧上做四引擎零步求力。按全局原子 ID、单位和分量逐项核对能量、力及 virial，记录最大误差。通过后冻结快照、势及输入哈希，供新作业复用。[决策 03 共同快照与静态校准](issues/03-scr-science-protocol.md#answer)
+
+### 每种材料怎样判定 SCR 通过
+
+基准步长取上表数值。DMG-MD 测单卡以及 2/4 卡各自的两种后端（HostStaged、CudaAware）和两种缓存策略（`rebuild`、`affine`），共 9 个候选配置。半步长测单卡、2 卡 `HostStaged/affine`、4 卡 `CudaAware/affine`。每个步长各用一组共享的普通 GPUMD 单卡 SCR 参考。两步长匹配物理时长、输出间隔和耦合时间。[决策 03 SCR 正式协议](issues/03-scr-science-protocol.md#answer)
+
+| 物理量 | 整个置信区间须落入的范围 |
+| --- | --- |
+| 平均温度 | GPUMD 和候选各为 294 至 306 K，候选减 GPUMD 的均温差在 ±6 K 内。三个 NVT 参考体积的均温也各须在 294 至 306 K 内。 |
+| 平均压力 | 各自的均压相对 0 GPa 的偏差、候选与 GPUMD 的均压差都在 ±δP 内。`δP = min(0.1 GPa, 0.0025 × K_T)`，其中 `K_T` 取该材料独立先导实测的等温体模量。 |
+| 平均体积 | 候选相对同一步长 GPUMD 的均值差在 ±0.25% 内。 |
+| 体积方差 | 候选方差分别除以同一步长 GPUMD 的 SCR 方差、独立 NVT 压力响应预测的方差，两个比值的区间均在 [0.85, 1.15] 内。 |
+
+每种材料共享一套独立 NVT 参考。普通 GPUMD 单卡使用 BDP 恒温、300 K、半步长和 80 步温控阻尼。先导从平衡体积的 99%、100%、101% 起选三个定容体积。正式测得三点压力后，分别用全部三点、左两点、右两点拟合。各拟合用零压体积和体模量预测方差 `k_B T V₀ / K_T`，再取三个方差比区间的包络。斜率须可确认为负，零压点须在量程内。所需参考或采样精度不合格时，依赖该参考的比较记为 `INCONCLUSIVE`。
+
+基准步长 65 项、半步长 23 项、跨步长 12 项和 NVT 均温 3 项合为 **103 项**，逐材料作 Bonferroni 校正，给出 95% 同时置信区间。跨步长以同一候选配置的半步长为参考，检验温差、压差、体积相对差及方差比，沿用对应界限。
+
+每组至少 8 条独立链，使用独立随机流。舍弃平衡段后每条至少有 32 个完整、不重叠的时间块。每个 SCR 工况的温度、压力、体积均值和体积平方偏差各须有至少 1,000 个有效样本。每个 NVT 体积的温度、压力均值也各须达到 1,000。最低每种材料 112 条 SCR 链加 24 条 NVT 链，三种材料合计至少 **408 条正式链**。
+
+SCR 舍弃时长取各先导链、各观测量中使保留段有效样本量最大的最晚起点，对齐输出时刻。若仍漂移，延长先导。每种材料的两个步长共用物理舍弃时长与物理块长。在真实均值差为零、方差比为 1 且温压达到目标的假设下，选 103 项同时通过的预计概率 ≥90%、且预计 GPU·小时最少的可行方案。登记链数、随机流、输出、保留时长和分析方法后，另起正式作业。
+
+均值区间覆盖链间和链内整块估计，比值按独立链和整块重采样，每轮重算共享参考并传递其不确定度。精度充分且区间全在界内为 `PASS`，全在界外为 `FAIL`，跨界或精度不足为 `INCONCLUSIVE`。材料有任一有效 SCR 主项明确失败即为 `FAIL`。其余材料若仍有不确定项或所需参考失格，判 `INCONCLUSIVE`。全部主项通过且参考合格才判 `PASS`。正式数据按注册方案分析一次，客观失效按预登记方案完整替补。后续补采另立注册，保留原判定。[NPT 专项](../../tests/npt/README.md) · [历史碳验证范围](../../docs/status/validation/domain-npt-validation.md#dn4-final-20261116)
+
+### 三项外部对标的可比范围
+
+每种材料从冻结快照启动。P 表示实际用卡数。下表按控压器展开，作业数由合格的计时格和区组数决定，取代决策 01 的 36 作业概算。算法或容量不适用的格附原因和日志，倍率留空。可比而尚未采样的格标为待测，补齐后才验收报告。[决策 06 引擎身份与可比条件](issues/06-three-engine-provenance.md#answer) · [跨引擎参考标准](../../docs/standards/cross-engine-reference.md)
+
+| 对照对象 | SCR 生产 | Berendsen 预平衡 |
+| --- | --- | --- |
+| 普通 GPUMD 对 DMG-MD | P=1、2、4 分别同卡数配对 | 同卡数，核对实际模型、控压和盒资格后配对 |
+| LAMMPS/KOKKOS/NEP 对 DMG-MD | P=1、2、4 均不适用。本构建缺少 SCR。`npt/kk` 使用 Nosé–Hoover，`press/langevin` 也是另一种算法。 | 每种材料先通过下述物理核验，再按 P=1、2、4 同卡数配对。保留主机端 `press/berendsen` 的耗时并注明。 |
+| GPUMD-WPE 对 DMG-MD | WPE 固定 1 卡，分别配 DMG-MD 1、2、4 卡 | 同样配对，分别报告单卡比与迁移比 |
+
+LAMMPS 的 Berendsen 使用 `nve/kk`、`temp/berendsen/kk` 和 `press/berendsen`。步长与 GPUMD 一致，`t_period = 40 × dt`，`p_period = 1000 × dt`，`modulus` 用同一输入体模量并换算为 bar，采用各向同性控压。两者的控压缩放一阶相同、二阶不同。从同一快照核对弛豫方向，并检查平台段均温、均压、均体积之差。容差先由 GPUMD 自身重复运行确定。某材料未通过，就将其 LAMMPS Berendsen 格列为不适用。
+
+每个作业核对冻结势的 SHA-256。LAMMPS 另记转换规则、转换后哈希及元素顺序。三种势的 cutoff 均为统一格式，铜须把原子类型 1 映射到 16 元素势中的 Cu。记录实际程序版本、二进制、后端、CPU/NUMA 绑定和 GPU 身份，按日志复核以下条件。
+
+- 普通 GPUMD 日志的 `number of GPUs` 等于 P。多卡时 `Try to use P GPUs for the NEP part.` 恰好一次，单卡时零次。核对 NEP4 元素数、铜的 ZBL 行及两段各自的 `Time used for this run`。GPUMD 和 WPE 用可见 GPU 的 UUID 与显存遥测交叉核对选卡及其余卡空闲。
+- LAMMPS 须有 KOKKOS CUDA、`matpl/nep/kk` 与势加载成功记录。核对每个 `LAMMPS_GPU_BIND` 的 UUID 互异、实际 fix 名称，以及 `Loop time` 的进程数、步数和原子数。
+- WPE 宿主为 `a0e55bc`，SCR 与 Berendsen 使用该宿主的实现。留存宿主版本和二进制 SHA-256。`Potential engine: Wisevolve Potential Engine 1.0.0` 恰好一次，`number of GPUs = 1`，多卡 NEP 标记零次。
+- DMG-MD 核对每个 rank 的 `DMGMD_MPI` 设备 UUID。局部多卡须有 `DMGMD_DOMAIN mode=m2a` 和实际 `DMGMD_DOMAIN_NPT` 策略。身份或势哈希不符、缺末帧或中途退出的作业作废，修正后重跑。普通 GPUMD 在运行中按当前盒检查网格。最长方向每卡至少 10 格，各周期方向至少 3 格。盒收缩等结构原因导致作业退出时，留存日志并登记该格不适用。
+
+另用三种冻结快照交付四引擎的同卡数 NVE 表。单卡列四引擎，多卡列有对应实现的普通 GPUMD、LAMMPS/KOKKOS/NEP 和 DMG-MD。先核对静态量和短程物理结果，再按同一区组重复规则计时。NVE 单列系综、配对和机时，NPT 由上表验收。[既有 NVE 短程作业](../../docs/status/validation/lammps-reference.md#l20-installed-nve-20261123)
+
+### L20 计时与 DN5 默认策略
+
+正式 NPT 计时须有三份材料 `PASS`、分派回归和冻结的采样清单。三项外部对标及 DMG-MD 自身强扩展均限单节点独占 4 × L20。每批作业串行，固定时钟、功率和输出介质，同卡数配对使用相同 CPU 总预算。[决策 04 计时与缓存采纳](issues/04-dn5-timing-and-adoption.md#answer) · [性能对标矩阵](../../docs/status/performance/npt-benchmarks.md#performance-matrix)
+
+1. **计时和输出。** 外部包装器从启动 `mpirun` 或可执行文件计到最后一个输出写完、进程退出。主指标为进程墙钟，单列启动与读入时间。用 thermo 时间戳计算第 1,000 步之后到结束的稳态 ms/step。正式轨迹在本地 NVMe 按冻结频率写 thermo 及一帧末态结构。登记实际文件和关不掉的额外输出。rank 0 汇总写出计入墙钟。尾段从最后一行 thermo 到退出，若任一引擎尾段超过自身墙钟的 1%，另报扣除尾段的配对比值。
+2. **区组和设备。** 每格先导 10,000 步、重复 5 次。正式每格 3 个区组，先导轮间变异系数 >2% 时增至 5 个，采样前冻结。在每个区组开始前，各引擎单跑 1,000 步预热，日志另存。正式作业完整运行 100,000 步。区组内按材料分组，以 `order_seed 20260922` 随机交错配对作业。1 卡用 GPU 0，2 卡用同 NUMA 的 GPU 0、1，4 卡用 GPU 0 至 3。跨 NUMA 的 GPU 0、2 只补充 DMG-MD 强扩展。
+3. **倍率与区间。** 各区组的比值取对数，用配对均值的双侧 95% t 区间（自由度 `n−1`）换算回比值。区间含 1 表示差异未分辨。性能区间逐项报告，不作多重比较校正。外部比值为对照引擎墙钟除以 DMG-MD 墙钟。WPE 单卡对 DMG-MD 单卡为单卡比，对 2/4 卡为迁移比。自身强扩展 `S(P) = T(1) / T(P)`，效率 `E(P) = S(P) / P`。各项附绝对时长、配对原始值、区间及两侧 GPU·小时（卡数 × 墙钟小时）。
+
+**先做内部对照，再选择默认值。** 每种材料测 P=2/4 × 两后端 × 三策略，共 12 格，记录 `DMGMD_DOMAIN_SUMMARY`。`rebuild` 和 `affine` 的 8 格按完整 100,000 步区组协议比较。显式 `off` 的 4 格各跑 10,000 步、重复 3 次，只报稳态步时。
+
+只有三种材料的全部 `affine` 科学配置均为 `PASS`，且 `T(rebuild)/T(affine)` 在所有格的 95% 区间上限均 ≥1、至少一格的区间下限 >1，才选 `affine`。其余情形按规则选 `rebuild`。采纳范围为这三种材料、单节点 P=2/4、各向同性正交全周期盒的 NPT。采纳后，生产命令在未设置 `DMGMD_DOMAIN_NPT` 时采用选定策略，`off` 和 `DMGMD_FORCE_M1_REPLICATED` 只作显式内部对照。
+
+三种材料均未见可分辨的 `affine` 收益、`E(4) < 0.6` 或 `E(2) < 0.7`、重建次数或通信和尾段耗时异常，任一项均触发剖析。调试轮跑 10,000 步、重复 5 次，检查稳态步时与计数。迭代至最终提交上各项触发条件消除，或由维护者书面确认剩余的结构限制。退出调试后在最终提交重跑正式内部对照。影响科学结论的改动须按对应回归复验，再以普通多卡命令核对默认分派，随后才做外部对标。上述效率值用于启动调试。试用按科学结果、可比格实测及报告完整性验收，速度不设最低倍率。
+
+### 长程参考与八卡发布矩阵
+
+长短程数值参考统一锁定普通 GPUMD 5.9.1 的 `11ba6fb` 及二进制 SHA-256，保留两份清单的身份一致性检查和原数值容差。L20 以短程清单的完整哈希为准。性能计时直接运行安装的程序，记录实际版本、后端和用卡数。[决策 02 参考迁移](issues/02-long-regression-reference.md#answer) · [短程参考身份](../../tests/baseline/manifest.json)
+
+迁移采用已有的 2026-11-20 短程逐字节对照，审阅改读 17 位有效数字 `restart.xyz` 的重启边界。90 个确定性生成的模型沿用现有哈希。用新参考在 L20 重跑 30 次短程校准，记录参考自身的重复性。若误差未远小于既有容差，停止并报告。验证期间保留旧锁和产物。校准、smoke 和 nightly 通过后，旧 `9d23496e` 结果移入 Git 忽略的 `archive/gpumd-9d23496e/`，停止跟踪并只在服务器保留。公开基线说明切换为当前参考。兼容内核的上游出处、势的来源和独立冻结的测试按原身份追溯。今后升级先重新生成短程 golden 并逐字节比较，再同次更新长短清单、重做校准与逐级回归。
+
+| 阶段 | 硬件与范围 | 验收证据 |
+| --- | --- | --- |
+| smoke | L20 单卡，种子 0，HostStaged，100 步 | 用同锁参考和候选通过后进入 nightly。 |
+| nightly 与 L20 release | nightly 独占 4 张 L20，种子 0，P=1/2/4，双后端，10,000 步 | nightly 通过后再跑 release。L20 的 release 只登记到 P4，单列覆盖表。 |
+| 完整 release | 同一台八卡机、同一份候选二进制，P=1/2/4/8、HostStaged 和 CudaAware、种子 0 至 4 | 按长程清单跑全 7 个用例。碳、水、BaTiO₃-ZBL 的 NVE 与 NVT Berendsen 各 100,000 步，另 4 个派生用例按清单核对静态量与短轨迹。检查漂移、热力学与结构统计、双向同构型回放及跨 rank 重启。八卡机也须完成 P=1/2/4 的格。 |
+
+维护者确认的资源窗口为 2026 年 12 月下旬，预计到位 1 至 2 台 8 × RTX 5090 单机。型号、数量和日期以交付为准，条件不符时重开资源决策。实施单 21 在整机到位后记录驱动、CUDA、MPI/UCX 版本、PCIe/NUMA 拓扑、8 个 UUID 和逐 rank 绑定。5090 构建显式包含 `sm_120`（`CMAKE_CUDA_ARCHITECTURES` 含 `120`），记录实参及能在该机运行的同提交 GPUMD 参考构建哈希。
+
+先做 8 rank 双后端预检，实测 GPU 间点对点访问与 UCX `cuda_ipc`，留存 `cuda_aware_p2p_self_test=passed`。若退回 HostStaged，登记回退，待两种后端均通过再启动完整矩阵。八卡机验收长程正确性，V1.0 性能数据只取四卡 L20。[决策 05 八卡站点与到机核验](issues/05-eight-gpu-release-site.md#answer) · [长程清单](../../tests/long_nve/manifest.json) · [各用例范围](../../tests/long_nve/README.md)
 
 ## Out of Scope
 
@@ -72,13 +155,42 @@ Status: ready-for-agent
 
 ## Further Notes
 
-2026-11-23 的源码基线为 `b103010`。主线 22 项 P0 中，恒温与控压阶段的 12 项已在限定范围内验收，力场与发布阶段各有 5 项待完成。11 月 20 日在 L20 的候选和普通 GPUMD 各通过 4/4 单卡短程 golden，CTest 44/44、MPI 局部主矩阵 68/68。三种材料的六组单卡与四卡配对各 20 步，公开 WPE 1.0.0 另有短程与静态检查。历史 SCR 统计限于 216 原子碳的 G-B 和 5,760 原子碳的 DN4 冻结配置。新规模的平衡态统计、三项外部对标和自身强扩展数据、完整长程 release 与发布签署仍待取得。[现有验收记录](../../docs/status/current.md)
+2026-11-25 按 L20 提交 `6c06899` 核对，决策 01 至 06 均为 `resolved`。通用失格拒绝已在实施单 02 登记完成。源码在未设置 `DMGMD_DOMAIN_NPT` 时仍取 `off`，含 NPT 的多卡作业可进入全量复制模式并打印 `reason=npt-m1-only`。短程清单已锁定 `11ba6fb`，长程清单仍为 `9d23496e`。实施单 13 和 04 分别负责这两处。[发布前决策地图](map.md) · [实施工单索引](../v1-release-implementation/spec.md)
 
-可并行开始生产分派、公开输入准备和各引擎参考身份核验。C0 可先设计，其验收需要长程 smoke。三材料按控压器先验证可比性和科学结果，路由回归通过后独占资源计时。已有三引擎运行器只生成 NVE，三材料 NPT 需要扩展编排与校验。新势开发沿 C0、C1、C2、C3、C5 推进。[开发顺序](../../docs/plans/dmg-md-v1.0-progress.md)
+截至 11 月 23 日，主线 22 项 P0 中有 12 项在限定范围内验收，力场与发布阶段各有 5 项待完成。11 月 20 日的 L20 记录涵盖普通 GPUMD 与候选各 4/4 单卡短程 golden、44/44 项 CTest、68/68 个 MPI 局部组合，以及三材料六组各 20 步的单卡与四卡对照。历史 SCR 科学结果限于 216 原子碳的 G-B 和 5,760 原子碳的 DN4 冻结配置。11 月 23 日的 7 个碳 NVE 短作业验证了引擎编排。百万原子三材料的正式 SCR 判定、DN5 默认选择、外部计时及完整八卡矩阵均待实测。[既有验证记录](../../docs/status/current.md) · [碳 NVE 短作业](../../docs/status/validation/lammps-reference.md#l20-installed-nve-20261123)
 
-会影响正式冻结与执行的待决项由[发布前决策地图](map.md)跟踪。
+<a id="pilot-values"></a>
 
-- 各材料须确定可比引擎共同的规模、平衡快照与构建身份，还需确定独立链与容差的注册值。[三种公开算例按什么规模和快照冻结](issues/01-public-material-inputs.md) · [三种 SCR 工况各用什么统计标准验收](issues/03-scr-science-protocol.md)
-- 预热、重复数、区间算法和默认缓存策略仍待取证。[三项对标怎样采样并据此选择局部 NPT 缓存策略](issues/04-dn5-timing-and-adoption.md)
-- 长短程 GPUMD 身份锁仍待协调。普通 GPUMD、LAMMPS/KOKKOS/NEP 的同卡数对照逐项记录实际版本并核验 NPT 可比工况。[长程回归怎样衔接 GPUMD 5.9.1 短程基线](issues/02-long-regression-reference.md) · [同卡数引擎的身份与 NPT 可比工况怎样核验](issues/06-three-engine-provenance.md)
-- 当前 L20 单机可承担四卡 nightly。完整 release 需要一次可核验的八卡分配。[为完整长程发布矩阵确认可用的八卡环境](issues/05-eight-gpu-release-site.md)
+### 正式采样前还要填哪些数值
+
+| 谁来测 | 待取得的数值或记录 | 何时使用 |
+| --- | --- | --- |
+| 输入制备与四引擎静态校准 | 实际原子数、盒、快照与势哈希，平衡曲线及末段漂移，各材料在目标规模的容量与分区资格，按引擎对和物理量校准的误差上限及 WPE 差异来源 | 静态容差先登记，再在留出的末帧作终验。放行各材料共同输入。 |
+| SCR 与独立 NVT 先导 | 三个实际定容体积、压力斜率、零压点、`K_T` 及 δP。各配置的自相关、舍弃和块长（物理时长）、输出间隔、保留时长、最终链数、有效样本量与功效估计 | 由独立先导选方案，正式作业启动前冻结种子、清单、精度要求和预算。 |
+| 引擎与计时先导 | GPUMD 重复试跑的 Berendsen 平台容差、LAMMPS 各材料的盒响应及平台差，设备与后端实证，各格步时、尾段耗时和轮间变异系数 | 确定 Berendsen 可比格和正式 3 次或 5 次重复。三材料全部科学通过后，才进入正式内部计时。 |
+| L20 机时预算 | 按实测步时和链长计算科学采样费用。对内部对照、调试轮、三项外部对标及补充 NVE，逐格按卡数 × 墙钟小时 × 次数汇总，另记独占时段 | 若预算超出可用窗口，由维护者决定缩减哪些格，缺测继续登记。水或铜出现长自相关、盒失格或通信与输出抵消收益时，依先导记录定位，再定义追加实验。 |
+
+决策 04 按短程步时和 0.8 的假设并行效率外推，内部对照约需独占节点 100 小时。实际总 GPU·小时用上表各项实测数据核算。缓存默认值取决于最终提交的正式内部对照。八卡机的型号、绑定、参考构建哈希和后端能力须等整机交付核验。
+
+<a id="implementation-ticket-updates"></a>
+
+### 现有实施单需要怎样调整
+
+下表的编号均为实施单。右栏列出六项决策落到现有工单后，应补的验收条件、先后顺序和证据。[实施工单索引](../v1-release-implementation/spec.md)
+
+| 实施单 | 需要调整的内容 |
+| --- | --- |
+| [01 冻结公开输入](../v1-release-implementation/issues/01-public-equilibrated-inputs.md) | 直接按单档规模和分段预平衡制备，补 20,000 步 SCR 快照检查、独立静态校准和留出终验。交付最终输入与四引擎核验表。 |
+| [02 生产分派](../v1-release-implementation/issues/02-production-domain-routing.md)、[03 变盒、输出与重启](../v1-release-implementation/issues/03-box-output-cross-rank-restart.md) | 02 保留已完成的拒绝路径证据。03 先用显式 `rebuild/affine` 验证局部变盒、输出与重启，覆盖合格和失格作业。普通 NPT 命令默认走全量复制的缺口由 13 补齐并复验。 |
+| [04 参考与 smoke](../v1-release-implementation/issues/04-long-reference-smoke.md)、[20 四卡 nightly](../v1-release-implementation/issues/20-long-nightly-four-gpu.md) | 04 执行已批准的同锁迁移、17 位重启审阅、30 次校准和单卡 smoke。20 接续双后端 nightly，通过后归档旧结果并单列 L20 至 P4 的 release 覆盖。 |
+| [05 配对计时](../v1-release-implementation/issues/05-paired-job-timing.md) | 将已定计时边界、预热、先导变异系数、随机区组、绑卡、配对 t 区间和尾段校正落实到运行器。保留能从原始时长复算的样例。 |
+| [06 普通 GPUMD 先导](../v1-release-implementation/issues/06-gpumd-matched-npt-pilot.md)、[07 LAMMPS 先导](../v1-release-implementation/issues/07-lammps-kokkos-nep-npt-pilot.md)、[08 WPE 先导](../v1-release-implementation/issues/08-wpe-single-gpu-npt-pilot.md) | 06 补多卡标记、UUID 与遥测。07 核对实际 fix、rank/元素映射，实测 Berendsen 平台容差与可比性，三种材料的 SCR 均列不适用。08 核对宿主、Wisevolve 唯一标记与单卡，配合静态校准查明能量和 virial 差异。三单可先做短作业，正式输入逐作业核对势哈希。 |
+| [09 三材料 SCR](../v1-release-implementation/issues/09-three-material-scr-validation.md) | 将 103 项同时区间、双参考、半步长、独立链下限和功效目标列入逐材料注册。交付先导冻结表及三份正式判定，保留失败和不确定项。 |
+| [13 强扩展与 DN5](../v1-release-implementation/issues/13-strong-scaling-dn5-cache.md) | 内部对照前置到外部正式计时之前。区分三种策略的运行长度与指标，落实调试触发和退出规则。在最终提交选出默认值，并用未设置环境变量的普通多卡作业复验局部分派或失格拒绝。 |
+| [10 普通 GPUMD 报告](../v1-release-implementation/issues/10-gpumd-matched-npt-results.md)、[11 LAMMPS 报告](../v1-release-implementation/issues/11-lammps-kokkos-nep-matched-results.md)、[12 WPE 报告](../v1-release-implementation/issues/12-wpe-single-and-migration-results.md) | 现有分派、计时、引擎先导及三材料科学前置之外，正式采样增加 13 的最终内部对照与默认策略。10 报同卡数，11 按材料报告合格的 Berendsen 格与 SCR 不适用原因，12 分列单卡比和迁移比。各报告只采最终默认策略对应的 DMG-MD 外部对照。 |
+| [14 单节点试用](../v1-release-implementation/issues/14-single-node-trial-handoff.md) | 汇合 09 的三份 `PASS`、10 至 13 的最终候选与默认策略证据。逐格核对实测或不适用理由，用普通账号复现试用作业。 |
+| [21 八卡 release](../v1-release-implementation/issues/21-long-release-eight-gpu.md) | 把已确认的资源窗口落实为到机探针、`sm_120` 构建和参考身份。整套七用例在同一台八卡机重跑全部 rank 与后端，连同回放和跨 rank 重启单独归档。 |
+| [25 补充 NVE](../v1-release-implementation/issues/25-legacy-three-engine-nve-smoke.md) | 将现有碳短程编排扩展为三种冻结快照、四引擎按同卡数比较，WPE 只参加单卡。沿用计时区组规则，单列表格并计入总预算。 |
+| [26 候选复建与证据](../v1-release-implementation/issues/26-d4-reproduce-release-candidate.md)、[27 维护者签署](../v1-release-implementation/issues/27-d5-maintainer-release-signoff.md) | 26 将最终候选关联到 L20 试用与计时、独立的补充 NVE 表和同机八卡正确性报告。27 核对各自覆盖范围，由维护者签署发布或暂缓决定。 |
+
+力场工单 15 至 19 沿 C0、C1、C2、C3、C5 推进，15 的验收仍需 04 在同一候选上的 smoke。CLI、许可与安装工单 22 至 24 沿现有产品要求推进。[V1.0 开发顺序](../../docs/plans/dmg-md-v1.0-progress.md)

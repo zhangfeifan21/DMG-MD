@@ -8,17 +8,16 @@ Blocked by: 20
 
 ## 交付内容
 
-维护者获得正式 V1.0 长程正确性证据，能逐格追溯所有体系、种子、rank 和通信后端。
-
-可提前协调机时。执行本单完整 profile 还需资源决策单提供的八 GPU 可用及绑定证据。
+维护者获得同一台八卡机、同一份候选二进制的完整长程正确性记录。资源窗口预计为 2026 年 12 月下旬，预计到位 1 至 2 台 8 × RTX 5090。实际交付型号、卡数或窗口不符时重开决策 05。到机检查可提前准备，执行完整矩阵须有 20 的 nightly 通过记录。
 
 ## 验收条件
 
-- [ ] 在现有八卡资源决策中取得可核验的分配或窗口，记录实际拓扑、GPU 身份、逐 rank 绑定与 MPI/CUDA 后端探针。确认可用的八张独立设备和运行环境后再启动完整矩阵。
-- [ ] 用锁定的 release 几何运行碳、水、BaTiO₃-ZBL，各取五个种子（0–4），NVE 与 NVT Berendsen 各 100,000 步，P=1/2/4/8 和 HostStaged/CudaAware 全覆盖。按清单核对每个格的参数、实际路径、输出和步数。
-- [ ] 按冻结阈值验收能量漂移、热力学与结构统计、双向同构型静态回放和跨 rank 数重启。将清单要求的派生例、参考身份、原始检查点、失败及重跑逐一归档。
-- [ ] 交付可重算的完整覆盖表。资源未落实或个别格缺失时保留待测状态。四卡 nightly 在自己的 profile 登记。明确本次使用的物理节点与结论适用范围。
+- [ ] 到机后实录 GPU 型号、8 个 UUID、PCIe/NUMA 拓扑、逐 rank 的 CPU/GPU 绑定及驱动、CUDA、MPI、UCX 版本。若为 RTX 5090，构建须显式包含 `sm_120`（架构参数含 `120`）。记录候选的构建参数与哈希，并核对能在该机运行的普通 GPUMD 5.9.1 `11ba6fb` 参考构建及实际二进制 SHA-256。
+- [ ] 以 8 rank 分别做 HostStaged、CudaAware 预检，实测 GPU 点对点访问和 UCX `cuda_ipc`。CudaAware 须有 `cuda_aware_p2p_self_test=passed`。发生回退时归档实际后端和原因，两后端均通过后才进入矩阵。
+- [ ] 同一台机器、同一候选重跑 release 清单全部 7 例、种子 0 至 4、P=1/2/4/8 与双后端。碳、水、BaTiO₃-ZBL 的 NVE 和 NVT Berendsen 各 100,000 步，4 个派生例按清单核对静态量与短轨迹。逐格核对输入、实际路径、步数、输出与退出码。
+- [ ] 按冻结阈值核对漂移、热力学和结构统计、双向同构型回放及跨 rank 重启。将原始检查点、参考身份、失败或重跑记录与结果关联，回放及重启同在该八卡机完成。
+- [ ] 交付可重算的完整单机覆盖表，资源或格缺失时保留待测。L20 上的 nightly、截至 P4 的 release 和三项性能报告各按原站点单列。
 
 ## 依据
 
-[V1.0 验收规格，用户故事 2、6、7、13、19、20](../../v1-release-readiness/spec.md) · [决策 05 八卡发布资源](../../v1-release-readiness/issues/05-eight-gpu-release-site.md) · [长程 profile 与矩阵](../../../tests/long_nve/README.md) · [冻结 golden 与误差约定](../../../docs/standards/golden-test-standard.md)
+[V1.0 验收规格，用户故事 2、6、7、13、19、20](../../v1-release-readiness/spec.md) · [决策 05 八卡发布资源](../../v1-release-readiness/issues/05-eight-gpu-release-site.md#answer) · [长程 profile 与矩阵](../../../tests/long_nve/README.md) · [冻结 golden 与误差约定](../../../docs/standards/golden-test-standard.md) · [决策 02 长短程参考迁移](../../v1-release-readiness/issues/02-long-regression-reference.md#answer)

@@ -12,11 +12,11 @@ Blocked by: 10, 11, 12, 13
 
 ## 验收条件
 
-- [ ] 交付有版本标识的三个输入包、单卡与局部 2/4 卡启动方式、支持范围、失败后的重跑和跨卡 restart 示例。让组员或独立普通账号从新作业目录按说明启动，核对退出码、分派、thermo、轨迹和 restart。
-- [ ] 逐材料索引已通过的 SCR 科学报告、Berendsen 预平衡，以及三份正式外部对标与 DMG-MD 自身强扩展和缓存选择。单卡、同卡数跨引擎、WPE 跨资源迁移及自身扩展各有可追溯分母。
-- [ ] 对照实际采用的候选、缓存配置、快照和输出核查报告的身份。发生影响结论的更改时复跑受影响的科学或计时格。逐格核对可比项均已实测、不可比项有证据，保留较慢或区间未分辨的结果。
-- [ ] 在试用材料中记录单节点验收结论、复现命令和当前限制。将限定于既有配置的 G-A、G-B、DN0–DN4 回归及其历史结果注明范围。
+- [ ] 交付版本化的三个输入包、普通单卡与局部 2/4 卡启动方式、失败后的重跑和跨卡 restart 示例。组员或独立普通账号从新作业目录复跑，不设置缓存环境变量，在日志核对 13 的实际默认分派，检查退出码、thermo、轨迹和 restart。
+- [ ] 逐材料索引 09 的三份 `PASS`、Berendsen 预平衡、13 在最终候选上的内部对照与自身强扩展，以及 10–12 在同一候选上的三项外部报告。列出单卡、同卡数跨引擎、WPE 迁移和强扩展各自的绝对时长与分母。
+- [ ] 对照实际采用的候选、缓存配置、快照和输出核查报告的身份。发生影响结论的更改时复跑受影响的科学或计时格。保存复验结果与候选身份的对应关系。
+- [ ] 在试用说明中登记 4 × L20 的复现命令、结果与限制。每个可比格有实测，不适用格附原因与日志，较慢或未能分辨的比值照实交付。既有 G-A、G-B、DN0–DN4 按各自范围引用。
 
 ## 依据
 
-[V1.0 验收规格，用户故事 1、2、4、7、8、9、10、11、12、21、22](../../v1-release-readiness/spec.md) · [NPT 对标矩阵与采样规程](../../../docs/status/performance/npt-benchmarks.md#performance-matrix) · [开发进度与试用顺序](../../../docs/plans/dmg-md-v1.0-progress.md) · [原生部署与环境自检](../../../docs/operations/deployment.md)
+[V1.0 验收规格，用户故事 1、2、4、7、8、9、10、11、12、21、22](../../v1-release-readiness/spec.md) · [NPT 对标矩阵与采样规程](../../../docs/status/performance/npt-benchmarks.md#performance-matrix) · [开发进度与试用顺序](../../../docs/plans/dmg-md-v1.0-progress.md) · [原生部署与环境自检](../../../docs/operations/deployment.md) · [决策 04 区组计时与 DN5 默认策略](../../v1-release-readiness/issues/04-dn5-timing-and-adoption.md#answer) · [决策 06 引擎身份与控压可比性](../../v1-release-readiness/issues/06-three-engine-provenance.md#answer)
