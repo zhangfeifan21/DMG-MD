@@ -25,6 +25,8 @@ Label: wayfinder:map
 
 - [为完整长程发布矩阵确认可用的八卡环境](issues/05-eight-gpu-release-site.md): 2026-12 下旬预计到位 1–2 台 8 × RTX 5090 单机；完整 release 矩阵全部在同一台 8 卡机运行，构建须加入 sm_120，实测拓扑与后端探针由实施工单 21 在启动前记录；V1.0 性能只在 L20 取得
 
+- [同卡数引擎的身份与 NPT 可比工况怎样核验](issues/06-three-engine-provenance.md): 按日志标记、UUID/telemetry 和势哈希核验三引擎身份，失败作废重跑；SCR 只配对普通 GPUMD 与 WPE，LAMMPS 无 SCR 列不适用；LAMMPS Berendsen 经同快照物理对照通过才配对；另补四引擎同卡数 NVE 单列
+
 ## Not yet specified
 
 扩大后的水或铜若出现长自相关、盒形不再满足分区条件，或局部计算节省的时间被通信与输出抵消，需要先导数据才能定位原因，再定义应补的实验。待清楚到可以表述成具体问题时，新增工单。
