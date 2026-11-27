@@ -37,4 +37,4 @@ DMG-MD 将同一条分子动力学轨迹的计算分给多张 GPU。每个 MPI �
 
 显式设置 `DMGMD_DOMAIN_NPT=affine` 后，局部 NPT 作业的日志需要同时出现 `DMGMD_DOMAIN mode=m2a` 和 `DMGMD_DOMAIN_NPT mode=affine`。`rebuild` 模式同样需要确认 `m2a` 及对应的 NPT 模式。四个进程各绑定一张 GPU，只说明设备分配成功；全量复制仍会让各卡计算全体系的 NEP 力。[当前分派代码](../../src/runtime.cu)
 
-已确定、尚待实现的生产规则要求：单卡运行，或在多卡上真正使用局部域分解。这一规则适用于所有势和系综。显式多卡请求不合格时，所有进程须在积分和科学输出前一致非零退出。诊断给出原因和可执行的单卡命令；只有较少卡数已经通过资格检查时，才推荐该卡数。当前程序仍有启动回退，开发任务见[进度](../plans/dmg-md-v1.0-progress.md)。
+显式局部 NPT 作业的初始盒未通过局部资格检查时，程序在积分和写科学输出前退出。诊断给出失败条件和单卡重跑命令。启动日志中的 `m1-fallback` 只记录资格判定，判读时还要看退出码。含 NPT 的普通多卡命令仍默认使用全量复制，工单 13 负责选定并复验生产默认策略。[双卡与四卡实测](../status/validation/domain-npt-validation.md#local-box-restart-20261127) · [开发进度](../plans/dmg-md-v1.0-progress.md)

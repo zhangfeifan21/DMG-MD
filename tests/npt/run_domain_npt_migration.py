@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Audit NPT manager epochs against actual per-frame boxes, positions and logs.
-
-The adjacent case manifest is preregistered for review, not a passed test. Use
-only after a deliberate GPU scheduling decision; output includes all evidence.
-"""
+"""Validate NPT ownership at each output and compare with the same-input P1 run."""
 import argparse
-import hashlib
 import itertools
 import json
 import math
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +16,7 @@ import run_domain_npt_contracts as contracts
 import check_environment
 
 CASES = HERE / 'domain-npt-migration-cases.json'
+PROBE_SOURCE = HERE / 'domain_npt_migration_pmpi.cpp'
 
 
 def model_text(spec, case):
@@ -83,7 +80,8 @@ def verify_replay(initial, frames, log, ranks, name, mode):
     previous_owners = manager.copy()
     epochs = [int(layouts[(0, r)]['epoch']) for r in range(ranks)]
     if len(set(epochs)) != 1: raise ValueError('initial epoch mismatch')
-    changes, no_migration_rebuilds, geometric_crossings, multi_slab = [], 0, 0, False
+    changes, managers = [], []
+    no_migration_rebuilds, geometric_crossings, multi_slab = 0, 0, False
     periodic_crossings = set()
     previous_x, previous_length = x0, length0
     for step, (length, xs, geometric) in enumerate(states, 1):
@@ -130,6 +128,7 @@ def verify_replay(initial, frames, log, ranks, name, mode):
             # Require a jump > half the box, excluding force-driven tiny sign reversals.
             if abs(raw) > 0.5 * previous_length and ((v > 0 and raw < 0) or (v < 0 and raw > 0)):
                 periodic_crossings.add((step, gid))
+        managers.append(manager.copy())
         previous_owners, previous_x, previous_length = geometric, xs, length
     if any(step > len(frames) for step, _ in layouts | migrations): raise ValueError('event after final frame')
     if name == 'micro' and mode == 'affine':
@@ -146,10 +145,38 @@ def verify_replay(initial, frames, log, ranks, name, mode):
             raise AssertionError('missing repeated migration of a gid')
         if ranks == 4 and not multi_slab: raise AssertionError('missing non-neighbor multi-slab migration')
     return {'geometric_crossings': geometric_crossings, 'transitions': changes,
+            'expected_managers': managers,
             'no_migration_rebuilds': no_migration_rebuilds, 'periodic_crossings': sorted(periodic_crossings),
             'non_neighbor_migration': multi_slab, 'initial_length_A': length0,
             'final_length_A': states[-1][0]}
 
+
+def verify_owned_snapshots(log, ranks, managers):
+    observed = {}
+    for line in log.splitlines():
+        if not line.startswith('DMGMD_TEST_OWNED '):
+            continue
+        fields = re.fullmatch(r'DMGMD_TEST_OWNED snapshot=(\d+) rank=(\d+) root=(\d+) '
+                              r'count=(\d+) gids="([\d,]*)"', line)
+        if fields is None:
+            raise ValueError(f'malformed owned GID witness: {line}')
+        step, rank, root, count = map(int, fields.groups()[:4])
+        gids = [int(gid) for gid in fields[5].split(',')] if fields[5] else []
+        if ((step, rank) in observed or step not in range(1, len(managers) + 1) or
+                rank not in range(ranks) or root != 0 or len(gids) != count):
+            raise ValueError(f'invalid owned GID witness: {line}')
+        observed[step, rank] = gids
+    snapshots = []
+    for step, manager in enumerate(managers, 1):
+        by_rank = []
+        for rank in range(ranks):
+            expected = [gid for gid, owner_rank in enumerate(manager) if owner_rank == rank]
+            actual = observed.get((step, rank))
+            if actual != expected:
+                raise ValueError(f'step {step} rank {rank}: owned GIDs {actual}, expected {expected}')
+            by_rank.append(actual)
+        snapshots.append(by_rank)
+    return snapshots
 
 
 def main():
@@ -169,8 +196,17 @@ def main():
     if not ranks or any(x not in (2, 4) for x in ranks) or len(devices) < max(ranks) or len(set(devices)) != len(devices):
         p.error('invalid ranks or insufficient unique devices')
     if not backends or any(x not in ('HostStaged', 'CudaAware') for x in backends): p.error('invalid backend')
-    mpiexec = check_environment.validate_environment(candidate, 'mpiexec', devices, max(ranks), a.timeout)
+    gpu_uuids = contracts.physical_gpu_uuids(devices[:max(ranks)])
+    mpiexec = check_environment.validate_environment(candidate, 'mpiexec', gpu_uuids, max(ranks), a.timeout)
     root.mkdir(parents=True, exist_ok=False)
+    probe = root / 'domain_npt_migration_pmpi.so'
+    probe_command = ['mpicxx', '-std=c++17', '-shared', '-fPIC', str(PROBE_SOURCE), '-o', str(probe)]
+    subprocess.run(probe_command, check=True, env={**os.environ, 'TMPDIR': str(root)})
+    # Each MPI job starts one directory below the probe. LD_PRELOAD splits
+    # on whitespace and colons, both of which may occur in the work root.
+    preload = "../" + probe.name
+    if os.environ.get('LD_PRELOAD'):
+        preload += ':' + os.environ['LD_PRELOAD']
     fixture_root = root / 'fixtures'; fixture_root.mkdir()
     potential = contracts.ROOT / 'tests/baseline/inputs/potentials/nep_C.txt'
     tolerances = json.loads((contracts.ROOT / 'tests/baseline/manifest.json').read_text())['tolerances']
@@ -182,38 +218,64 @@ def main():
     result = {'schema': 'dmgmd.domain-npt.migration-result.v1', 'status': 'RUNNING',
               'candidate_sha256': contracts.sha(candidate), 'case_manifest_sha256': contracts.sha(CASES),
               'runner_sha256': contracts.sha(Path(__file__)), 'potential_sha256': contracts.sha(potential),
-              'models_sha256': fixture_inventory, 'records': records}
+              'models_sha256': fixture_inventory, 'records': records,
+              'physical_gpu_uuids': dict(zip(devices, gpu_uuids)), 'tolerances': tolerances,
+              'owned_probe': {'build_command': probe_command, 'source_sha256': contracts.sha(PROBE_SOURCE),
+                              'sha256': contracts.sha(probe)}}
     def save(): (root / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
+    def launch(stage, rank, backend, mode, model, run):
+        extra_env = {'LD_PRELOAD': preload} if mode != 'off' else None
+        contracts.execute(stage, candidate, mpiexec, rank, backend, mode, gpu_uuids,
+                          a.timeout, model, potential, run, records, extra_env=extra_env)
+        log = (stage / 'stdout.log').read_text(errors='replace')
+        records[-1]['rank_bindings'] = contracts.verify_binding(log, gpu_uuids[:rank], backend)
+        route = next(line for line in log.splitlines() if line.startswith('DMGMD_DOMAIN '))
+        fields = dict(item.split('=', 1) for item in route.split()[1:])
+        if fields.get('ranks') != str(rank):
+            raise ValueError(f'wrong rank count in route: {route}')
+        if mode == 'off' and fields.get('mode') != 'm1':
+            raise ValueError(f'expected replicated NPT reference: {route}')
+        if mode != 'off' and fields.get('axis') != 'x':
+            raise ValueError(f'expected the frozen case to partition along x: {route}')
+        records[-1]['route'] = fields
+        return log
+
     try:
-        for name, ensemble, rank, backend in itertools.product(spec['cases'], ('npt_ber','npt_scr'), ranks, backends):
-            model = fixture_root / f'{name}.xyz'; run = run_text(spec, ensemble)
-            ref = None
-            for mode in ('off', 'rebuild', 'affine'):
-                stage = root / f'{name}-{ensemble}-p{rank}-{backend}-{mode}'
-                try:
-                    contracts.execute(stage, candidate, mpiexec, rank, backend, mode, devices,
-                                      a.timeout, model, potential, run, records)
-                    if mode == 'off':
-                        ref = stage
-                        initial_length = frame_state(contracts.baseline.parse_xyz(stage / 'model.xyz')[0], rank)[0]
-                        off_frames = contracts.baseline.parse_xyz(stage / 'trajectory.xyz')
-                        if not any(frame_state(frame, rank)[0] != initial_length for frame in off_frames):
-                            raise AssertionError('off reference has no actual box change')
-                    else:
-                        records[-1]['comparison'] = contracts.compare(ref, stage, tolerances)
-                        initial = contracts.baseline.parse_xyz(stage / 'model.xyz')[0]
-                        frames = contracts.baseline.parse_xyz(stage / 'trajectory.xyz')
-                        if len(frames) != spec['steps']: raise ValueError('unexpected frame count')
-                        log = (stage / 'stdout.log').read_text(errors='replace')
-                        records[-1]['manager_replay'] = verify_replay(initial, frames, log, rank, name, mode)
-                except Exception as error:
-                    if records: records[-1].update(status='FAIL', error=str(error))
-                    raise
-                finally: save()
+        for name, ensemble in itertools.product(spec['cases'], ('npt_ber', 'npt_scr')):
+            model = fixture_root / f'{name}.xyz'
+            run = run_text(spec, ensemble)
+            p1 = root / f'{name}-{ensemble}-p1-HostStaged-off'
+            launch(p1, 1, 'HostStaged', 'off', model, run)
+            save()
+            for rank, backend in itertools.product(ranks, backends):
+                ref = root / f'{name}-{ensemble}-p{rank}-{backend}-off'
+                launch(ref, rank, backend, 'off', model, run)
+                initial = contracts.baseline.parse_xyz(ref / 'model.xyz')[0]
+                initial_length = frame_state(initial, rank)[0]
+                off_frames = contracts.baseline.parse_xyz(ref / 'trajectory.xyz')
+                if not any(frame_state(frame, rank)[0] != initial_length for frame in off_frames):
+                    raise AssertionError('off reference has no actual box change')
+                save()
+                for mode in ('rebuild', 'affine'):
+                    stage = root / f'{name}-{ensemble}-p{rank}-{backend}-{mode}'
+                    log = launch(stage, rank, backend, mode, model, run)
+                    records[-1]['comparison'] = contracts.compare(ref, stage, tolerances)
+                    records[-1]['p1_reference'] = p1.name
+                    records[-1]['p1_comparison'] = contracts.compare(p1, stage, tolerances)
+                    frames = contracts.baseline.parse_xyz(stage / 'trajectory.xyz')
+                    replay = verify_replay(initial, frames, log, rank, name, mode)
+                    managers = replay.pop('expected_managers')
+                    records[-1]['manager_replay'] = replay
+                    records[-1]['owned_gids_by_frame_and_rank'] = verify_owned_snapshots(log, rank, managers)
+                    save()
         result['status'] = 'PASS'
     except Exception as error:
-        result.update(status='FAIL', error=str(error)); raise
-    finally: save()
+        if records:
+            records[-1].update(status='FAIL', error=str(error))
+        result.update(status='FAIL', error=str(error))
+        raise
+    finally:
+        save()
 
 
 if __name__ == '__main__': main()

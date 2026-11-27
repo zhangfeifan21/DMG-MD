@@ -2,6 +2,8 @@
 """CPU tests of the dynamic-box manager replay and frozen input contracts."""
 import json
 import unittest
+from unittest import mock
+import run_domain_npt_contracts as contracts
 import run_domain_npt_migration as migration
 
 
@@ -75,6 +77,64 @@ class MigrationOracleTests(unittest.TestCase):
         logs = [layout(0,1,0,1), layout(0,1,1,1), layout(2,2,0,1), layout(2,2,1,1)]
         result = migration.verify_replay(initial, frames, '\n'.join(logs), 2, 'quiet', 'rebuild')
         self.assertEqual(result['no_migration_rebuilds'], 1)
+
+    def test_snapshot_witness_checks_gid_membership_and_root(self):
+        logs = [
+            'DMGMD_TEST_OWNED snapshot=1 rank=0 root=0 count=1 gids="1"',
+            'DMGMD_TEST_OWNED snapshot=1 rank=1 root=0 count=2 gids="0,2"',
+        ]
+        self.assertEqual(migration.verify_owned_snapshots('\n'.join(logs), 2, [[1, 0, 1]]),
+                         [[[1], [0, 2]]])
+        with self.assertRaisesRegex(ValueError, 'owned GIDs'):
+            duplicate_gid = logs[1].replace('0,2', '0,1')
+            migration.verify_owned_snapshots('\n'.join([logs[0], duplicate_gid]), 2, [[1, 0, 1]])
+        with self.assertRaisesRegex(ValueError, 'owned GIDs'):
+            swapped = [logs[0].replace('gids="1"', 'gids="0"'),
+                       logs[1].replace('gids="0,2"', 'gids="1,2"')]
+            migration.verify_owned_snapshots('\n'.join(swapped), 2, [[1, 0, 1]])
+        with self.assertRaisesRegex(ValueError, 'owned GIDs'):
+            migration.verify_owned_snapshots(logs[0], 2, [[1, 0, 1]])
+        with self.assertRaisesRegex(ValueError, 'invalid owned GID witness'):
+            migration.verify_owned_snapshots('\n'.join(logs).replace('root=0', 'root=1'), 2, [[1, 0, 1]])
+        with self.assertRaisesRegex(ValueError, 'invalid owned GID witness'):
+            migration.verify_owned_snapshots('\n'.join(logs + logs[:1]), 2, [[1, 0, 1]])
+
+    def test_binding_checks_expected_physical_gpu_and_backend(self):
+        uuids = ['GPU-00000000-0000-0000-0000-000000000001', 'GPU-00000000-0000-0000-0000-000000000002']
+        logs = [
+            f'DMGMD_MPI rank={rank} world_size=2 local_rank={rank} cuda_device={rank} '
+            f'cuda_uuid={uuid[4:].replace("-", "")} cuda_name="NVIDIA L20" backend=CudaAware '
+            'cuda_aware_self_test=passed cuda_aware_p2p_self_test=passed'
+            for rank, uuid in enumerate(uuids)
+        ]
+        records = contracts.verify_binding('\n'.join(reversed(logs)), uuids, 'CudaAware')
+        self.assertEqual([record['rank'] for record in records], ['0', '1'])
+        with self.assertRaisesRegex(ValueError, 'wrong GPU binding'):
+            contracts.verify_binding('\n'.join(logs), list(reversed(uuids)), 'CudaAware')
+        with self.assertRaisesRegex(ValueError, 'wrong communication backend'):
+            contracts.verify_binding('\n'.join(logs).replace('backend=CudaAware', 'backend=HostStaged'),
+                                     uuids, 'CudaAware')
+        swapped_local = [line.replace(f'local_rank={rank}', f'local_rank={1 - rank}')
+                         for rank, line in enumerate(logs)]
+        with self.assertRaisesRegex(ValueError, 'wrong GPU binding'):
+            contracts.verify_binding('\n'.join(swapped_local), uuids, 'CudaAware')
+        with self.assertRaisesRegex(ValueError, 'duplicate or unexpected rank'):
+            contracts.verify_binding('\n'.join(logs + logs[:1]), uuids, 'CudaAware')
+        with self.assertRaisesRegex(ValueError, 'missing MPI rank'):
+            contracts.verify_binding(logs[0], uuids, 'CudaAware')
+        with self.assertRaisesRegex(ValueError, 'missing CudaAware self-test'):
+            contracts.verify_binding('\n'.join(logs).replace('cuda_aware_p2p_self_test=passed',
+                                                               'cuda_aware_p2p_self_test=failed'),
+                                     uuids, 'CudaAware')
+
+    def test_device_resolution_preserves_requested_order_and_rejects_aliases(self):
+        first = 'GPU-00000000-0000-0000-0000-000000000001'
+        second = 'GPU-00000000-0000-0000-0000-000000000002'
+        inventory = f'0, {first}\n2, {second}\n'
+        with mock.patch.object(contracts.subprocess, 'run', return_value=mock.Mock(stdout=inventory)):
+            self.assertEqual(contracts.physical_gpu_uuids([second, '0']), [second, first])
+            with self.assertRaisesRegex(ValueError, 'same physical GPU'):
+                contracts.physical_gpu_uuids(['0', first])
 
     def test_frozen_parameters_and_force_noop_thermostat(self):
         spec = json.loads(migration.CASES.read_text())

@@ -70,7 +70,7 @@ int main(int argc, char** argv)
       const dmgmd::PotentialMetadata potential =
           dmgmd::load_potential_metadata(*potential_filename);
       dmgmd::Model model = dmgmd::parse_model_file("model.xyz", potential);
-      dmgmd::run_replicated(program, std::move(model), *potential_filename, mpi);
+      dmgmd::run_replicated(program, std::move(model), *potential_filename, argv[0], mpi);
       return EXIT_SUCCESS;
     } catch (const dmgmd::InputError& error) {
       mpi.report_error("input", describe_input_error(error));

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """CPU checks for the operational runner's generated input and fail-closed route."""
+from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 import run_domain_npt as domain
 import run_domain_npt_contracts as runner
 import run_domain_npt_negatives as negatives
 import run_domain_npt_pmpi as pmpi
+import run_domain_npt_restarts as restarts
+import run_domain_npt_stop_boundary as stop_boundary
 
 
 class ContractInputTests(unittest.TestCase):
@@ -65,6 +69,83 @@ class ContractInputTests(unittest.TestCase):
             collector.return_value.stats = {}
             runner.compare(Path('/left'), Path('/right'), {})
         self.assertEqual([call[2]['kind'] for call in calls], ['xyz', 'restart'])
+
+    def test_restart_freeze_checks_registered_metadata_and_input_set(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = root / "candidate"
+            candidate.write_bytes(b"candidate")
+            freeze_root = root / "freeze"
+            restarts.freeze(candidate, freeze_root)
+            frozen = restarts.load_freeze(candidate, freeze_root)
+            freeze_path = freeze_root / "freeze.json"
+            changes = {
+                "files": {key: digest for key, digest in frozen["files"].items()
+                          if key != restarts.MODEL},
+                "seed": "9",
+                "steps": 5,
+                "tolerances": {**frozen["tolerances"], "velocity": {"atol": 1, "rtol": 1}},
+            }
+            for key, value in changes.items():
+                with self.subTest(key=key):
+                    restarts.save(freeze_path, {**frozen, key: value})
+                    with self.assertRaisesRegex(ValueError, "freeze metadata"):
+                        restarts.load_freeze(candidate, freeze_root)
+
+            restarts.save(freeze_path, frozen)
+            model = freeze_root / restarts.MODEL
+            model.unlink()
+            with self.assertRaisesRegex(ValueError, "file set"):
+                restarts.load_freeze(candidate, freeze_root)
+            model.write_bytes(b"different snapshot")
+            with self.assertRaisesRegex(ValueError, "input bytes"):
+                restarts.load_freeze(candidate, freeze_root)
+
+    def test_nvt_template_rejects_missing_or_multiple_ensemble_commands(self):
+        expected = restarts.run_text("nvt_nhc")
+        self.assertIn("\nensemble nvt_nhc 300 300 40\n", expected)
+        for template in ("ensemble npt_ber 300 300 40 0 425 201\nrun 4\n",
+                         "ensemble npt_ber 300 300 40 0 425 200\nensemble nve\nrun 4\n"):
+            with mock.patch.object(runner, "run_text", return_value=template), \
+                 self.assertRaisesRegex(ValueError, "one frozen command"):
+                restarts.run_text("nvt_nhc")
+
+    def test_restart_reset_requires_each_controller_field_to_exceed_full_tolerance(self):
+        def frame(velocity, lattice):
+            return {"fields": {"Lattice": f"{lattice} 0 0 0 1 0 0 0 1"},
+                    "properties": [("vel", "R", 3)], "rows": [[str(velocity), "0", "0"]]}
+
+        args = SimpleNamespace(freeze=Path("/fixture"),
+                               frozen={"tolerances": {category: {"atol": 0.2, "rtol": 0.1}
+                                                      for category in ("velocity", "lattice")}})
+        checkpoint_prefix = [frame(1.0, 1.0)] * restarts.STEPS
+        continuation = checkpoint_prefix + [frame(1.0, 1.0)]
+
+        def check(ensemble, velocity, lattice):
+            with mock.patch.object(restarts, "launch"), mock.patch.object(restarts, "save"), \
+                 mock.patch.object(restarts.baseline, "parse_xyz",
+                                   side_effect=[checkpoint_prefix, continuation, [frame(velocity, lattice)]]):
+                return restarts.reset_control(args, Path("/producer"), Path("/fresh"), ensemble,
+                                              1, "HostStaged", Path("/uninterrupted"))
+
+        for ensemble in ("nvt_nhc", "nvt_bdp", "npt_scr"):
+            with self.subTest(ensemble=ensemble), self.assertRaisesRegex(ValueError, "vel"):
+                check(ensemble, 1.25, 1.4)
+        with self.assertRaisesRegex(ValueError, "Lattice"):
+            check("npt_scr", 1.4, 1.25)
+        self.assertEqual(check("nvt_nhc", 1.4, 1.0)["required_fields"], ("vel",))
+        self.assertEqual(check("nvt_bdp", 1.4, 1.0)["comparisons"]["vel"]["above_tolerance_count"], 1)
+        result = check("npt_scr", 1.4, 1.4)
+        for stats in result["comparisons"].values():
+            self.assertEqual(stats["above_tolerance_count"], 1)
+            self.assertAlmostEqual(stats["first_above_tolerance"]["allowed_abs_diff"], 0.3)
+
+    def test_preflight_ranks_from_mpi_abort_stderr(self):
+        error = 'category=input message="domain NPT box preflight failed step=3"'
+        log = "\n".join([f"DMGMD_ERROR rank=0 {error}", "MPI_ABORT was invoked",
+                         f"\x00DMGMD_ERROR rank=1 {error}", f"DMGMD_ERROR rank=0 {error}",
+                         'DMGMD_ERROR rank=2 category=input message="other failure"'])
+        self.assertEqual(stop_boundary.preflight_error_ranks(log), [0, 1])
 
     def test_sparse_fixture_preserves_box_and_two_atoms(self):
         model = '3\nbox header\nC 1 2 3 12 1 0 0\nC 2 3 4 12 0 1 0\nC 3 4 5 12 0 0 1\n'

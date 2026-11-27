@@ -1,6 +1,6 @@
 # 03: 验证变盒、输出与跨卡重启
 
-Status: ready-for-agent
+Status: completed-by-agent
 
 Blocked by: 02
 
@@ -21,3 +21,11 @@ Blocked by: 02
 ## 依据
 
 [V1.0 验收规格，用户故事 2、5、6、7、13](../../v1-release-readiness/spec.md) · [局部域 NPT 合同](../../../docs/standards/domain-npt.md) · [MPI 域分解回归](../../../tests/mpi/README.md) · [恒温器与重启回归](../../../tests/thermostats/README.md) · [决策 04 区组计时与 DN5 默认策略](../../v1-release-readiness/issues/04-dn5-timing-and-adoption.md#answer)
+
+## Comments
+
+- 2026-11-27，Codex 已认领。先用空闲 GPU 验证单卡和双卡，四卡批次等待 01 释放设备。
+
+- 2026-11-27，维护者确认代码，五项验收完成。单节点 L20 上，双卡和四卡各通过 42 个变盒迁移作业、8 个启动拒绝与积分停止用例。显式局部作业覆盖两种通信后端及 `rebuild`、`affine`。过窄初始盒在写文件前退出，诊断中的单卡命令可直接运行。收缩用例的第 3 步在提交前停止，三份输出与独立两步作业逐字节一致。
+- 实际跨界后，每个全局 ID 仍有唯一负责进程。逐帧能量、压力和 virial 通过单卡对照，只有 rank 0 写科学输出。1、2、4 卡间六种增减方向共 64/64 个重启目标通过，NHC、BDP 和 SCR 均按新作业重置。[验收数值与构建身份](../../../docs/status/validation/domain-npt-validation.md#local-box-restart-20261127) · [复跑命令](../../../tests/npt/README.md#local-box-restart)
+- L20 的日志、原始输出、冻结清单及差异保存在 `~/DMG-MD-Project/scratch/ticket03-20261127/`。在 `3e8f1c5` 上独立复建后，四卡停止用例及 44/44 项 CTest 通过。实现和结单记录同次提交，可用 `git log -1 --format=%H --grep='^验证局部 NPT 变盒、输出与跨卡重启$'` 查询。

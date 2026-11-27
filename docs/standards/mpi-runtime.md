@@ -17,7 +17,7 @@ DMG-MD 每个 MPI 进程（rank）使用一张 GPU。全量复制模式下，每
 
 程序在启动时为整份作业选择模式。`run_replicated` 每 rank 只加载一次 NEP 参数，选好模式后再分配工作区（deferred workspace）。
 
-单 rank 始终使用全量复制模式。多 rank 拒绝三斜盒和带非周期方向的盒。正交全周期盒的各方向厚度须大于 `2.5*(rc_radial_max+1)`，并满足 `slab_width≥d_coord` 和半径证明，才具备局部域分解资格。已满足基础盒约束但局部资格不足时，当前实现选全量复制模式。
+单 rank 始终使用全量复制模式。多 rank 拒绝三斜盒和带非周期方向的盒。正交全周期盒的各方向厚度须大于 `2.5*(rc_radial_max+1)`，并满足 `slab_width≥d_coord` 和半径证明，才具备局部域分解资格。多卡作业需要局部域分解但初始局部资格不足时，各 rank 在写科学输出前集体退出。内部对照可在所有 rank 一致设置 `DMGMD_FORCE_M1_REPLICATED=1`，允许失格作业使用全量复制。
 
 任一 NPT 声明默认使整份作业使用全量复制。显式 `DMGMD_DOMAIN_NPT=rebuild|affine`
 可以按[实验合同](domain-npt.md)进入局部域分解。普通分派或实验 NPT 的初始资格判定输出
@@ -27,7 +27,7 @@ DMG-MD 每个 MPI 进程（rank）使用一张 GPU。全量复制模式下，每
 DMGMD_DOMAIN mode=m2a|m1-fallback axis=x|y|z|none d_dep=... d_coord=... reason=...
 ```
 
-D-013 规定了待实现的生产路由。生产版提供单卡和局部多卡两种入口。用户显式请求多卡时，应用应在积分前拒绝不具备局部资格的作业。当前实现仍按上述规则回退。[生产路由决策](architecture-decisions.md#production-domain-routing)
+失格诊断之前也会输出 `mode=m1-fallback`。这行只记录资格判定，需结合退出码确认作业是否运行。显式局部 NPT 的单卡恢复和积分中停止已在双卡、四卡验证，普通多卡 NPT 的生产默认策略由工单 13 复验。[生产路由决策](architecture-decisions.md#production-domain-routing) · [实测记录](../status/validation/domain-npt-validation.md#local-box-restart-20261127)
 
 局部域分解可以在交换边界坐标时，先提交只依赖本地原子的求力工作。分区（O2）识别这部分工作，通信接口（O3）提供发起和完成两个调用，重叠调度（O4）在两者之间提交计算。分区和重叠默认关闭。[数据布局](data-layout.md) · [NEP 内核依赖](../reference/kernel-inventory.md) · [分区与重叠](domain-partition.md)
 

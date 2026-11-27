@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -25,6 +26,47 @@ import run_mpi_migration as migration
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def physical_gpu_uuids(devices):
+    """Resolve the requested device order to distinct physical GPUs."""
+    result = subprocess.run(
+        ['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader',
+         '--id=' + ','.join(devices)], check=True, capture_output=True, text=True)
+    inventory = {}
+    for row in result.stdout.splitlines():
+        index, uuid = (item.strip() for item in row.split(',', 1))
+        inventory.update({index: uuid, uuid: uuid})
+    uuids = [inventory[device] for device in devices]
+    if len(set(uuids)) != len(uuids):
+        raise ValueError('multiple device selectors refer to the same physical GPU')
+    return uuids
+
+
+def verify_binding(log, expected_uuids, backend):
+    """Check the rank-to-physical-device map independent of log ordering."""
+    bindings = {}
+    for line in log.splitlines():
+        if not line.startswith('DMGMD_MPI rank='):
+            continue
+        fields = dict(re.findall(r'(\w+)=("[^"]*"|[^\s]+)', line))
+        rank = int(fields['rank'])
+        if rank in bindings or rank not in range(len(expected_uuids)):
+            raise ValueError(f'duplicate or unexpected rank in MPI binding: {line}')
+        uuid = expected_uuids[rank].removeprefix('GPU-').replace('-', '').lower()
+        if (fields.get('cuda_uuid', '').lower() != uuid or
+                fields.get('local_rank') != str(rank) or fields.get('cuda_device') != str(rank) or
+                fields.get('world_size') != str(len(expected_uuids))):
+            raise ValueError(f'wrong GPU binding: {line}')
+        if fields.get('backend') != backend or 'requested_CudaAware_fallback' in fields:
+            raise ValueError(f'wrong communication backend: {line}')
+        if backend == 'CudaAware' and any(fields.get(key) != 'passed' for key in
+                ('cuda_aware_self_test', 'cuda_aware_p2p_self_test')):
+            raise ValueError(f'missing CudaAware self-test: {line}')
+        bindings[rank] = fields
+    if set(bindings) != set(range(len(expected_uuids))):
+        raise ValueError('missing MPI rank bindings')
+    return [bindings[rank] for rank in range(len(expected_uuids))]
 
 
 def run_text(ensemble, scenario):
@@ -132,7 +174,8 @@ def validate_late_unwrapped(stage, tolerances):
     return {'coordinates_checked': checked, 'comparison': collector.stats}
 
 
-def execute(stage, executable, mpiexec, rank, backend, mode, devices, timeout, model, potential, run, records):
+def execute(stage, executable, mpiexec, rank, backend, mode, devices, timeout, model, potential, run, records,
+            *, extra_env=None):
     stage.mkdir()
     shutil.copyfile(model, stage / 'model.xyz')
     shutil.copyfile(potential, stage / 'nep.txt')
@@ -141,12 +184,16 @@ def execute(stage, executable, mpiexec, rank, backend, mode, devices, timeout, m
     env.update(CUDA_VISIBLE_DEVICES=','.join(devices[:rank]), CUDA_DEVICE_ORDER='PCI_BUS_ID',
                DMGMD_COMM_BACKEND=backend, DMGMD_DOMAIN_NPT=mode,
                DMGMD_DOMAIN_PARTITION='off', DMGMD_DOMAIN_OVERLAP='off',
+               DMGMD_DOMAIN_SCHEDULE='split', DMGMD_OVERLAP_TRACE='0',
                DMGMD_DOMAIN_DIAGNOSTICS='1', DMGMD_ENSEMBLE_SEED='12345678', OMP_NUM_THREADS='1')
+    env.update(extra_env or {})
     command = [str(mpiexec), '-n', str(rank), str(executable)]
     rec = {'stage': stage.name, 'command': command,
            'environment': {k: env[k] for k in ('CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER',
              'DMGMD_COMM_BACKEND', 'DMGMD_DOMAIN_NPT', 'DMGMD_DOMAIN_PARTITION',
-             'DMGMD_DOMAIN_OVERLAP', 'DMGMD_DOMAIN_DIAGNOSTICS', 'DMGMD_ENSEMBLE_SEED', 'OMP_NUM_THREADS')},
+             'DMGMD_DOMAIN_OVERLAP', 'DMGMD_DOMAIN_SCHEDULE', 'DMGMD_OVERLAP_TRACE',
+             'DMGMD_DOMAIN_DIAGNOSTICS', 'DMGMD_ENSEMBLE_SEED', 'OMP_NUM_THREADS',
+             *(extra_env or {}))},
            'input_sha256': {x: sha(stage / x) for x in ('model.xyz', 'nep.txt', 'run.in')}, 'status': 'RUNNING'}
     records.append(rec)
     try:

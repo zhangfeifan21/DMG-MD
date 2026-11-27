@@ -8,7 +8,7 @@ V1.0 面向读取 GPUMD 输入的普通经典 MD 作业。首批组内用户运�
 
 V1.0 的系综范围包括 NVE、Berendsen/NHC/BDP NVT，以及各向同性正交全周期盒的 Berendsen/SCR NPT。首版以公开碳、水、FCC 铜的 NPT 为先。SCR 验收生产科学结果，Berendsen 单列预平衡。性能要求三项外部对标全部报告，按逐材料、逐控压器的等价条件比较。[对标矩阵](../status/performance/npt-benchmarks.md#performance-matrix)
 
-已确定的生产规则要求，单卡可使用全系统实现，多卡必须真正分区。缺少局部实现的势或系综组合先开放单卡。启动资格不符时，在积分前集体退出；运行中变盒失格时，在提交新盒前一致终止。全量复制保留为显式内部数值对照。当前程序仍有启动回退，生产分派尚待实现。
+已确定的生产规则要求，单卡可使用全系统实现，多卡必须真正分区。缺少局部实现的势或系综组合先开放单卡。启动资格不符时，在积分前集体退出；运行中变盒失格时，在提交新盒前一致终止。全量复制保留为显式内部数值对照。显式局部 NPT 已通过启动拒绝和候选盒失格的验收，普通多卡 NPT 的默认策略由工单 13 选定并复验。[单节点验证](../status/validation/domain-npt-validation.md#local-box-restart-20261127)
 
 2026-10-30 的 G0-D2 曾用全量复制验收 B 阶段。2026-11-20 的生产分派决策不改变原 G-B 的实验方法和统计范围。[架构决策](../standards/architecture-decisions.md#production-domain-routing) · [控压器验收](../status/validation/npt-validation.md)
 

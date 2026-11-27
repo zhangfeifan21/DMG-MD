@@ -8,9 +8,9 @@
 | `rebuild` | 实际变盒后，在下次求力前强制重建，是对照基线 |
 | `affine` | 只有在形变及原子位移足够小、证明条件成立时才复用缓存，否则重建 |
 
-所有 rank 的变量设置状态和原始值必须一致。单 rank（P1）始终使用全量复制模式。多 rank（P>1）启动时须通过局部域分解几何检查，`affine` 还须通过 cell 索引上界检查。如果初始盒满足 NPT 的基础条件但不具备局部资格，当前实现回退到全量复制模式。进入局部积分后，任一候选盒失格都会使所有 rank 在提交前终止。
+所有 rank 的变量设置状态和原始值必须一致。单 rank（P1）始终使用全量复制模式。显式启用局部 NPT 的多 rank 作业须通过初始几何检查，`affine` 还须通过 cell 索引上界检查。局部资格不足时，程序在写科学输出前集体非零退出，诊断给出单卡重跑命令。仅在这种失格情形下，各 rank 一致设置内部测试开关 `DMGMD_FORCE_M1_REPLICATED=1` 可运行全量复制对照。进入局部积分后，任一候选盒失格都会使所有 rank 在提交前终止。
 
-日志同时出现 `DMGMD_DOMAIN mode=m2a` 和 `DMGMD_DOMAIN_NPT mode=rebuild|affine` 才能确认进入实验局部路径。[机器矩阵](../../tests/npt/domain-manifest.json)定义验收条件。实验已通过其中记录的 DN0–DN4 范围，DN5 性能、生产分派和跨节点均待验收。[2026-11-16 验收](../status/validation/domain-npt-validation.md#dn4-final-20261116)、[已决策待实现的生产路由](architecture-decisions.md#production-domain-routing)
+日志同时出现 `DMGMD_DOMAIN mode=m2a` 和 `DMGMD_DOMAIN_NPT mode=rebuild|affine` 才能确认进入实验局部路径。[机器矩阵](../../tests/npt/domain-manifest.json)定义验收条件。DN0–DN4 已按原冻结范围验收。双卡、四卡显式局部作业另通过变盒、输出与跨卡重启检查。DN5 性能、生产默认策略和跨节点仍待验收。[DN4 验收](../status/validation/domain-npt-validation.md#dn4-final-20261116) · [变盒与重启验收](../status/validation/domain-npt-validation.md#local-box-restart-20261127) · [生产路由](architecture-decisions.md#production-domain-routing)
 
 ## 启动作业
 
@@ -38,7 +38,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 DMGMD_DOMAIN_NPT=affine \
 
 - 同一快照的能量、力、全部 virial 分量和压力，以及变盒前后的差分。
 - 旧力、段首求力、多段切换、固定盒的随机数消费，以及跨 rank 数 restart。
-- 初始回退、积分途中几何失格、各 rank 设置不一致、空 rank 和通信计数。
+- 初始盒资格、积分途中几何失格、各 rank 设置不一致、空 rank 和通信计数。历史 DN0–DN4 矩阵保留当时的初始回退用例。当前显式局部作业检查启动拒绝及单卡恢复。
 
 机器矩阵列出应运行的项目，实际完成范围以验收记录为准。若新增项目需要不同阈值，应先通过独立重复基线冻结阈值，不根据候选结果放宽。
 
@@ -91,4 +91,4 @@ DN4 统计支持限于上述单节点条件。
 
 `DMGMD_DOMAIN_SUMMARY` 中的 `cache_reuses`、`cache_rebuilds`、`affine_invalid_rebuilds`、`affine_budget_rebuilds` 和 `box_rebuilds` 是本 rank 记录的段内全局判定次数。段首重建另沿用 `rebuild_steps` 的计数方式。
 
-首次建表和提交候选盒前，程序都检查实际 NEP cell 扫描的整数上界。初始盒不满足 `affine` 的索引条件时回退。运行途中候选盒失格时，所有 rank 共同终止。若几何仍可安全建表，但超出形变复用的证明范围，则只能重建。
+首次建表和提交候选盒前，程序都检查实际 NEP cell 扫描的整数上界。显式 `affine` 的初始盒不满足索引条件时，按启动资格规则拒绝。运行途中候选盒失格时，所有 rank 共同终止。若几何仍可安全建表，但超出形变复用的证明范围，则只能重建。

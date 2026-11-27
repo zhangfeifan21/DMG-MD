@@ -1317,8 +1317,22 @@ void write_restart(
 static std::string format_rejection_message(
     const std::string& failure_reason,
     const std::string& failure_detail,
-    int world_size)
+    int world_size,
+    const std::string& executable)
 {
+  const std::filesystem::path invoked_path(executable);
+  const auto command_path = invoked_path.has_parent_path()
+      ? std::filesystem::absolute(invoked_path) : invoked_path;
+  std::string quoted_command = "'";
+  for (const char value : command_path.string()) {
+    if (value == '\'') {
+      quoted_command += "'\\''";
+    } else {
+      quoted_command += value;
+    }
+  }
+  quoted_command += '\'';
+
   std::string msg;
   msg += "╔════════════════════════════════════════════════════════════════╗\n";
   msg += "║ DMG-MD: Multi-GPU Production Run Rejected                      ║\n";
@@ -1334,12 +1348,12 @@ static std::string format_rejection_message(
     msg += "\n";
   }
   msg += "\nTo run this input, use a single GPU:\n\n";
-  msg += "    mpirun -n 1 dmgmd\n\n";
+  msg += "    mpirun -n 1 " + quoted_command + "\n\n";
   msg += "Or enable M1 replicated-full testing mode (not recommended for production):\n\n";
   msg += "    export DMGMD_FORCE_M1_REPLICATED=1\n";
   msg += "    mpirun -n ";
   msg += std::to_string(world_size);
-  msg += " dmgmd\n\n";
+  msg += " " + quoted_command + "\n\n";
   return msg;
 }
 
@@ -1347,6 +1361,7 @@ void run_replicated(
     const RunProgram& program,
     Model model,
     const std::string& potential_filename,
+    const std::string& executable,
     MpiRuntime& mpi)
 {
   using gpumd_compat::NEP;
@@ -1477,7 +1492,12 @@ void run_replicated(
   const char* force_m1_test_env = std::getenv("DMGMD_FORCE_M1_REPLICATED");
   const bool force_m1_for_testing = force_m1_test_env && std::string(force_m1_test_env) == "1";
   
-  if (mpi.world_size() > 1 && !eligibility.eligible && !force_m1_for_npt && !force_m1_for_testing) {
+  const bool requires_replication =
+      mpi.world_size() > 1 && !eligibility.eligible && !force_m1_for_npt;
+  if (requires_replication) {
+    mpi.assert_same_fingerprint(force_m1_for_testing, "DMGMD_FORCE_M1_REPLICATED enabled");
+  }
+  if (requires_replication && !force_m1_for_testing) {
     // Multi-GPU ineligible input in production mode → reject
     std::string failure_reason = eligibility.reason;
     std::string failure_detail;
@@ -1492,10 +1512,13 @@ void run_replicated(
     }
     
     if (mpi.is_root()) {
-      std::cerr << format_rejection_message(failure_reason, failure_detail, mpi.world_size());
+      std::cerr << format_rejection_message(
+          failure_reason, failure_detail, mpi.world_size(), executable) << std::flush;
     }
+    // The rejection decision is the same on every rank. Wait for the
+    // diagnostic before any rank can terminate the MPI job.
+    mpi.barrier();
     mpi.abort(EXIT_FAILURE);
-    return;  // Never reached, but quiets compiler
   }
 
   if (eligibility.eligible && !force_m1_for_npt) {

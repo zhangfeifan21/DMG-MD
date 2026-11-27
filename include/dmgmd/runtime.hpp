@@ -12,6 +12,7 @@ void run_replicated(
     const RunProgram& program,
     Model model,
     const std::string& potential_filename,
+    const std::string& executable,
     MpiRuntime& mpi);
 
 }  // namespace dmgmd

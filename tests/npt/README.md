@@ -143,16 +143,37 @@ python3 tests/npt/run_domain_npt.py --candidate "$CANDIDATE" \
 
 `--fixture` 需要固定的 `model.xyz`、`nep.txt` 和 `run.in`。`run.in` 要求输出 thermo 及含力、势能和 virial 的轨迹。脚本逐一执行 `off`、`rebuild` 和 `affine`，按既有容差并核查实际路由。结果保留日志及输入输出哈希。短程诊断数据与正式统计分别保存。
 
+<a id="local-box-restart"></a>
+
 ### 迁移、压力和变盒提交
 
-[迁移用例](domain-npt-migration-cases.json)定义 72 个短作业。对 Berendsen/SCR、P2/P4、两种后端和三种域模式，按每帧当前盒重放迁移记录。检查小幅越界时的缓存复用、重复迁移、跨条带与周期边界迁移，以及无迁移的重建。
+三个[迁移用例](domain-npt-migration-cases.json)分别运行 Berendsen 和 SCR。双卡、四卡分开跑时，每批有 6 个单卡对照、12 个同卡数全量复制对照和 24 个显式局部作业。合并运行时共用 6 个单卡对照，合计 78 个作业。驱动用 `mpicxx` 编译 MPI 探针，记录逐帧收集的全局 ID，与按当前盒和重建时机重放的负责进程比较。结果写入 `results.json`。
 
 ```bash
 python3 tests/npt/run_domain_npt_migration.py --candidate "$CANDIDATE" \
   --work-root "$WORK_ROOT/domain-migration" --devices "$GPU_IDS"
+python3 tests/npt/run_domain_npt_stop_boundary.py --candidate "$CANDIDATE" \
+  --work-root "$WORK_ROOT/domain-stop" --devices "$GPU_IDS"
 ```
 
+两条命令默认运行双卡和四卡、两种后端及两种局部策略。停止用例检查初始拒绝、执行诊断中的单卡命令，并把中途失格的三份科学输出与只跑两步的对照逐字节比较。退出码、逐 rank 诊断和输出哈希保存在停止批次的 `results.json` 及作业目录中。
+
 `dmgmd_domain_owned_thermo_poison_tests` 直接调用生产局部代码。它检查边界副本中的污染值、非全局 stride、空 rank 和多次归约修补。P1/P2/P4 均覆盖两种后端。`dmgmd_owned_box_preflight_tests` 在 P2/P4 验证生产 uint32 OR 一致拒绝候选盒，且无部分提交。压力及独立能量导数走[压力检查](domain-pressure-oracle.md)，保留原始理想晶格参考失败。
+
+### 跨卡数启动新作业
+
+以下 Bash 命令依次冻结 5,760 原子碳输入、生成各卡数的来源快照，再从同一批来源向其他卡数重启。首次执行时，冻结目录和作业目录均使用新路径。三步共用同一候选、同一冻结目录，后两步共用同一作业目录。
+
+```bash
+driver=tests/npt/run_domain_npt_restarts.py
+freeze_args=(--candidate "$CANDIDATE" --freeze "$WORK_ROOT/domain-restart-freeze")
+job_args=(--work-root "$WORK_ROOT/domain-restart-jobs" --devices "$GPU_IDS" --ranks 1,2,4)
+python3 "$driver" freeze "${freeze_args[@]}"
+python3 "$driver" produce "${freeze_args[@]}" "${job_args[@]}"
+python3 "$driver" replay "${freeze_args[@]}" "${job_args[@]}"
+```
+
+目标作业读取来源的 `restart.xyz`。独立单卡对照用末帧轨迹的盒、坐标、速度和初态的元素、质量重建模型。从 0.25 fs 的首帧开始比较四帧，采用[短程容差](../baseline/manifest.json)。`sources/*/receipt.json` 登记来源和控制器重置对照，`targets/*/result.json` 记录六种增减方向的 64 个目标及逐项差异。[L20 验收与写文件检查](../../docs/status/validation/domain-npt-validation.md#local-box-restart-20261127)
 
 ### 采样试跑与正式统计
 
