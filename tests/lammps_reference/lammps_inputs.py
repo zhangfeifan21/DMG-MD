@@ -63,6 +63,14 @@ def normalize_potential(source: str) -> tuple[str, dict]:
                     "transform": transform}
 
 
+def write_matpl_potentials(directory: Path, source: str) -> tuple[str, dict]:
+    """Keep the GPUMD source beside the potential read by MatPL in this job."""
+    converted, identity = normalize_potential(source)
+    (directory / "nep.gpumd.txt").write_bytes(source.encode())
+    (directory / "nep.txt").write_bytes(converted.encode())
+    return converted, identity
+
+
 def parse_model(model: str, species: list[str]) -> tuple[list[float], list[tuple]]:
     lines = model.splitlines()
     if len(lines) < 2:
@@ -127,8 +135,38 @@ def parse_model(model: str, species: list[str]) -> tuple[list[float], list[tuple
     return box, atoms
 
 
-def data_file(model: str, potential: str) -> str:
-    species = elements(potential)
+def initial_face_images(box, atoms, gpumd_wraps):
+    """Identify input images that LAMMPS read_data and GPUMD wrap differently."""
+    x, y, z = box
+    det = x * (y * z)
+    # Match Box::get_inverse for an orthogonal cell, including cofactor rounding.
+    inverse = (y * z / det, x * z / det, x * y / det)
+    faces = ([], [], [], [], [], [])  # Upper x/y/z, followed by lower x/y/z.
+    for atom_id, _, _, position, _, _ in atoms:
+        for axis, (coord, length, inv) in enumerate(zip(position, box, inverse)):
+            canonical = coord % length
+            if canonical == length:
+                canonical = 0.0
+            source = coord
+            for _ in range(gpumd_wraps):
+                scaled = source * inv
+                if scaled < 0.0:
+                    scaled += 1.0
+                elif scaled > 1.0:
+                    scaled -= 1.0
+                source = scaled * length
+            if not 0.0 <= source <= length:
+                raise ValueError(f"GPUMD wrapping leaves input atom {atom_id} outside its primary box")
+            if source - canonical > 0.5 * length:
+                faces[axis].append(atom_id)
+            elif canonical - source > 0.5 * length:
+                faces[3 + axis].append(atom_id)
+    return faces
+
+
+def model_data(model: str, potential: str, *, active_species: list[str] | None = None,
+               gpumd_wraps: int = 0) -> tuple[str, tuple]:
+    species = lammps_elements(potential, active_species)
     box, atoms = parse_model(model, species)
     masses = {name: mass for _, _, name, _, _, mass in atoms}
     lines = ["LAMMPS data converted from GPUMD model.xyz", "",
@@ -142,28 +180,83 @@ def data_file(model: str, potential: str) -> str:
     lines.extend(("", "Velocities", ""))
     lines.extend(f"{atom_id} " + " ".join(f"{value:.17g}" for value in velocity)
                  for atom_id, _, _, _, velocity, _ in atoms)
-    return "\n".join(lines) + "\n"
+    faces = initial_face_images(box, atoms, gpumd_wraps) if gpumd_wraps else ([], [], [], [], [], [])
+    return "\n".join(lines) + "\n", faces
+
+
+def data_file(model: str, potential: str, *, active_species: list[str] | None = None) -> str:
+    return model_data(model, potential, active_species=active_species)[0]
+
+
+def lammps_elements(potential: str, active_species: list[str] | None) -> list[str]:
+    names = elements(potential)
+    if active_species is None:
+        return names
+    if not active_species or not set(active_species) <= set(names):
+        raise ValueError("active LAMMPS species must be present in the NEP model")
+    if len(set(active_species)) != len(active_species):
+        raise ValueError("duplicate active LAMMPS species")
+    return [name for name in names if name in active_species]
+
+
+GEOMETRY_MODES = ("native", "gpumd_5_9_1")
+
+
+def verify_geometry(log: str, requested: str, *, initial_faces: bool = False) -> None:
+    """Old MatPL builds can silently ignore new pair_style keywords."""
+    if initial_faces and "MatPL NEP initial face images: active" not in log.splitlines():
+        raise ValueError("MatPL did not confirm the source image groups")
+    reported = re.findall(r"^MatPL NEP geometry: (\S+)\s*$", log, re.MULTILINE)
+    if not reported and requested == "native":
+        return
+    if requested not in GEOMETRY_MODES or set(reported) != {requested}:
+        raise ValueError(f"MatPL did not confirm requested geometry {requested!r}: {reported}")
 
 
 def input_file(potential: str, time_step_fs: float, steps: int,
-               *, warmup: int = 0, snapshot: str | None = None) -> str:
+               *, warmup: int = 0, snapshot: str | None = None,
+               active_species: list[str] | None = None, full_virial: bool = False,
+               geometry: str = "native", initial_faces: tuple = (),
+               y_ranks: int | None = None, integration_fixes: tuple[str, ...] = ()) -> str:
     if steps < 0 or warmup < 0 or time_step_fs < 0 or (steps + warmup and not time_step_fs):
         raise ValueError("invalid timestep or step count")
+    if geometry not in GEOMETRY_MODES:
+        raise ValueError(f"unknown MatPL geometry {geometry!r}")
+    style = "pair_style matpl/nep/kk nep.txt"
+    if geometry != "native":
+        style += f" geometry {geometry}"
+    groups = []
+    if any(initial_faces):
+        if geometry == "native" or len(initial_faces) != 6:
+            raise ValueError("initial face images require three upper and three lower groups and GPUMD geometry")
+        names = []
+        for face, ids in zip(("high_x", "high_y", "high_z", "low_x", "low_y", "low_z"), initial_faces, strict=True):
+            name = f"_dmgmd_nep_{face}" if ids else "NULL"
+            names.append(name)
+            # Repeated group commands add members and keep long planes within input-line limits.
+            for start in range(0, len(ids), 128):
+                chunk = " ".join(map(str, ids[start:start + 128]))
+                groups.append(f"group {name} id {chunk}")
+        style += " initial_face_images " + " ".join(names)
+    species = lammps_elements(potential, active_species)
     lines = ["# Generated by tests/lammps_reference/lammps_inputs.py",
              "package kokkos neigh half comm device", "newton on", "units metal",
-             "boundary p p p", "atom_style atomic", "read_data data.lmp",
-             "pair_style matpl/nep/kk nep.txt", f"pair_coeff * * {' '.join(elements(potential))}",
+             "boundary p p p", "atom_style atomic",
+             *([f"processors 1 {y_ranks} 1"] if y_ranks is not None else []), "read_data data.lmp",
+             *groups, style, f"pair_coeff * * {' '.join(species)}",
              "neighbor 1.0 bin", "neigh_modify every 1 delay 0 check yes",
              "thermo_style custom step atoms temp pe ke etotal press",
              f"timestep {time_step_fs / 1000:.12g}"]
     if snapshot:
-        lines.extend(("compute atompe all pe/atom", "compute atomvir all stress/atom NULL virial",
+        stress_style = "centroid/stress/atom" if full_virial else "stress/atom"
+        components = " ".join(f"c_atomvir[{index}]" for index in range(1, 10 if full_virial else 7))
+        precision = 17 if full_virial else 16
+        lines.extend(("compute atompe all pe/atom", f"compute atomvir all {stress_style} NULL virial",
                       f"dump snapshot all custom {max(steps, 1)} {snapshot} "
-                      "id type x y z vx vy vz fx fy fz c_atompe "
-                      "c_atomvir[1] c_atomvir[2] c_atomvir[3] c_atomvir[4] c_atomvir[5] c_atomvir[6]",
-                      "dump_modify snapshot sort id format float %.16g"))
+                      "id type x y z vx vy vz fx fy fz c_atompe " + components,
+                      f"dump_modify snapshot sort id format float %.{precision}g"))
     if steps + warmup:
-        lines.append("fix integration all nve/kk")
+        lines.extend(("fix integration all nve/kk", *integration_fixes))
     if warmup:
         lines.extend((f"thermo {warmup}", f"run {warmup}"))
     if steps:
@@ -175,20 +268,24 @@ def input_file(potential: str, time_step_fs: float, steps: int,
 
 def write_inputs(directory: Path, model: str, source_potential: str,
                  time_step_fs: float, *, steps: int, warmup: int = 0,
-                 snapshot: str | None = None) -> dict:
+                 snapshot: str | None = None, active_species: list[str] | None = None,
+                 full_virial: bool = False) -> dict:
     """Write inputs into one trial directory and return a provenance record."""
     potential, conversion = normalize_potential(source_potential)
     files = {"model.xyz": model, "nep.gpumd.txt": source_potential,
-             "nep.txt": potential, "data.lmp": data_file(model, potential),
-             "in.lmp": input_file(potential, time_step_fs, steps,
-                                  warmup=warmup, snapshot=snapshot)}
+             "nep.txt": potential,
+             "data.lmp": data_file(model, potential, active_species=active_species),
+             "in.lmp": input_file(potential, time_step_fs, steps, warmup=warmup,
+                                  snapshot=snapshot, active_species=active_species,
+                                  full_virial=full_virial)}
     directory.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
         (directory / name).write_text(content)
     return {"model_sha256": sha_text(model), "potential": conversion,
             "files_sha256": {name: sha_text(value) for name, value in files.items()},
             "atoms": int(model.splitlines()[0]), "time_step_fs": time_step_fs,
-            "steps": steps, "warmup": warmup, "element_order": elements(potential)}
+            "steps": steps, "warmup": warmup,
+            "element_order": lammps_elements(potential, active_species)}
 
 
 def main() -> int:

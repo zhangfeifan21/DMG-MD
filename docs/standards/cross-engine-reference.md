@@ -32,12 +32,16 @@ MatPL 无法直接读取逐元素 NEP `cutoff` 行。如果所有元素的径向
 
 在同一初态上，先核对原子数、元素、坐标和速度，再比较总势能、逐原子势能、力及 virial。短程 NVE 检查数值是否有限和能量怎样变化。长程比较守恒量和统计量。
 
-静态比较使用 `tests/lammps_reference/compare_static.py`。机器可读的误差阈值只存于 `tests/lammps_reference/manifest.json`，按实测差异和所选 MatPL 推理精度校准。不同引擎的浮点精度和归约顺序允许有差异，但不能为单项失败放宽阈值。温度自由度的定义也可能不同，应同时比较动能。长程 NVE/NVT 三引擎正式统计门槛仍待后续 profile 验收。
+三引擎短程参考套件的静态比较使用 `tests/lammps_reference/compare_static.py`。这套参考检查的机器可读误差阈值存于 `tests/lammps_reference/manifest.json`，按实测差异和所选 MatPL 推理精度校准。不同引擎的浮点精度和归约顺序允许有差异，但不能为单项失败放宽阈值。温度自由度的定义也可能不同，应同时比较动能。长程 NVE/NVT 三引擎正式统计门槛仍待后续 profile 验收。
 
 LAMMPS 的 `compute stress/atom NULL virial` 六列顺序为 xx、yy、zz、xy、xz、yz，
 符号与 virial 相反，`metal` 单位为 bar·Å³。转换到本项目逐原子 virial（eV）时
 乘 `-1/1602176.5`；该因子取自上述 LAMMPS 构建对应的 `src/update.cpp`。比较器按原子 ID
 恢复 GPUMD/DMG-MD 的输入行序后再比较。未经排序的 MPI dump 行序可能不同。
+
+### 百万原子公开输入的四引擎终验
+
+工单 01 使用普通 GPUMD 5.9.1 作参考，另测 DMG-MD、GPUMD-WPE 和 LAMMPS/MatPL。每种材料先用三个独立种子的快照校准，再对预先选定的一张 SCR 末帧求力。各引擎对的力、逐原子势能和九分量 virial 须同时通过事先冻结的经验上限和原有分量上限。LAMMPS 另检查总势能差。原子 ID 对齐后，使用 `compute centroid/stress/atom NULL virial` 的九列转换为 GPUMD 行序。双精度 MatPL 在支持的正交大盒内显式选择 `geometry gpumd_5_9_1`。[上限来源与分量映射](../../tests/npt/public_inputs/static-observables.md) · [状态匹配容差与校准倍数](../../tests/npt/public_inputs/manifest.json)
 
 ## 性能比较
 

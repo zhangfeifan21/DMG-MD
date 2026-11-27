@@ -1,0 +1,606 @@
+--- a/src/KOKKOS/pair_nep_kokkos.h
++++ b/src/KOKKOS/pair_nep_kokkos.h
+@@ -82,6 +82,11 @@
+   std::vector<NEPKK> nep_gpu_models;  // NEP model instance
+   std::vector<std::string> potential_files;
+   std::string kspace_method = "ewald";
++  bool gpumd_geometry = false;
++  bool logged_gpumd_geometry = false;
++  int gpumd_initial_face_group_bits[6] = {};
++  bigint gpumd_initial_face_step = -1;
++  bool gpumd_initial_faces_active = false;
+   double pppm_mesh_spacing = 1.0;
+   int pppm_mesh_mode = 0;
+   int pppm_mesh[3] = {0, 0, 0};
+--- a/src/KOKKOS/pair_nep_kokkos.cpp
++++ b/src/KOKKOS/pair_nep_kokkos.cpp
+@@ -19,6 +19,7 @@
+ #include "domain.h"
+ #include "error.h"
+ #include "force.h"
++#include "group.h"
+ #include "kokkos.h"
+ #include "memory_kokkos.h"
+ #include "neighbor_kokkos.h"
+@@ -133,6 +134,12 @@
+   int iarg = 0;  // index of first forcefield file
+   // Parse potential file
+   num_ff = 0;
++  gpumd_geometry = false;
++  logged_gpumd_geometry = false;
++  std::fill_n(gpumd_initial_face_group_bits, 6, 0);
++  gpumd_initial_face_step = -1;
++  gpumd_initial_faces_active = false;
++  bool have_initial_face_images = false;
+   while(iarg < narg) { // nep1.txt nep2.txt ... nepn.txt out_freq 10
+     std::string arg_str(arg[iarg]);
+     if (arg_str.find(".txt") != std::string::npos) {
+@@ -153,6 +160,29 @@
+         if (kspace_method != "ewald" && kspace_method != "pppm") {
+           error->all(FLERR, "pair_style matpl/nep/kk kspace must be ewald or pppm");
+         }
++    } else if (strcmp(arg[iarg], "geometry") == 0) {
++        if (++iarg >= narg)
++          error->all(FLERR, "pair_style matpl/nep/kk geometry requires native or gpumd_5_9_1");
++        if (strcmp(arg[iarg], "gpumd_5_9_1") == 0) {
++          gpumd_geometry = true;
++        } else if (strcmp(arg[iarg], "native") == 0) {
++          gpumd_geometry = false;
++        } else {
++          error->all(FLERR, "pair_style matpl/nep/kk geometry requires native or gpumd_5_9_1");
++        }
++    } else if (strcmp(arg[iarg], "initial_face_images") == 0) {
++        if (have_initial_face_images || iarg + 6 >= narg)
++          error->all(FLERR, "MatPL initial_face_images requires six groups or NULL (UX UY UZ LX LY LZ)");
++        have_initial_face_images = true;
++        for (int axis = 0; axis < 6; ++axis) {
++          const char* name = arg[++iarg];
++          if (strcmp(name, "NULL") == 0) continue;
++          const int id = group->find(name);
++          if (id <= 0)
++            error->all(FLERR, "MatPL initial_face_images requires a defined group other than all");
++          gpumd_initial_face_group_bits[axis] = group->bitmask[id];
++          gpumd_initial_faces_active = true;
++        }
+     } else if (strcmp(arg[iarg], "pppm_spacing") == 0) {
+         if (iarg + 1 >= narg) {
+           error->all(FLERR, "pair_style matpl/nep/kk pppm_spacing requires one value");
+@@ -190,6 +220,9 @@
+     iarg++;    
+   }
+ 
++  if (have_initial_face_images && !gpumd_geometry)
++    error->all(FLERR, "MatPL initial_face_images requires geometry gpumd_5_9_1");
++
+   if (is_rank_0 and num_ff > 1) {
+       explrError_fp = fopen(&explrError_fname[0], "w");
+       fprintf(explrError_fp, "%9s %16s %16s %16s %16s %16s %16s\n", 
+@@ -295,6 +328,16 @@
+   if (strstr(update->integrate_style,"respa"))
+     error->all(FLERR,"Pair NEP does not support rRESPA");
+ 
++  if (gpumd_geometry) {
++#ifndef PREC_NEPINFER
++    error->all(FLERR, "MatPL geometry gpumd_5_9_1 requires PREC_NEPINFER=ON");
++#endif
++    if (num_ff != 1 || nep_gpu_models[0].paramb.version != 4 ||
++        nep_gpu_models[0].paramb.charge_mode != 0) {
++      error->all(FLERR, "MatPL geometry gpumd_5_9_1 requires one uncharged NEP4 or NEP4-ZBL model");
++    }
++  }
++
+   neighflag = lmp->kokkos->neighflag;
+ 
+   auto request = neighbor->add_request(this, NeighConst::REQ_FULL);
+@@ -519,6 +562,38 @@
+     0.0,          domain->yprd, domain->yz,
+     0.0,          0.0,          domain->zprd
+   };
++  const double* gpumd_boxlo = nullptr;
++  NEPKK_InitialFaceImages initial_faces{};
++  if (gpumd_geometry) {
++    // GPUMD 5.9.1 uses the multi-image path at and below this width.
++    // Check the current global box on every force evaluation, including NPT.
++    const double width = 2.5 * (static_cast<float>(cutoff) + 1.0);
++    if (domain->triclinic || !domain->xperiodic || !domain->yperiodic || !domain->zperiodic ||
++        !(domain->xprd > width && domain->yprd > width && domain->zprd > width)) {
++      error->all(FLERR, "MatPL geometry gpumd_5_9_1 requires an orthogonal periodic large box "
++                        "with each length > 2.5 * (radial cutoff + 1 angstrom)");
++    }
++    gpumd_boxlo = domain->boxlo;
++    if (gpumd_initial_faces_active) {
++      // A zero-step setup can compute the same imported state more than once.
++      // Retire the marker permanently after the first step advance.
++      if (gpumd_initial_face_step == -1) {
++        gpumd_initial_face_step = update->ntimestep;
++        if (is_rank_0) utils::logmesg(lmp, "MatPL NEP initial face images: active\n");
++      } else if (update->ntimestep != gpumd_initial_face_step) {
++        gpumd_initial_faces_active = false;
++      }
++      if (gpumd_initial_faces_active) {
++        atomKK->sync(execution_space, MASK_MASK);
++        initial_faces.atom_mask = atomKK->k_mask.template view<DeviceType>().data();
++        std::copy_n(gpumd_initial_face_group_bits, 6, initial_faces.group_bit);
++      }
++    }
++    if (!logged_gpumd_geometry) {
++      if (is_rank_0) utils::logmesg(lmp, "MatPL NEP geometry: gpumd_5_9_1\n");
++      logged_gpumd_geometry = true;
++    }
++  }
+   MPI_Comm nepkk_mpi_comm = world;
+   if (!is_devi_step) {
+     nep_gpu_models[0].compute(
+@@ -548,6 +623,8 @@
+       virial_per_atom_ptr,                           // 6-component per-atom virial or internal work buffer
+       cvirial_per_atom_ptr,                          // 9-component centroid virial
+       box_h,
++      gpumd_boxlo,
++      initial_faces,
+       kspace_method.c_str(),
+       static_cast<long long>(atom->natoms),
+       comm->nprocs,
+@@ -592,6 +669,8 @@
+         virial_per_atom_ptr,                           // 6-component per-atom virial or internal work buffer
+         cvirial_per_atom_ptr,                          // 9-component centroid virial
+         box_h,
++        gpumd_boxlo,
++        initial_faces,
+         kspace_method.c_str(),
+         static_cast<long long>(atom->natoms),
+         comm->nprocs,
+--- a/src/nep_gpu/force/nepkk.cuh
++++ b/src/nep_gpu/force/nepkk.cuh
+@@ -45,6 +45,13 @@
+   GPU_Vector<int> type;
+   GPU_Vector<int> ilist;
+   GPU_Vector<NEP_FLOAT> position; // 将double坐标转换为float，读取会更快
++  GPU_Vector<double> periodic_position;
++};
++
++// Existing LAMMPS group bits accompany owned and ghost atoms.
++struct NEPKK_InitialFaceImages {
++  const int* atom_mask;
++  int group_bit[6]; // Upper x/y/z, then lower x/y/z.
+ };
+ 
+ struct NEPKK_Box {
+@@ -247,6 +254,8 @@
+     double* virial_per_atom,
+     double* cvirial_per_atom,
+     const double* box_h,
++    const double* gpumd_boxlo,
++    const NEPKK_InitialFaceImages& initial_faces,
+     const char* kspace_method,
+     long long natoms_global,
+     int mpi_size,
+--- a/src/nep_gpu/force/nepkk.cu
++++ b/src/nep_gpu/force/nepkk.cu
+@@ -902,6 +902,8 @@
+     double* virial_per_atom,
+     double* cvirial_per_atom,
+     const double* box_h,
++    const double* gpumd_boxlo,
++    const NEPKK_InitialFaceImages& initial_faces,
+     const char* kspace_method,
+     long long natoms_global,
+     int mpi_size,
+@@ -962,6 +964,21 @@
+     position, 
+     nall*3);
+   CUDA_CHECK_KERNEL
++  const double* periodic_position = nullptr;
++  const NEPKK_OrthoCell cell{
++    {gpumd_boxlo ? gpumd_boxlo[0] : 0.0, gpumd_boxlo ? gpumd_boxlo[1] : 0.0,
++     gpumd_boxlo ? gpumd_boxlo[2] : 0.0},
++    {box_h[0], box_h[4], box_h[8]}};
++  if (gpumd_boxlo) {
++    const size_t count = static_cast<size_t>(nall) * 3;
++    if (lmp_data.periodic_position.size() < count) lmp_data.periodic_position.resize(count);
++    wrap_gpumd_positions<<<(count + BLOCK_SIZE256 - 1) / BLOCK_SIZE256, BLOCK_SIZE256>>>(
++      position, lmp_data.periodic_position.data(), count, cell, initial_faces);
++    CUDA_CHECK_KERNEL
++    periodic_position = lmp_data.periodic_position.data();
++  }
++  const NEPKK_PairGeometry geometry{lmp_data.position.data(), position, periodic_position,
++                                    {cell.length[0], cell.length[1], cell.length[2]}};
+   // 做元素类型映射，在lammps中允许输入结构的元素类型顺序与力场中不一致，需要做调整
+   // 如力场结构顺序为 O Hf分别对应0 1，而输入结构顺序为 Hf O 分别对应 1 0，需要做映射
+   // 这里将原子的类型映射回在力场文件中的位置
+@@ -995,7 +1012,7 @@
+       nep_data.NL_angular.data(),
+       ilist,
+       lmp_data.type.data(),
+-      lmp_data.position.data(),
++      geometry,
+       nep_data.Fp.data()); //临时存储特征值
+     CUDA_CHECK_KERNEL
+   } else {// 不使用共享内存的版本，系数C直接从全局内存中读取
+@@ -1012,7 +1029,7 @@
+       nep_data.NL_angular.data(),
+       ilist,
+       lmp_data.type.data(),
+-      lmp_data.position.data(),
++      geometry,
+       nep_data.Fp.data()); //临时存储特征值
+     CUDA_CHECK_KERNEL    
+   }
+@@ -1038,7 +1055,7 @@
+       nep_data.NL_angular.data(),
+       ilist,
+       lmp_data.type.data(),
+-      lmp_data.position.data(),
++      geometry,
+       nep_data.Fp.data(),
+       nep_data.sum_fxyz.data());
+     CUDA_CHECK_KERNEL
+@@ -1052,7 +1069,7 @@
+       nep_data.NL_angular.data(),
+       ilist,
+       lmp_data.type.data(),
+-      lmp_data.position.data(),
++      geometry,
+       nep_data.Fp.data(),
+       nep_data.sum_fxyz.data());
+     CUDA_CHECK_KERNEL
+@@ -1181,7 +1198,7 @@
+         firstneigh,
+         ilist,
+         lmp_data.type.data(),
+-        lmp_data.position.data(),
++        geometry,
+         nep_data.Fp.data(),
+         force_per_atom,
+         cv_per_atom
+@@ -1233,7 +1250,7 @@
+         firstneigh,
+         ilist,
+         lmp_data.type.data(),
+-        lmp_data.position.data(),
++        geometry,
+         nep_data.Fp.data(),
+         force_per_atom,
+         cv_per_atom
+@@ -1258,7 +1275,7 @@
+       nep_data.NL_angular.data(),
+       ilist,
+       lmp_data.type.data(),
+-      lmp_data.position.data(),
++      geometry,
+       nep_data.Fp.data(),
+       nep_data.charge_derivative.data(),
+       nep_data.D_real.data(),
+@@ -1308,7 +1325,7 @@
+       nep_data.NL_angular.data(),
+       ilist,
+       lmp_data.type.data(),
+-      lmp_data.position.data(),
++      geometry,
+       zbl.atomic_numbers.data(),
+       zbl.para.data(),
+       force_per_atom,
+--- a/src/nep_gpu/force/nep_kernal_function.cuh
++++ b/src/nep_gpu/force/nep_kernal_function.cuh
+@@ -45,6 +45,82 @@
+ }
+ #endif
+ 
++// The native list carries shifted ghost positions. The optional GPUMD
++// geometry reads full-box coordinates without changing that list.
++struct NEPKK_PairGeometry {
++  const NEP_FLOAT* native_position;
++  const double* shifted_position;
++  const double* periodic_position;
++  double length[3];
++
++  __device__ NEP_FLOAT displacement(int i, int j, int axis) const
++  {
++    const int a = 3 * i + axis;
++    const int b = 3 * j + axis;
++    if (!periodic_position) return native_position[b] - native_position[a];
++
++    // A skin candidate can be a non-minimum-image ghost. Keep it outside
++    // the force cutoff instead of folding it into a duplicate interaction.
++    const double physical = shifted_position[b] - shifted_position[a];
++    if (fabs(physical) >= 0.5 * length[axis]) return physical;
++
++    // GPUMD 5.9.1 large-box NEP narrows the raw difference before the
++    // orthogonal minimum-image correction. The box length is float as well.
++    const float period = static_cast<float>(length[axis]);
++    float delta = static_cast<float>(periodic_position[b] - periodic_position[a]);
++    if (delta < -0.5f * period) {
++      delta += period;
++    } else if (delta > 0.5f * period) {
++      delta -= period;
++    }
++    return delta;
++  }
++};
++
++struct NEPKK_OrthoCell {
++  double origin[3];
++  double length[3];
++};
++
++static __global__ void wrap_gpumd_positions(const double* input, double* output,
++                                            int count, NEPKK_OrthoCell cell,
++                                            NEPKK_InitialFaceImages faces)
++{
++  const int index = blockIdx.x * blockDim.x + threadIdx.x;
++  if (index >= count) return;
++  const int axis = index % 3;
++  const double length = cell.length[axis];
++  const double relative = input[index] - cell.origin[axis];
++  // Most owned atoms are already in the primary box. Ghosts may be shifted
++  // by any integer number of global boxes, independent of rank boundaries.
++  double wrapped = relative;
++  if (relative < 0.0 || relative >= length) {
++    wrapped = relative - floor(relative / length) * length;
++    if (wrapped >= length) wrapped = 0.0;
++  }
++
++  if (faces.atom_mask) {
++    const int mask = faces.atom_mask[index / 3];
++    const bool use_upper = mask & faces.group_bit[axis];
++    const bool use_lower = mask & faces.group_bit[axis + 3];
++    if (use_upper != use_lower) {
++      // read_data remapping, a ghost shift, origin subtraction and primary-box
++      // recentering can each round. The face check covers those roundings;
++      // it tests only eligibility and never nudges a physical coordinate.
++      const double scale = fmax(fabs(input[index]), fmax(fabs(cell.origin[axis]), length));
++      const double margin = 4.0 * (nextafter(scale, 2.0 * scale) - scale);
++      if (margin < 0.5 * length) {
++        if (use_upper && fabs(wrapped) <= margin) {
++          wrapped += length;
++        } else if (use_lower && fabs(wrapped - length) <= margin) {
++          wrapped -= length;
++        }
++      }
++    }
++  }
++  output[index] = wrapped;
++}
++
+ static __global__ void calc_2b_descriptor_sharemem(
+   NEPKK::ParaMB paramb,
+   const NEP_FLOAT* param_c2,
+@@ -58,7 +134,7 @@
+   int* g_NL_angular,// 顺带构建出小的多体近邻表
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   NEP_FLOAT* g_Fp)
+ {
+   extern __shared__ NEP_FLOAT s_c[];
+@@ -73,9 +149,6 @@
+     int count_angular = 0;    
+     int atomi = g_ilist[n1];
+     int t1 = static_cast<int>(paramb.nep_to_sim[g_type[atomi]]);
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int c_start = paramb.sim_num_types * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+     // get radial descriptors
+     for (int i1 = 0; i1 < g_numneigh[atomi]; ++i1) {
+@@ -84,9 +157,9 @@
+       // if (atomi == 1) printf("calc n1 %d nn %d n2 %d\n", atomi, g_numneigh[atomi], n2);
+ 
+       int c_idx_I = t1 * c_start + t2 * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+-      NEP_FLOAT x12 = g_pos[n2*3  ] - x1;
+-      NEP_FLOAT y12 = g_pos[n2*3+1] - y1;
+-      NEP_FLOAT z12 = g_pos[n2*3+2] - z1;
++      NEP_FLOAT x12 = geometry.displacement(atomi, n2, 0);
++      NEP_FLOAT y12 = geometry.displacement(atomi, n2, 1);
++      NEP_FLOAT z12 = geometry.displacement(atomi, n2, 2);
+       NEP_FLOAT d12_square = x12 * x12 + y12 * y12 + z12 * z12;
+       // if(n1%10==0) printf("ALL NEIGH n1 %d atomi %d t1 %d jnums %d n2 %d t2 %d r12 %f n1xyz %f %f %f n2xyz %f %f %f\n",\
+         n1, atomi, t1, g_numneigh[atomi], n2, t2, sqrt(d12_square), x1, y1, z1, g_pos[n2*3], g_pos[n2*3+1], g_pos[n2*3+2]);
+@@ -167,7 +240,7 @@
+   int* g_NL_angular,// 顺带构建出小的多体近邻表
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   NEP_FLOAT* g_Fp)
+ {
+   int n1 = blockIdx.x * blockDim.x + threadIdx.x;
+@@ -175,18 +248,15 @@
+     int count_angular = 0;
+     int atomi = g_ilist[n1];
+     int t1 = static_cast<int>(paramb.nep_to_sim[g_type[atomi]]);
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int c_start = paramb.sim_num_types * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+     // get radial descriptors
+     for (int i1 = 0; i1 < g_numneigh[atomi]; ++i1) {
+       int n2 = g_firstneigh[i1 * num_neigh + atomi] & NEIGHMASK; 
+       int t2 = static_cast<int>(paramb.nep_to_sim[g_type[n2]]);
+       int c_idx_I = t1 * c_start + t2 * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+-      NEP_FLOAT x12 = g_pos[n2*3  ] - x1;
+-      NEP_FLOAT y12 = g_pos[n2*3+1] - y1;
+-      NEP_FLOAT z12 = g_pos[n2*3+2] - z1;
++      NEP_FLOAT x12 = geometry.displacement(atomi, n2, 0);
++      NEP_FLOAT y12 = geometry.displacement(atomi, n2, 1);
++      NEP_FLOAT z12 = geometry.displacement(atomi, n2, 2);
+       NEP_FLOAT d12_square = x12 * x12 + y12 * y12 + z12 * z12;
+       // if(n1%10==0) printf("ALL NEIGH n1 %d atomi %d t1 %d jnums %d n2 %d t2 %d r12 %f n1xyz %f %f %f n2xyz %f %f %f\n",\
+         n1, atomi, t1, g_numneigh[atomi], n2, t2, sqrt(d12_square), x1, y1, z1, g_pos[n2*3], g_pos[n2*3+1], g_pos[n2*3+2]);
+@@ -232,7 +302,7 @@
+   const int* g_NL_angular,// 顺带构建出小的多体近邻表
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   NEP_FLOAT* g_Fp,
+   NEP_FLOAT* g_sum_fxyz)
+ {
+@@ -247,9 +317,6 @@
+   if (n1 < N) {
+     int atomi = g_ilist[n1];
+     int t1 = static_cast<int>(paramb.nep_to_sim[g_type[atomi]]);
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int c_start = paramb.sim_num_types * paramb.n_max_angular_plus1 * paramb.basis_size_angular_plus1;
+     for (int n = 0; n < paramb.n_max_angular_plus1; ++n) {
+       NEP_FLOAT s[NUM_OF_ABC] = {FLOAT_LIT(0.0)};
+@@ -257,9 +324,9 @@
+         int n2 = g_NL_angular[atomi + nlocal * i1];
+         int t2 = static_cast<int>(paramb.nep_to_sim[g_type[n2]]);
+         int c_idx_I = t1 * c_start + t2 * paramb.n_max_angular_plus1 * paramb.basis_size_angular_plus1;
+-        NEP_FLOAT x12 = g_pos[n2*3  ] - x1;
+-        NEP_FLOAT y12 = g_pos[n2*3+1] - y1;
+-        NEP_FLOAT z12 = g_pos[n2*3+2] - z1;
++        NEP_FLOAT x12 = geometry.displacement(atomi, n2, 0);
++        NEP_FLOAT y12 = geometry.displacement(atomi, n2, 1);
++        NEP_FLOAT z12 = geometry.displacement(atomi, n2, 2);
+         NEP_FLOAT d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
+         NEP_FLOAT fc12;
+         find_fc(paramb.rc_angular, paramb.rcinv_angular, d12, fc12);
+@@ -297,7 +364,7 @@
+   const int* g_NL_angular,// 顺带构建出小的多体近邻表
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   NEP_FLOAT* g_Fp,
+   NEP_FLOAT* g_sum_fxyz)
+ {
+@@ -305,9 +372,6 @@
+   if (n1 < N) {
+     int atomi = g_ilist[n1];
+     int t1 = static_cast<int>(paramb.nep_to_sim[g_type[atomi]]);
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int c_start = paramb.sim_num_types * paramb.n_max_angular_plus1 * paramb.basis_size_angular_plus1;
+     for (int n = 0; n < paramb.n_max_angular_plus1; ++n) {
+       NEP_FLOAT s[NUM_OF_ABC] = {FLOAT_LIT(0.0)};
+@@ -315,9 +379,9 @@
+         int n2 = g_NL_angular[atomi + nlocal * i1];
+         int t2 = static_cast<int>(paramb.nep_to_sim[g_type[n2]]);
+         int c_idx_I = t1 * c_start + t2 * paramb.n_max_angular_plus1 * paramb.basis_size_angular_plus1;
+-        NEP_FLOAT x12 = g_pos[n2*3  ] - x1;
+-        NEP_FLOAT y12 = g_pos[n2*3+1] - y1;
+-        NEP_FLOAT z12 = g_pos[n2*3+2] - z1;
++        NEP_FLOAT x12 = geometry.displacement(atomi, n2, 0);
++        NEP_FLOAT y12 = geometry.displacement(atomi, n2, 1);
++        NEP_FLOAT z12 = geometry.displacement(atomi, n2, 2);
+         NEP_FLOAT d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
+         NEP_FLOAT fc12;
+         find_fc(paramb.rc_angular, paramb.rcinv_angular, d12, fc12);
+@@ -484,7 +548,7 @@
+     const int* g_NL,
+     const int* __restrict__ g_ilist,
+     const int* __restrict__ g_type,
+-    const NEP_FLOAT* __restrict__ g_pos,
++    const NEPKK_PairGeometry geometry,
+     const NEP_FLOAT* __restrict__ g_Fp,
+     double* g_f,
+     double* g_virial)
+@@ -527,10 +591,6 @@
+     int atomi = g_ilist[blockIdx.x];   // 每个 block 处理一个中心原子
+     int t1 = static_cast<int>(paramb.nep_to_sim[g_type[atomi]]);
+ 
+-    NEP_FLOAT x1 = g_pos[atomi*3];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+-
+     NEP_FLOAT fxi = FLOAT_LIT(0.0), fyi = FLOAT_LIT(0.0), fzi = FLOAT_LIT(0.0);
+     NEP_FLOAT sxxi = FLOAT_LIT(0.0), syyi = FLOAT_LIT(0.0), szzi = FLOAT_LIT(0.0);
+     NEP_FLOAT sxyi = FLOAT_LIT(0.0), sxzi = FLOAT_LIT(0.0), syzi = FLOAT_LIT(0.0);
+@@ -550,7 +610,7 @@
+         int c_idx_I = t1 * c_start + t2 * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+         int c_idx_J = t2 * c_start + t1 * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+ 
+-        NEP_FLOAT r12[3] = {g_pos[n2*3] - x1, g_pos[n2*3+1] - y1, g_pos[n2*3+2] - z1};
++        NEP_FLOAT r12[3] = {geometry.displacement(atomi, n2, 0), geometry.displacement(atomi, n2, 1), geometry.displacement(atomi, n2, 2)};
+         NEP_FLOAT d12_sq = r12[0]*r12[0] + r12[1]*r12[1] + r12[2]*r12[2];
+         if (d12_sq > paramb.rc_radial_square) continue;
+ 
+@@ -897,7 +957,7 @@
+   const int* g_NL,
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   const NEP_FLOAT* __restrict__ g_Fp,
+   double* g_f,
+   double* g_virial
+@@ -932,9 +992,6 @@
+     NEP_FLOAT s_syx = FLOAT_LIT(0.0);
+     NEP_FLOAT s_szx = FLOAT_LIT(0.0);
+     NEP_FLOAT s_szy = FLOAT_LIT(0.0);
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int c_start = paramb.sim_num_types * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+     // int Fp_idx_start = atomi * annmb.dim;
+     NEP_FLOAT Fp_atomi[MAX_NUM_N];
+@@ -949,7 +1006,7 @@
+       int c_idx_I = t1 * c_start + t2 * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+       int c_idx_J = t2 * c_start + t1 * paramb.n_max_radial_plus1 * paramb.basis_size_radial_plus1;
+ 
+-      NEP_FLOAT r12[3] = {g_pos[n2*3] - x1, g_pos[n2*3+1] - y1, g_pos[n2*3+2] - z1};
++      NEP_FLOAT r12[3] = {geometry.displacement(atomi, n2, 0), geometry.displacement(atomi, n2, 1), geometry.displacement(atomi, n2, 2)};
+       NEP_FLOAT d12_square = r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2];
+       if (d12_square > paramb.rc_radial_square) continue;
+       NEP_FLOAT d12 = sqrt(d12_square);
+@@ -1368,7 +1425,7 @@
+   const int* g_NL_angular,
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   const NEP_FLOAT* __restrict__ g_Fp,
+   const NEP_FLOAT* __restrict__ g_charge_derivative,
+   const NEP_FLOAT* __restrict__ g_D_real,
+@@ -1411,9 +1468,6 @@
+     }
+ 
+     int t1 = static_cast<int>(paramb.nep_to_sim[g_type[atomi]]);
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int c_start = paramb.sim_num_types * paramb.n_max_angular_plus1 * paramb.basis_size_angular_plus1;
+     for (int i1 = 0; i1 < g_NN_angular[atomi]; ++i1) {
+       int index = i1 * nlocal + atomi;
+@@ -1422,7 +1476,7 @@
+       
+       NEP_FLOAT f12[3] = {FLOAT_LIT(0.0)};
+       int c_idx_I = t1 * c_start + t2 * paramb.n_max_angular_plus1 * paramb.basis_size_angular_plus1;
+-      NEP_FLOAT r12[3] = {g_pos[n2*3] - x1, g_pos[n2*3+1] - y1, g_pos[n2*3+2] - z1};
++      NEP_FLOAT r12[3] = {geometry.displacement(atomi, n2, 0), geometry.displacement(atomi, n2, 1), geometry.displacement(atomi, n2, 2)};
+       NEP_FLOAT d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
+       // if (0) printf("3bhalf idx %d atomi %d t1 %d jnums %d n2 %d t2 %d r12 %f fixyz %f %f %f fjxyz %f %f %f\n", n1, atomi, t1, g_NN_angular[atomi], n2, t2, d12, x1, y1, z1, g_pos[n2*3], g_pos[n2*3+1], g_pos[n2*3+2]);
+       NEP_FLOAT fc12, fcp12;
+@@ -1917,7 +1971,7 @@
+   const int* g_NL,
+   const int* __restrict__ g_ilist,
+   const int* __restrict__ g_type,
+-  const NEP_FLOAT* __restrict__ g_pos,
++  const NEPKK_PairGeometry geometry,
+   const int* __restrict__ g_atomic_numbers,
+   const NEP_FLOAT* __restrict__ g_para,
+   double* g_f,
+@@ -1943,9 +1997,6 @@
+     NEP_FLOAT s_szx = FLOAT_LIT(0.0);
+     NEP_FLOAT s_szy = FLOAT_LIT(0.0);
+     int atomi = g_ilist[n1];
+-    NEP_FLOAT x1 = g_pos[atomi*3  ];
+-    NEP_FLOAT y1 = g_pos[atomi*3+1];
+-    NEP_FLOAT z1 = g_pos[atomi*3+2];
+     int type1 = g_type[atomi];
+     int zi = g_atomic_numbers[type1];
+     NEP_FLOAT zi_fp = static_cast<NEP_FLOAT>(zi);
+@@ -1953,7 +2004,7 @@
+     for (int i1 = 0; i1 < g_NN[atomi]; ++i1) {
+       int n2 = g_NL[atomi + nlocal * i1];
+       int type2 = g_type[n2];
+-      NEP_FLOAT r12[3] = {g_pos[n2*3] - x1, g_pos[n2*3+1] - y1, g_pos[n2*3+2] - z1};
++      NEP_FLOAT r12[3] = {geometry.displacement(atomi, n2, 0), geometry.displacement(atomi, n2, 1), geometry.displacement(atomi, n2, 2)};
+       NEP_FLOAT d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
+       NEP_FLOAT d12inv = FLOAT_LIT(1.0) / d12;
+       NEP_FLOAT f, fp;

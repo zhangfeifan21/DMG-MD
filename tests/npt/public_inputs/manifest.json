@@ -1,0 +1,149 @@
+{
+  "schema": "dmgmd.npt-public-input-preparation.v1",
+  "gpumd_version": "5.9.1",
+  "conditions": {
+    "initial_velocity_seed": 301,
+    "temperature_K": 300,
+    "pressure_GPa": 0,
+    "temperature_damping_steps": 40,
+    "pressure_damping_steps": 1000,
+    "long_axis": "y"
+  },
+  "materials": {
+    "carbon": {
+      "public_model_sha256": "f841b441d4c557d970681f48f0c2b502bdae3e14d2dccd89c8b20a38a27bc45f",
+      "cells": [
+        36,
+        98,
+        36
+      ],
+      "lattice_constant_A": 3.57,
+      "masses_amu": {
+        "C": 12.011
+      },
+      "time_step_fs": 1.0,
+      "bulk_modulus_GPa": 425,
+      "geometry_source": "tests/long_nve/long_nve_common.py::diamond_atoms",
+      "potential_source": "tests/baseline/inputs/potentials/nep_C.txt",
+      "potential_sha256": "add6b3f64fdd3cecebb3aae511816fe4183e4c4a22b058f108f3f0ea1c531623",
+      "potential_types": 1
+    },
+    "water": {
+      "public_model_sha256": "ad889c0bfe2ec2a8678307dcb4af4f96913120756c3908a7a1380214e0fda49d",
+      "cells": [
+        53,
+        145,
+        53
+      ],
+      "spacing_A": 3.08,
+      "oxygen_jitter_A": 0.08,
+      "geometry_seed": 301,
+      "masses_amu": {
+        "O": 15.9994,
+        "H": 1.00794
+      },
+      "time_step_fs": 0.5,
+      "bulk_modulus_GPa": 2.2,
+      "geometry_source": "tests/long_nve/long_nve_common.py::water_atoms",
+      "potential_source": "tests/baseline/inputs/potentials/nep_water.txt",
+      "potential_sha256": "8638300c8c6ba7eca589fa2fdc111d2e6a1f6ad9c88cc522ea9db220538a66e3",
+      "potential_types": 2
+    },
+    "copper": {
+      "public_model_sha256": "f96acb1602ebf0c3d24dfc392680cc456c876f41364da9e8af2088844e6e7ad8",
+      "cells": [
+        48,
+        131,
+        48
+      ],
+      "lattice_constant_A": 3.615,
+      "masses_amu": {
+        "Cu": 63.546
+      },
+      "time_step_fs": 1.5,
+      "bulk_modulus_GPa": 140,
+      "geometry_source": "docs/status/performance/npt-benchmarks.md#输入和短程比较",
+      "potential_source": "https://raw.githubusercontent.com/brucefan1983/GPUMD/11ba6fbdb4d71b2cdb351b39972fa057521585b3/potentials/nep/Song-2024-UNEP-v1-AgAlAuCrCuMgMoNiPbPdPtTaTiVWZr.txt",
+      "potential_sha256": "8f97c30cc366c30e687a8672bd8d76e624a16caf4337b1277a44aa166c5bceb4",
+      "potential_types": 16
+    }
+  },
+  "stages": {
+    "calibration": {
+      "ensemble": "nvt_ber",
+      "velocity_seeds": [
+        401,
+        402,
+        403
+      ],
+      "segments": [
+        {
+          "steps": 100,
+          "thermo_interval_steps": 10
+        }
+      ]
+    },
+    "berendsen": {
+      "ensemble": "npt_ber",
+      "segments": [
+        {
+          "steps": 90000,
+          "thermo_interval_steps": 1000
+        },
+        {
+          "steps": 10000,
+          "thermo_interval_steps": 100
+        }
+      ],
+      "criteria": {
+        "terminal_drift_steps": 5000,
+        "relative_volume_sd_upper_bound_exclusive": 0.01,
+        "relative_terminal_drift_upper_bound_inclusive": 0.0025
+      }
+    },
+    "scr": {
+      "ensemble": "npt_scr",
+      "segments": [
+        {
+          "steps": 20000,
+          "thermo_interval_steps": 100
+        }
+      ],
+      "criteria": {
+        "relative_temperature_offset_upper_bound_exclusive": 0.03,
+        "absolute_pressure_offset_GPa_upper_bound_exclusive": 0.5,
+        "relative_volume_sd_upper_bound_exclusive": 0.02,
+        "acf_max_lag_sample_count_divisor": 10
+      }
+    },
+    "scr-extension": {
+      "ensemble": "npt_scr",
+      "segments": [
+        {
+          "steps": 100000,
+          "thermo_interval_steps": 100
+        }
+      ],
+      "criteria_from_stage": "scr"
+    }
+  },
+  "static": {
+    "match_limits": {
+      "position_A": 1e-8,
+      "velocity_A_per_fs": 1e-9,
+      "box_A": 1e-12
+    },
+    "calibration_multiplier": 2.0
+  },
+  "production_output": {
+    "thermo_stride_steps": 100,
+    "final_structure_frames": 1,
+    "final_structure_fields": [
+      "box",
+      "species",
+      "mass",
+      "position",
+      "velocity"
+    ]
+  }
+}

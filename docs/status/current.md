@@ -6,6 +6,8 @@ V1.0 尚未发布。当前实现包含 NEP 局部域分解和实验局部 NPT。
 
 生产分派、三材料 NPT 的正式性能矩阵和完整 V1.0 发布仍待完成。首版逐项报告同卡数普通 GPUMD、同卡数 LAMMPS/KOKKOS/NEP 和固定单卡 GPUMD-WPE，并列出 DMG-MD 自身强扩展。科学验收独立判定，性能报告如实记录结果。长程 NVE 数值回归仍需协调参考身份。NVE 计时可直接使用站点安装的引擎。[L20 已测版本](../standards/cross-engine-reference.md#benchmark-engines) · [对标矩阵与可比条件](performance/npt-benchmarks.md#performance-matrix) · [后续任务](../plans/dmg-md-v1.0-progress.md)
 
+2026-11-27，工单 01 已交付百万原子碳、水和铜的共同起点。三种材料均通过独立留出帧的四引擎静态终验及新目录短程重放，可供工单 09 和后续计时使用。[输入与校验方法](../../tests/npt/public_inputs/README.md) · [终验结果](validation/npt-validation.md#public-inputs-20261127)
+
 <a id="l20-v1-audit-20261120"></a>
 ## 2026-11-20 单节点核查
 
