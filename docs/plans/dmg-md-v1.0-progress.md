@@ -33,6 +33,9 @@ V1.0 尚未发布。G-A、G-B 和局部 NPT 的 DN0–DN4 已在各自的单节�
 
 ### 4. 建立三项外部对标的 NPT 运行器
 
+工单 05 已完成配对计时工具。单节点四卡独占窗口内，两个引擎完成了三个单卡碳短作业区组，原始记录复算通过。后续工单可复用区组清单、采样与预算入口。三材料正式采样仍待各自前置验收。[短作业结果](../status/performance/npt-benchmarks.md#paired-timing-smoke-20261127) · [运行与复算](../../tests/benchmark/README.md#按区组运行与复算配对作业)
+
+
 优先在各材料的 NPT 工况测普通 GPUMD、LAMMPS/KOKKOS/NEP 与 DMG-MD 同卡数（1、2、4 卡）。WPE 固定一张卡，分别配对 DMG-MD 一张卡和局部多卡。登记各材料、控压器、卡数的可比状态与依据，核验后端、分派和绑定。现有三引擎 NVE 入口可提供独立的补充实验。
 
 三种 SCR 的科学检查通过后，按三项报告完整性验收。对可比项给出绝对墙钟、单卡比、同卡数比、迁移比、自身强扩展、置信区间和 GPU·小时。预平衡单列，不预设哪种软件更快。[性能方法与可比条件](../status/performance/npt-benchmarks.md#performance-matrix)

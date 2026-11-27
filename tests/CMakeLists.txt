@@ -136,6 +136,10 @@ add_test(
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_benchmark.py
 )
 
+add_test(NAME dmgmd.paired_job_timing
+  COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/benchmark
+          -p test_paired_*.py)
+
 add_test(
   NAME dmgmd.cpu_sampling
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/test_cpu_sampling.py

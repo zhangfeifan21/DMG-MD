@@ -20,7 +20,7 @@
 | [02 实现生产多卡分派与启动拒绝](issues/02-production-domain-routing.md) | 无前置，已完成 |
 | [03 验证变盒、输出与跨卡重启](issues/03-box-output-cross-rank-restart.md) | 02 已完成，本单双卡、四卡验收通过 |
 | [04 统一长短程参考并恢复 100 步 smoke](issues/04-long-reference-smoke.md) | 可开工 |
-| [05 用短作业验证配对计时](issues/05-paired-job-timing.md) | 可开工 |
+| [05 用短作业验证配对计时](issues/05-paired-job-timing.md) | 已完成，三个区组的六个真实短作业均有效，原始记录复算通过 |
 | [06 普通 GPUMD 同卡数 NPT 先导](issues/06-gpumd-matched-npt-pilot.md) | 可开工 |
 | [07 LAMMPS/KOKKOS/NEP 同卡数 NPT 先导](issues/07-lammps-kokkos-nep-npt-pilot.md) | 可开工 |
 | [08 GPUMD-WPE 单卡 NPT 先导](issues/08-wpe-single-gpu-npt-pilot.md) | 可开工 |

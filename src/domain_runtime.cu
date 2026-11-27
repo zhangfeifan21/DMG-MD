@@ -642,6 +642,8 @@ void log_segment_timing(
     stage(kIntegrationHost, "integration_host");
     stage(kThermoHost, "thermo_host");
     stage(kScientificOutputHost, "scientific_output_host");
+    std::cout << " scientific_output_host_seconds_rank0_total="
+              << timing.values[step_class][kScientificOutputHost];
     stage(kMpiWait, "mpi_wait");
     stage(kRemainingHost, "remaining_host");
     std::cout << '\n';

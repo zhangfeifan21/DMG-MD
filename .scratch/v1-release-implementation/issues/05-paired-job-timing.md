@@ -1,6 +1,6 @@
 # 05: 用短作业验证配对计时
 
-Status: ready-for-agent
+Status: completed-by-agent
 
 Blocked by: None (can start immediately)
 
@@ -11,7 +11,7 @@ Blocked by: None (can start immediately)
 ## 验收条件
 
 - [ ] 以单调时钟从启动可执行文件或 `mpirun` 计到最后一个约定输出写完且进程退出。进程墙钟为主指标，另记启动与读入、引擎 run/loop 和分段耗时。用 thermo 时间戳计算第 1,000 步之后至结束的稳态 ms/step。
-- [ ] 在本地 NVMe 写冻结频率的 thermo 和一帧末态结构。核对实出文件，记录无法关闭的额外输出和 rank 0 汇总成本。记录末行 thermo 到退出的尾段，任一引擎尾段超过自身墙钟 1% 时同时给出扣除尾段后的配对比值。
+- [ ] 在作业目录按冻结频率写 thermo，并写一帧末态结构。核对实出文件，记录无法关闭的额外输出和 rank 0 汇总成本。记录末行 thermo 到退出的尾段，任一引擎尾段超过自身墙钟 1% 时同时给出扣除尾段后的配对比值。
 - [ ] 验证两条重复数分支。正式 NPT 每格先导 10,000 步、重复 5 次，若轮间变异系数 >2%，选 5 个正式区组，否则选 3 个。正式采样前冻结。每区组各引擎另跑 1,000 步预热并保存日志，完整正式轨迹各跑 100,000 步。
 - [ ] 用 `order_seed 20260922` 重放每个区组内按材料随机交错的顺序。独占 4 × L20，配对作业串行，P=1 用 GPU 0，P=2 用同 NUMA 的 0、1，P=4 用 0 至 3。跨 NUMA 的 0、2 只作自身强扩展补充。记录实际绑卡、CPU 总预算、时钟、功率和输出介质。
 - [ ] 用手算样本复算按区组配对的耗时比，取对数均值、自由度 `n−1` 的双侧 95% t 区间并换算回比值。区间含 1 记为未分辨。逐项报告绝对时间、稳态步时和 GPU·小时（卡数 × 墙钟小时），性能区间逐项计算。
@@ -21,3 +21,13 @@ Blocked by: None (can start immediately)
 ## 依据
 
 [V1.0 验收规格，用户故事 10、11、12、19、21、22](../../v1-release-readiness/spec.md) · [决策 04 计时协议与 DN5 默认策略](../../v1-release-readiness/issues/04-dn5-timing-and-adoption.md#answer) · [NPT 对标矩阵与采样规程](../../../docs/status/performance/npt-benchmarks.md#performance-matrix) · [现有计时入口和 profile](../../../tests/benchmark/README.md)
+
+## Comments
+
+2026-11-27，Codex 认领，实施基线为 `52266e0`。先验证区组清单、短进程测量、无效样本排除与离线复算。工单 01 使用 GPU 期间，独占四卡的实机计时等待资源协调。
+
+2026-11-27，维护者确认各作业可使用服务器上的存储。配对作业固定同一挂载并记录实际介质。
+
+2026-11-27，完成验证。独占 4 × L20，在 GPU 0 上串行执行三个区组，普通 GPUMD 和 DMG-MD 的 6/6 个碳 Berendsen 短作业均有效。每次 2,000 步，5,760 原子。按原始时长独立复算，普通 GPUMD / DMG-MD 的进程墙钟比为 0.6708，95% 区间为 [0.6285, 0.7159]。三个区组均另报扣尾比。双卡独立验证了 rank 0 的汇集与写出成本。最终 40 项计时专项和完整 45 项 CTest 均通过。
+
+重复数两条分支、随机顺序重放、手算 t 区间、三个故障区组的整对排除及基于实测步时的预算均已核验。交付[配对计时入口](../../../tests/benchmark/README.md#按区组运行与复算配对作业)、[逐工单预算模板](../../../tests/benchmark/paired_budget_template.json)和[实机结果](../../../docs/status/performance/npt-benchmarks.md#paired-timing-smoke-20261127)。L20 原始证据在 `../scratch/paired-timing-20261127/`，最终清单、六份原始记录、独立复算和测试日志在 `completion/`，最终批次为 `serial-2/`。
